@@ -12,7 +12,10 @@ def verify(path):
     header = parse_macho(data)
     if header['cputype'] != 0x100000c or header['cpusub'] != 0 or not header['entry']:
         raise ValueError('Expected a plain arm64 ASUS kernel with a valid entry')
-    for marker in (b'ASUS EARLY ', b'Cortex-A55 (ASUS I007)', b'ASUS Smartphone for Snapdragon Insiders'):
+    # Clang can inline/unroll constant early-console strings into glyph stores.
+    # Require both unique ASUS platform strings and the linked console symbols.
+    for marker in (b'Cortex-A55 (ASUS I007)', b'ASUS Smartphone for Snapdragon Insiders',
+                   b'_sweet_early_mark\0', b'_sweet_early_relocate\0'):
         if marker not in data:
             raise ValueError(f'Missing ASUS build marker: {marker!r}')
     for marker in (b'SWEET UFS:', b'TOPAZ GPU', b'TOPAZ MODEM'):

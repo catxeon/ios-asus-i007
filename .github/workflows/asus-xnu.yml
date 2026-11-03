@@ -39,7 +39,9 @@ jobs:
           xcodebuild -version
       - name: Build XNU
         working-directory: dxb
-        run: bash build.sh 2>&1 | tee ../asus-build.log
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee ../asus-build.log
       - name: Verify ASUS kernel
         run: |
           mkdir -p out
