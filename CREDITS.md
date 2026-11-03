@@ -1,5 +1,13 @@
 # Credits and licences
 
+## ASUS host-side filesystem tools
+
+Private RAM-root preparation uses [planetbeing/libdmg-hfsplus](https://github.com/planetbeing/libdmg-hfsplus)
+(GPL-3.0) to modify local HFS+ images. `tools/asus-hfs-chown.c` is a small
+GPL-3.0 host utility linked to that library; it is not part of the kernel.
+Read-only extraction uses [sgan81/apfs-fuse](https://github.com/sgan81/apfs-fuse).
+Apple binaries remain private local inputs and are not distributed here.
+
 ## HackiOS (OOSEX GANG)
 
 Much of the GPU, display, audio, Wi-Fi glue and sandbox work here started from **HackiOS**, which

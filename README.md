@@ -10,8 +10,9 @@ confirmed by the user on 2026-11-04.
 
 Image 0004 also mounted an HFS+ RAM root and ran our PID 1 with the same
 heartbeat. The optional HFS profile adds Apple OSS HFS and MD5 support,
-without a storage driver. A separate diagnostic for Apple dyld and standalone
-libSystem is now being tested; it does not start Apple's restore programs.
+without a storage driver. Image 0006 ran our dynamic PID 1 through Apple's
+dyld and standalone libSystem, with a five-second heartbeat confirmed on
+the phone. This test does not start Apple's launchd or restore programs.
 
 This ASUS profile uses one CPU, 512 MiB RAM and a tiny RAM root. Apple iOS
 userland, SpringBoard and board peripheral drivers have not been tested on

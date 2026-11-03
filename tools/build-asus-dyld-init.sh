@@ -8,5 +8,7 @@ out=$(realpath -m "${2:?Expected output executable}")
 test -f "$root/usr/lib/dyld"
 test -f "$root/usr/lib/libSystem.B.dylib"
 mkdir -p "$(dirname "$out")"
-clang -target arm64-apple-ios16.7 -ffreestanding -fno-stack-protector -O2 -Wall -Wextra -Werror -c "$repo/tools/asus-dyld-init.c" -o "$out.o"
+extra=()
+if [ "${ASUS_CHILD_PROBE:-0}" = 1 ]; then extra+=(-DASUS_CHILD_PROBE=1); fi
+clang -target arm64-apple-ios16.7 -ffreestanding -fno-stack-protector -O2 -Wall -Wextra -Werror "${extra[@]}" -c "$repo/tools/asus-dyld-init.c" -o "$out.o"
 "${LD64_LLD:-ld64.lld-21}" -arch arm64 -platform_version ios 16.7 16.7 -syslibroot "$root" -e _main -adhoc_codesign -o "$out" "$out.o" "$root/usr/lib/libSystem.B.dylib"

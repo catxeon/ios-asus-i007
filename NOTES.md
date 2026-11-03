@@ -4,6 +4,28 @@
 
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
+- PHONE MILESTONE: user confirmed image 0006 prints ASUS DYLD and repeated
+  libSystem heartbeat approximately every five seconds. Thus Apple dyld and
+  standalone libSystem run on ASUS, with our own dynamic PID 1. Apple launchd
+  and GUI are still separate, unproven milestones. User returned Android.
+- Started next experiment in QEMU ONLY: private ../asus-launchd-root,
+  actual Apple /sbin/launchd + xpcproxy, one own job dev.asus.launchd-probe.
+  Own static console bootstrap at the kernel's development init path attaches
+  stdin/out/err and execs real /sbin/launchd as PID 1. Own child probe reports
+  its PID and parent PID, then heartbeat. No Apple restore jobs included.
+  All job paths/files owned 0:0 inside image (launchd requires root-owned
+  jobs), set via small GPL host helper using libdmg-hfsplus API. Source files:
+  tools/asus-console-exec.S, asus-launchd-probe.plist, asus-hfs-chown.c,
+  child mode in asus-dyld-init.c. QEMU ../qemu-asus-launchd running at handoff.
+  Do not claim real launchd success until child evidence is observed.
+- QEMU MILESTONE: corrected root + unentitled_ios_sim_launch=1 reaches
+  `ASUS DYLD: Apple dyld + libSystem entered main; PID 1` and repeated
+  libSystem heartbeat messages. No panic, zero unknown glyphs. Snapshot at
+  ../qemu-asus-ios-allow/fb.txt/.png, 150-second run, source kernel 1a6a5f4c.
+- Built phone image 0006 with EXACT same corrected root and boot flag,
+  SHA b582bd21f4587d35a5635bb45056026697c5879bae24c5105844e1a71e1b869e.
+  Temporary fastboot boot was started; physical observation still pending.
+  Contains Apple binaries: keep in ignored out/private work, not public outputs.
 - Corrected dyld mode advances QEMU to `ASUS DYLD LOAD ... ret=0`, then
   namespace 9/code 0xe = EXEC_EXIT_REASON_WRONG_PLATFORM. Source kern_exec.c
   explicitly permits an iOS binary in a DEVELOPMENT macOS-profile kernel

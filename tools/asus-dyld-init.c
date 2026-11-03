@@ -10,9 +10,35 @@ extern ssize_t write(int, const void *, size_t);
 extern int getpid(void);
 extern int select(int, void *, void *, void *, struct timeval *);
 
+#if defined(ASUS_CHILD_PROBE)
+extern int getppid(void);
+static void number(int fd, unsigned int value)
+{
+    char buffer[11];
+    unsigned int start = sizeof(buffer);
+    do {
+        buffer[--start] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    write(fd, buffer + start, sizeof(buffer) - start);
+}
+#endif
+
 int main(void)
 {
     int fd = open("/dev/console", 2);
+#if defined(ASUS_CHILD_PROBE)
+    const char hello[] = "ASUS LAUNCHD CHILD: PID ";
+    const char parent[] = " parent ";
+    const char alive[] = "ASUS LAUNCHD CHILD: heartbeat\n";
+    if (fd >= 0) {
+        write(fd, hello, sizeof(hello) - 1);
+        number(fd, (unsigned int)getpid());
+        write(fd, parent, sizeof(parent) - 1);
+        number(fd, (unsigned int)getppid());
+        write(fd, "\n", 1);
+    }
+#else
     const char hello[] = "ASUS DYLD: Apple dyld + libSystem entered main; PID ";
     const char alive[] = "ASUS DYLD: libSystem heartbeat\n";
     char pid = (char)('0' + getpid());
@@ -21,6 +47,7 @@ int main(void)
         write(fd, &pid, 1);
         write(fd, "\n", 1);
     }
+#endif
     for (;;) {
         struct timeval delay = { 5, 0 };
         select(0, (void *)0, (void *)0, (void *)0, &delay);
