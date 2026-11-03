@@ -7,7 +7,7 @@
 #include "mmu.h"
 
 #ifndef PROBE_VERSION
-#define PROBE_VERSION "0005"
+#define PROBE_VERSION "0007"
 #endif
 
 #define MDP 0x0ae00000UL
@@ -15,14 +15,19 @@
 #define SPLASH_END (SPLASH + 0x2300000UL)
 #define WIDTH 1080U
 #define HEIGHT 2448U
+/* Live /soc/timer: virtual timer is GIC_PPI 11, hence INTID 16 + 11. */
+#define VTIMER_INTID 27U
 #define R(r) ({ uint64_t v; __asm__ volatile("mrs %0, " r : "=r"(v)); v; })
+#define W(r, v) __asm__ volatile("msr " r ", %0; isb" : : "r"((uint64_t)(v)) : "memory")
 static uintptr_t framebuffer;
 static unsigned stride, bytes_per_pixel, row;
 static uint32_t ctl_top;
 static volatile unsigned faulting;
+static volatile unsigned gic_active, timer_irqs, sgi_irqs, other_irqs;
 extern char _head[];
 
 static uint32_t read32(uintptr_t address) { return *(volatile uint32_t *)address; }
+static void write32(uintptr_t address, uint32_t value) { *(volatile uint32_t *)address = value; }
 static uint32_t be32(uintptr_t address) { return __builtin_bswap32(read32(address)); }
 
 static void delay(unsigned seconds)
@@ -145,9 +150,84 @@ static void hex(const char *label, uint64_t value)
     text(label, buffer);
 }
 
-void __attribute__((noreturn)) exc_handler(uint64_t slot, uint64_t *registers)
+static int wait_clear(uintptr_t address, uint32_t mask)
+{
+    uint64_t until = R("cntpct_el0") + R("cntfrq_el0") / 10;
+    while (read32(address) & mask) if (R("cntpct_el0") >= until) return 0;
+    return 1;
+}
+
+static void test_gic(void)
+{
+    const uintptr_t distributor = 0x17a00000UL, redistributors = 0x17a60000UL;
+    const uint32_t mask = (1U << VTIMER_INTID) | (1U << 1);
+    text("GIC", "TESTING TIMER + SGI");
+    present();
+    W("icc_sre_el1", R("icc_sre_el1") | 1);
+    if (!(R("icc_sre_el1") & 1)) { text("GIC", "NO SYSREG INTERFACE"); return; }
+    uint64_t mpidr = R("mpidr_el1");
+    uint32_t affinity = (mpidr & 0xffffff) | ((mpidr >> 8) & 0xff000000);
+    uintptr_t redist = 0;
+    for (unsigned offset = 0; offset < 0x100000; offset += 0x20000) {
+        uint64_t typer = *(volatile uint64_t *)(redistributors + offset + 8);
+        if ((uint32_t)(typer >> 32) == affinity) { redist = redistributors + offset; break; }
+        if (typer & 16) break;
+    }
+    if (!redist) { text("GIC", "NO REDISTRIBUTOR"); return; }
+    hex("GICR", redist);
+    write32(distributor, read32(distributor) | 0x13);
+    if (!wait_clear(distributor, 1U << 31)) { text("GIC", "DISTRIBUTOR TIMEOUT"); return; }
+    write32(redist + 0x14, read32(redist + 0x14) & ~2U);
+    if (!wait_clear(redist + 0x14, 4)) { text("GIC", "REDISTRIBUTOR ASLEEP"); return; }
+    uintptr_t sgi = redist + 0x10000;
+    write32(sgi + 0x180, mask); /* disable only the two test sources */
+    write32(sgi + 0x280, mask); /* clear their pending state */
+    write32(sgi + 0x80, read32(sgi + 0x80) | mask); /* Group 1 */
+    write32(sgi + 0xd00, read32(sgi + 0xd00) & ~mask);
+    *(volatile unsigned char *)(sgi + 0x400 + VTIMER_INTID) = 0xa0;
+    *(volatile unsigned char *)(sgi + 0x400 + 1) = 0xa0;
+    write32(sgi + 0x100, mask);
+    __asm__ volatile("dsb sy" ::: "memory");
+    W("icc_ctlr_el1", R("icc_ctlr_el1") & ~2UL);
+    W("icc_pmr_el1", 0xf0);
+    W("icc_bpr1_el1", 0);
+    W("icc_igrpen1_el1", 1);
+    timer_irqs = sgi_irqs = other_irqs = 0;
+    gic_active = 1;
+    W("cntv_tval_el0", R("cntfrq_el0") / 100);
+    W("cntv_ctl_el0", 1);
+    uint64_t self_sgi = ((mpidr >> 16) & 0xff) << 32 |
+        ((mpidr >> 8) & 0xff) << 16 | ((mpidr >> 32) & 0xff) << 48 |
+        (1UL << 24) | (1U << (mpidr & 15));
+    uint64_t until = R("cntpct_el0") + R("cntfrq_el0") / 5;
+    __asm__ volatile("msr daifclr, #2" ::: "memory");
+    W("icc_sgi1r_el1", self_sgi);
+    while (R("cntpct_el0") < until) __asm__ volatile("yield");
+    __asm__ volatile("msr daifset, #2" ::: "memory");
+    W("cntv_ctl_el0", 0);
+    gic_active = 0;
+    write32(sgi + 0x180, mask);
+    text("GIC", timer_irqs >= 5 && sgi_irqs == 1 && other_irqs == 0 ? "CHECK PASS" : "CHECK FAILED");
+    hex("VTIMER", timer_irqs);
+    hex("SGI", sgi_irqs);
+    hex("OTHER_IRQ", other_irqs);
+}
+
+void exc_handler(uint64_t slot, uint64_t *registers)
 {
     (void)registers;
+    if (slot == 5 && gic_active) {
+        uint64_t iar = R("icc_iar1_el1");
+        unsigned id = iar & 0xffffff;
+        if (id >= 1020) return;
+        if (id == VTIMER_INTID) {
+            timer_irqs++;
+            W("cntv_tval_el0", R("cntfrq_el0") / 100);
+        } else if (id == 1) sgi_irqs++;
+        else other_irqs++;
+        W("icc_eoir1_el1", iar);
+        return;
+    }
     if (!faulting++ && framebuffer) {
         hex("EXCEPTION", slot);
         hex("ESR_EL1", R("esr_el1"));
@@ -185,6 +265,7 @@ void __attribute__((noreturn)) shim_main(uintptr_t fdt)
         for (unsigned x = 0; x < WIDTH; x++) pixel(x, y, 0);
     row = 0;
     text("ASUS", "I007 RAM PROBE " PROBE_VERSION);
+    int mmu_pass = 0;
     if (mmu_result == -2) {
         text("MMU", "16K NOT SUPPORTED");
     } else {
@@ -201,6 +282,7 @@ void __attribute__((noreturn)) shim_main(uintptr_t fdt)
                 (code >> 56) == 0xff && (fb >> 56) == 0 &&
                 ((R("tcr_el1") >> 14) & 3) == 2 && (info.sctlr_after & 1);
             text("MMU", pass ? "16K CHECK PASS" : "16K CHECK FAILED");
+            mmu_pass = pass;
             hex("TCR", R("tcr_el1"));
             hex("SCTLR", info.sctlr_after);
             hex("PAR_CODE", code);
@@ -219,6 +301,7 @@ void __attribute__((noreturn)) shim_main(uintptr_t fdt)
     hex("STRIDE", stride);
     hex("BPP", bytes_per_pixel);
     hex("CTL_TOP", ctl_top);
+    if (mmu_pass) test_gic();
     text("RESET", "ANDROID IN 120 SECONDS");
     present();
     delay(120);

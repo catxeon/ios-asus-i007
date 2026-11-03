@@ -44,8 +44,8 @@
   `5f06cac77f757907fa4259e487a56780953258d180faaafc414e830080ccb6e2`.
   Build checks: -Wall -Wextra -Werror, no ABS64 relocations, unpacked Android
   header v3 / Android 11 / patch 2023-07, kernel 77824 bytes, ramdisk 48 bytes.
-- NEXT: verify GIC virtual timer and SGI delivery on this CPU before
-  adapting XNU. No XNU kernel or iOS userland has run on this ASUS yet. Do not
+- NEXT: adapt XNU for an initial single-CPU RAM-root boot. No XNU kernel or
+  iOS userland has run on this ASUS yet. Do not
   boot the existing topaz payload: its CPU topology, RAM, GIC, UFS and panel
   assumptions differ. Future root storage should initially be a RAM disk.
 - Follow-up probes: 0002 image SHA256
@@ -85,6 +85,20 @@
   Re-read boot_a/vendor_boot_a/dtbo_a SHA256 values match all three original
   backups. Automatic return was observed this time; no further manual reset
   was requested. Working source commits: e297d13, 45c1aa4.
+- GIC probe 0006 was built and RAM-booted. User supplied exact readings:
+  GIC CHECK FAILED, GICR=0x17a60000, VTIMER=0, SGI=1, OTHER_IRQ=0.
+  The test incorrectly retained topaz's timer INTID 19. Re-reading this ASUS's
+  live /soc/timer found interrupts <1 13 ff08>, <1 14 ff08>, <1 11 ff08>,
+  <1 12 ff08>: virtual timer is PPI 11 = INTID 27. Android returned afterward.
+- MILESTONE: probe 0007 changes the virtual timer source to INTID 27. User
+  confirmed **GIC CHECK PASS**. This checks >=5 timer IRQs in a 200 ms window,
+  one self-SGI, zero other IRQs on the boot CPU through the existing EL1 IRQ
+  vectors. MMU and display handling remain as the working probe 0005.
+- Probe 0007 SHA256:
+  `f1a5555dd651f0c1cfd06572def2d8205934bd2a51de3370d6cd091223c44467`.
+  Header v3, kernel 147456, ramdisk 48; -Wall -Wextra -Werror and ABS64 check
+  passed, Android header unpack verified. Awaiting Android return after the
+  120-second report pause. Do not mix the timer numbering with older notes.
 - GitHub CLI is authenticated; no remote repo was created or pushed, no CI
   run was triggered during this milestone.
 

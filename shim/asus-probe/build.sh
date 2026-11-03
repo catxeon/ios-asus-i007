@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p out
-version="${PROBE_VERSION:-0005}"
+version="${PROBE_VERSION:-0007}"
 [[ "$version" =~ ^[0-9]{4}$ ]] || { echo 'PROBE_VERSION must be four digits' >&2; exit 1; }
 flags=(-O2 -ffreestanding -nostdlib -fno-pic -fno-builtin -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra -Werror -I.. -DFB_PHYS=0xe5000000UL -DFB_MAP_FLAGS=DEV_FLAGS "-DPROBE_VERSION=\"$version\"")
 aarch64-linux-gnu-gcc "${flags[@]}" -c ../start.S -o out/start.o
