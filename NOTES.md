@@ -4,6 +4,36 @@
 
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
+- HFS MILESTONE: image 0004 booted temporarily; user confirmed
+  `hfs: mounted ASUSRamRoot`, PID 1 and five-second heartbeat. Then user
+  returned Android; ADB sys.boot_completed=1. Kernel from CI 41719763180,
+  SHA f0daa57cc9d11b5fe7c6f0e7602bfcf7322f04de8100a53d6fec30e3e9014d1a;
+  image SHA 16d520ae868b4ea2dbd721c536f375e8740933e296e5137bbc45775a15de409c.
+- CI 41719763180 compiled successfully but artifact verification wrongly
+  required nonexistent `_hfs_mountroot`. Now requires actual HFS vfsops,
+  mountfs and registration symbols; recovered archived kernel passes. Clean
+  follow-up CI 41721394060 is running at 326e3d3.
+- Own-init HFS root generated and fsck checked on macOS in successful
+  asus-ramroot CI 41721388493. Artifact SHA
+  4e148ac360bc947cf0a76fd8af63e1135c7862e3c6c9e7e65a98ef347e34fede.
+  Earlier RAM-root workflow runs failed on hdiutil syntax and using fsck on
+  a plain file; fixed to check an attached read-only block device.
+- Restore IM4P contains unencrypted raw APFS. Read-only apfs-fuse mount at
+  ../apple-20H392/restore-mount (WSL root). Plain arm64 launchd dependency
+  closure is 38 files / 10,960,640 bytes, with one absent optional weak
+  libobjc-env dependency. No need for the full multi-GB shared cache here.
+- Prepared diagnostic dyld PID 1 (tools/asus-dyld-init.c): dynamically links
+  Apple libSystem and prints a heartbeat after Apple dyld initializes it.
+  Root contains dyld + dependency libraries; original Apple launchd and all
+  restore jobs/programs are excluded. 32 MiB HFS root built privately with
+  libdmg-hfsplus from the known Mac volume; fsck OK, extracted files hash-match.
+- Image 0005 SHA 3927f6a42af1893a15b7000e6842184f72638182364cdceca095cbe411874401,
+  root SHA ff264fb74ac820de1d97a7aaf40dc96fbbcda1181bb4b383af1f0eaf13866498,
+  own dynamic init SHA 279ce1620f601ae696fb15442dd52e1c137bcb93da14575f108cfeec5ceb9281.
+  Temporary boot in progress; physical observation is still required.
+  These Apple-containing artifacts stay private in ../asus-dyld-root and
+  ignored shim/asus-xnu/out; never upload them to public CI or git.
+
 - User asked to continue after source-built 0003 success. Preserve Android;
   only temporary RAM boots remain authorized. No UFS driver or writes.
 - mockfs serves only one executable, so launchd/dyld/libraries require a real

@@ -56,3 +56,23 @@ The successful init intentionally stays alive. There is no ADB/USB driver in
 this XNU profile and no automatic timed return once XNU is entered. Return
 to Android with the previously verified Power + Volume Down force restart.
 No phone partition is flashed by any build/test command in this document.
+
+## HFS+ RAM root
+
+Image 0004 mounted `ASUSRamRoot` and ran our own PID 1 with the five-second
+heartbeat, confirmed on the phone. Dispatch `asus-xnu.yml` with `hfs=true`
+to include patches 0026/0027 (Apple OSS HFS and MD5), still excluding UFS.
+The `asus-ramroot.yml` workflow builds an 8 MiB HFS+ root containing only
+our static init and `/dev`, and checks it with Apple's fsck on a read-only
+attached device.
+
+```sh
+ASUS_XNU_VERSION=0004 bash tools/build-asus-image.sh KERNEL asus-own-init.hfs
+```
+
+An explicit root must be a raw HFS+/HFSX volume no larger than 96 MiB and
+the kernel must pass the HFS symbol checks. APFS/DMG containers are rejected.
+For a separate Apple dyld/libSystem test, `tools/asus-dyld-init.c` builds our
+dynamic PID 1 with `tools/build-asus-dyld-init.sh`. Apple's binaries are
+private inputs, never part of the public source/archive/CI artifacts. Never
+boot the unmodified Apple restore root or its restore jobs on ASUS.
