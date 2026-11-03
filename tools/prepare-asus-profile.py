@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Stage the minimal ASUS profile into a fresh pinned darwin-xnu-build checkout."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -7,18 +8,25 @@ import shutil
 import sys
 
 repo = Path(__file__).resolve().parents[1]
-dxb = Path(sys.argv[1]).resolve()
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('dxb', type=Path)
+parser.add_argument('--hfs', action='store_true', help='Include built-in HFS+ and MD5 for a filesystem RAM root')
+args = parser.parse_args()
+dxb = args.dxb.resolve()
 if not (dxb / 'build.sh').is_file() or not (dxb / 'patches').is_dir():
     raise SystemExit('Expected a fresh darwin-xnu-build checkout')
 if any(p.name[:4].isdigit() for p in (dxb / 'patches').glob('*')):
     raise SystemExit('Refusing to mix ASUS and an existing numbered patch profile')
+last = 27 if args.hfs else 25
 selected = sorted(p for p in (repo / 'xnu/patches').glob('*.patch')
-                  if p.name[:4].isdigit() and 1 <= int(p.name[:4]) <= 25)
-if [int(p.name[:4]) for p in selected] != list(range(1, 26)):
+                  if p.name[:4].isdigit() and 1 <= int(p.name[:4]) <= last)
+if [int(p.name[:4]) for p in selected] != list(range(1, last + 1)):
     raise SystemExit('Incomplete minimal kernel patch series')
 selected += [repo / 'xnu/patches/0019-stage-libpthread.sh',
              repo / 'xnu/patches/0020-stage-bearssl.sh',
              repo / 'xnu/asus/9999-asus-i007-bringup.patch']
+if args.hfs:
+    selected.append(repo / 'xnu/patches/0026-stage-hfs.sh')
 manifest = []
 for path in selected:
     data = path.read_bytes().replace(b'\r\n', b'\n')
@@ -42,6 +50,7 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
 (dxb / 'asus-profile.json').write_text(json.dumps({
     'device': 'ASUS_I007D', 'soc': 'SM8350', 'xnu': 'xnu-8796.141.3',
     'cpu': 'cortex-a55', 'cpus': 1, 'page_size': 16384,
-    'root': 'mockfs RAM disk', 'storage_driver': False, 'patches': manifest,
+    'root': 'HFS+ or mockfs RAM disk' if args.hfs else 'mockfs RAM disk',
+    'hfs': args.hfs, 'storage_driver': False, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
 print(f'Staged {len(selected)} ASUS files; no UFS, input, modem, GPU or USB drivers')

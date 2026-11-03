@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Refuse a generic/topaz kernel before creating an ASUS boot payload."""
 from pathlib import Path
+import argparse
 import hashlib
 import json
 import struct
@@ -43,7 +44,7 @@ def virtual_timer_only(data, header):
     raise ValueError('Timer initialization is outside file-backed segments')
 
 
-def verify(path):
+def verify(path, require_hfs=False):
     data = Path(path).read_bytes()
     header = parse_macho(data)
     if header['cputype'] != 0x100000c or header['cpusub'] != 0 or not header['entry']:
@@ -58,10 +59,17 @@ def verify(path):
         if marker in data:
             raise ValueError(f'Unexpected board peripheral code: {marker!r}')
     virtual_timer_only(data, header)
+    has_hfs = b'_hfs_mountroot\0' in data and b'_sweet_hfs_register\0' in data
+    if require_hfs and not has_hfs:
+        raise ValueError('Expected the ASUS HFS RAM-root profile')
     return {'kernel_sha256': hashlib.sha256(data).hexdigest(),
             'size': len(data), 'entry': hex(header['entry']), 'arm64e': False,
-            'physical_timer_access': False}
+            'physical_timer_access': False, 'hfs': has_hfs}
 
 
 if __name__ == '__main__':
-    print(json.dumps(verify(sys.argv[1]), indent=2))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('kernel')
+    parser.add_argument('--require-hfs', action='store_true')
+    args = parser.parse_args()
+    print(json.dumps(verify(args.kernel, args.require_hfs), indent=2))

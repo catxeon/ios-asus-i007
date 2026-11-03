@@ -2,6 +2,25 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
+
+- User asked to continue after source-built 0003 success. Preserve Android;
+  only temporary RAM boots remain authorized. No UFS driver or writes.
+- mockfs serves only one executable, so launchd/dyld/libraries require a real
+  filesystem. Added optional `--hfs` profile: base 0001..0027 + HFS staging,
+  31 files total. Reuses upstream Apple OSS HFS integration and MD5 provider;
+  patch 0028/UFS is excluded. Default minimal profile remains available.
+- Local staging and sequential application of 0026/0027 after the ASUS base
+  passed. Workflow `hfs=true` builds this profile and requires linked HFS
+  symbols in addition to the existing ASUS and timer-instruction checks.
+- Read Apple 20H392 BuildManifest via HTTP ranges and downloaded only its two
+  RestoreRamDisk ZIP members (CRC verified), private sibling ../apple-20H392.
+  These are data sources for inspection only: do NOT boot Apple's restore
+  init/services or run its restore tools on ASUS. Need a controlled minimal
+  root without restore jobs. No Apple files are committed or published.
+- Next: build HFS kernel; inspect restore image filesystem and dependencies;
+  first confirm HFS RAM root with our own init before any Apple launchd test.
+
 ### Active status (2026-11-04): XNU and own PID 1 observed
 
 - Diagnostic image 0002 reached PID 1. The user confirmed that
