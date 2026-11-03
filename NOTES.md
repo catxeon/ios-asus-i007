@@ -35,11 +35,14 @@
   checkout `../darwin-xnu-build/`; read-only reference kernel downloaded from
   upstream CI 39419628786 into `../upstream-kernel-39419628786/`. Do not boot it
   on ASUS. Host has Clang in WSL now for compiling our own static init.
-- GitHub account catxeon is authenticated, but origin has push=false. No
-  catxeon ios/asus fork exists. Public fork + branch publication and CI require
-  the user's choice because this publishes new material to their account.
-  Review prepared in outputs/ASUS-XNU-review.md and source archive. Until that
-  choice arrives, continue local checks only; no remote changes made yet.
+- User explicitly approved public fork creation, branch publication and GitHub
+  Actions build. Created https://github.com/catxeon/ios-asus-i007, pushed branch
+  asus-i007 at 177aae0, set it as the new fork's default, and dispatched
+  asus-xnu.yml. CI run: 41713279475. Prepare/dependency steps passed and Build
+  XNU is running. Origin remains read-only; remote `asus` points to the fork.
+- Review prepared in outputs/ASUS-XNU-review.md and source archive. All future
+  build fixes on this fork are within the approved task. No phone image has
+  been booted during phase 2 yet; Android remains running.
 
 - User requested trying this project on ASUS Smartphone for Snapdragon Insiders;
   confirmed an unlocked bootloader and USB connection. No authorization to erase

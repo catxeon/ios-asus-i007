@@ -100,6 +100,9 @@ static int prepare_gic(void)
     if (!wait_clear(redist + 0x14, 4)) return 0;
     uintptr_t sgi = redist + 0x10000;
     uint32_t mask = (1U << 27) | (1U << 1);
+    /* Match the verified probe: discard stale pending test sources first. */
+    write32(sgi + 0x180, mask);
+    write32(sgi + 0x280, mask);
     write32(sgi + 0x80, read32(sgi + 0x80) | mask);
     write32(sgi + 0xd00, read32(sgi + 0xd00) & ~mask);
     *(volatile unsigned char *)(sgi + 0x400 + 27) = 0xa0;
