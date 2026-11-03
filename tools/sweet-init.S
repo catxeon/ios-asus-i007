@@ -91,9 +91,17 @@ five_sec:
 path:
 	.asciz	"/dev/console"
 hello:
+#if defined(ASUS_I007)
+	.ascii	"\n*** ASUS XNU userspace: init running as PID "
+#else
 	.ascii	"\n*** SWEET userspace: init running as PID "
+#endif
 hello_tail:
 	.ascii	" ***\n"
 alive:
+#if defined(ASUS_I007)
+	.ascii	"ASUS init: still alive\n"
+#else
 	.ascii	"SWEET init: still alive\n"
+#endif
 alive_end:

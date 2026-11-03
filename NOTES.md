@@ -2,6 +2,45 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Phase 2: XNU candidate prepared (2026-11-03)
+
+- User asked to continue and supplied https://hackiosx.dev/projects. Read the
+  project, compatibility and porting pages; found ch1tmdgus/ios-v60 (SM8250)
+  as a related-platform reference. No device-specific V60 binary patch was
+  copied: its README says it requires a particular kernel and is not portable.
+- Preparing a reproducible minimal kernel from Apple xnu-8796.141.3
+  (1b191cb58250d0705d8a51287127505aa4bc0789), using base patches 0001..0025.
+  No UFS patch 0028, HFS staging, or later board drivers is included.
+- New `xnu/asus/9999-asus-i007-bringup.patch`: Cortex-A55, single CPU, timer
+  INTID 27, ASUS CPU/platform matching and early framebuffer. Crucially the
+  physical block mapping is 0xe4000000 and the actual framebuffer is at
+  +0x01000000; replacing the old aligned FB address with 0xe5000000 directly
+  would produce an invalid L2 descriptor. Device memory throughout console.
+- `tools/mkadt-asus.py`: one boot CPU (MPIDR affinity 0), GIC and fbcon only;
+  512 MiB at 0x140000000, checked against the captured RAM and all fixed
+  reserved regions. Android sysfs reports A55 max frequency 1804800 kHz.
+- `shim/asus-xnu/`: new loader-only shim using existing start/fdt/loader/console,
+  verified PICASSO/A55/EL1/display guard and the tested GIC preparation. No
+  storage driver, no display-controller writes, no secondary CPU startup.
+- Added prepare-asus-profile.py (28 files, strict numbered patch application),
+  verify-asus-kernel.py (requires ASUS markers; rejects generic topaz kernel),
+  build-asus-image.sh and workflow asus-xnu.yml. Own Mach-O init is embedded
+  directly as a mockfs RAM root. No Apple userland/root filesystem needed.
+- Local checks passed: shim -Wall/-Wextra/-Werror and ABS64 audit; Mach-O init
+  assembled by clang and packed (16635 bytes); all base patches applied;
+  ASUS patch reverse/forward check; RAM reservation/FB block/CPU/timer checks;
+  negative test rejects the downloaded generic kernel artifact. Full XNU build
+  and on-device candidate boot have NOT occurred.
+- Scratch source/build helper at sibling `../xnu-asus-source/` and pinned DXB
+  checkout `../darwin-xnu-build/`; read-only reference kernel downloaded from
+  upstream CI 39419628786 into `../upstream-kernel-39419628786/`. Do not boot it
+  on ASUS. Host has Clang in WSL now for compiling our own static init.
+- GitHub account catxeon is authenticated, but origin has push=false. No
+  catxeon ios/asus fork exists. Public fork + branch publication and CI require
+  the user's choice because this publishes new material to their account.
+  Review prepared in outputs/ASUS-XNU-review.md and source archive. Until that
+  choice arrives, continue local checks only; no remote changes made yet.
+
 - User requested trying this project on ASUS Smartphone for Snapdragon Insiders;
   confirmed an unlocked bootloader and USB connection. No authorization to erase
   this ASUS's Android/data has been given. Historical sweet/topaz wipe approvals
