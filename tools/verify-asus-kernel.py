@@ -59,7 +59,8 @@ def verify(path, require_hfs=False):
         if marker in data:
             raise ValueError(f'Unexpected board peripheral code: {marker!r}')
     virtual_timer_only(data, header)
-    has_hfs = b'_hfs_mountroot\0' in data and b'_sweet_hfs_register\0' in data
+    has_hfs = all(marker in data for marker in
+                  (b'_hfs_vfsops\0', b'_hfs_mountfs\0', b'_sweet_hfs_register\0'))
     if require_hfs and not has_hfs:
         raise ValueError('Expected the ASUS HFS RAM-root profile')
     return {'kernel_sha256': hashlib.sha256(data).hexdigest(),

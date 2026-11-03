@@ -38,9 +38,15 @@ jobs:
           assert 0 < size <= len(data) and size <= 8 * 1024 * 1024
           Path('out/asus-own-init.hfs').write_bytes(data[:size])
           PY
-          fsck_hfs -fn out/asus-own-init.hfs
+          device=$(hdiutil attach -nomount -readonly -imagekey diskimage-class=CRawDiskImage out/asus-own-init.hfs | awk 'NR==1 {print $1}')
+          test -n "$device"
+          trap 'hdiutil detach "$device" || true' EXIT
+          fsck_hfs -fn "$device"
+          hdiutil detach "$device"
+          trap - EXIT
           (cd out && shasum -a 256 asus-own-init.hfs > SHA256SUMS)
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: asus-own-init-hfs
           path: |
