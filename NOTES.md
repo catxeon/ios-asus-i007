@@ -2,8 +2,33 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
-### Current next action: isolated Apple launchd (phase 4)
+### Current status: Apple launchd on ASUS (phase 4 achieved)
 
+- PHONE MILESTONE: user confirmed image 0007 shows `ASUS LAUNCHD CHILD:
+  PID ... parent 1` and repeated child heartbeat. This is real Apple launchd
+  spawning our single controlled job. Image SHA
+  dbe83dd739a2d58d0ca859d721aaeff7ee8585832da1d588e615d5cc2449afaf,
+  kernel 8df7c031 from successful CI 41728043185 at 4763c9f, private HFS
+  root f1f0be1f8d7d53b681a913619e025490fe8719da2bc8e9484c24af02048aaaa3.
+- After 0007 Android returned (ADB sys.boot_completed=1). All three hashes
+  boot_a/vendor_boot_a/dtbo_a match original backups. Keep Apple-containing
+  image/root private in ignored out and sibling work folders. No partition
+  has been flashed or erased. Phase 4 hardware test is achieved.
+- Next substantial stage is GUI: actual SpringBoard/root dependencies and
+  ASUS display presentation/input support, with a storage/RAM strategy that
+  preserves Android. Do not claim full iOS or a usable phone OS. Earlier
+  entries below are historical checkpoints, including failures now resolved.
+
+- QEMU MILESTONE with account root: real Apple launchd successfully spawned
+  own child, `ASUS LAUNCHD CHILD: PID 3 parent 1`, followed by 13+ heartbeats.
+  150-second snapshot, no panic, zero unknown glyphs. Log at
+  ../qemu-asus-launchd-accounts-v2/fb.txt/.png. Warnings about system event
+  logging/persona type 6 were non-fatal in this limited test.
+- Built phone image 0007, SHA
+  dbe83dd739a2d58d0ca859d721aaeff7ee8585832da1d588e615d5cc2449afaf,
+  kernel 8df7c031 from CI 41728043185, root f1f0be1f account variant.
+  Temporary fastboot boot in progress; physical launchd/child observation
+  still required. Keep Apple-containing image private; no public artifact.
 - SHA retest ../qemu-asus-launchd-sha confirms SHA1 crash is gone. Launchd
   proceeds through boot tasks and then exits with namespace 7/code 1:
   `unable to resolve 'mobile': 114`. Minimal root lacked account files.

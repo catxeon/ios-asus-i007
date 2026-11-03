@@ -14,6 +14,12 @@ without a storage driver. Image 0006 ran our dynamic PID 1 through Apple's
 dyld and standalone libSystem, with a five-second heartbeat confirmed on
 the phone. This test does not start Apple's launchd or restore programs.
 
+Image 0007 then ran **Apple launchd** and its one controlled test job on
+the ASUS: the child printed its PID, `parent 1`, and repeated heartbeats,
+confirmed by the user. This is a minimal RAM-root userspace milestone;
+SpringBoard, the graphical interface and ASUS peripheral drivers remain
+unimplemented in this profile.
+
 This ASUS profile uses one CPU, 512 MiB RAM and a tiny RAM root. Apple iOS
 userland, SpringBoard and board peripheral drivers have not been tested on
 this phone. Tests use temporary `fastboot boot`; Android is preserved.
