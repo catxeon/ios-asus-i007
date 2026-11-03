@@ -6,6 +6,10 @@
 #include "console.h"
 #include "loader.h"
 
+#ifndef ASUS_XNU_VERSION
+#define ASUS_XNU_VERSION "0001"
+#endif
+
 #define R(r) ({ uint64_t v; __asm__ volatile("mrs %0, " r : "=r"(v)); v; })
 #define W(r, v) __asm__ volatile("msr " r ", %0; isb" : : "r"((uint64_t)(v)) : "memory")
 static unsigned console_ready, faulting;
@@ -145,7 +149,7 @@ void __attribute__((noreturn)) shim_main(uintptr_t fdt)
     }
     con_clear(0xff000000);
     console_ready = 1;
-    con_str("ASUS", "I007 XNU RAM BOOT 0001");
+    con_str("ASUS", "I007 XNU RAM BOOT " ASUS_XNU_VERSION);
     con_str("STORAGE", "no storage driver; root in RAM");
     con_hex("MIDR", R("midr_el1"));
     if (!prepare_gic()) {

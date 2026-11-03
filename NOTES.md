@@ -4,6 +4,31 @@
 
 ### Phase 2: XNU candidate prepared (2026-11-03)
 
+- First real XNU boot, image 0001: kernel SHA256
+  1954c0a3c769b6840cc8af6dfacf7a8627b6ee895048e31e76b469a0cd6ee064;
+  image ab5583035260307bd7c7988c1408d0f0eb52d3422688a62210aacab785e2d6cd.
+  User photo confirms printf/serial/framebuffer initialization and GIC timer
+  INTID 27, then panic: PC=0xfffffe000748e704, LR=0xfffffe0007aa5aec,
+  ESR=0, FAR=0. PC symbolicated to fiq_context_init+0x14: instruction
+  0xd51be229 = MSR CNTP_CTL_EL0, X9. The physical timer access traps in this
+  boot environment. Only one CNTP access exists in this minimal source profile.
+  No PID 1 yet. Photo saved outside git at ../asus-ci-41713279475/xnu-0001-panic.png.
+- Added ASUS_I007 source guard around the precautionary CNTP masking; CNTV is
+  unchanged. User manually restarted and confirmed Android returned.
+- Fast diagnostic 0002 uses the exact first kernel, SHA-guarded, with that one
+  instruction changed to NOP (file offset 0x48a704). Patched kernel SHA256
+  a0f1f5b6f82ed4d4f5896384bf58b443d2ea355009a74f8b6c324ca116a1d292.
+  Details at ../asus-xnu-debug-0002/PATCH.txt. This is diagnostic only, not a
+  substitute for the matching source rebuild. Image 0002 SHA256
+  56cc3a4ef7d3a7617d7cb3d4f57cc4c914a6a3dfc1b8fc98994b8cfc68ba9cb4.
+- CI 41713279475 compiled a real kernel but failed our overly strict artifact
+  check: clang optimized the literal early-console strings into glyph stores.
+  CPU/platform ASUS strings and actual early-console symbols are present.
+  Fixed verification (59278da); recovered the first kernel from its build-tree
+  artifact and verified locally. Generic topaz kernel still fails the check.
+  CI 41715337539 is the follow-up build with the corrected verifier (no CNTP
+  fix in that run). Next full source build must include the CNTP guard.
+
 - User asked to continue and supplied https://hackiosx.dev/projects. Read the
   project, compatibility and porting pages; found ch1tmdgus/ios-v60 (SM8250)
   as a related-platform reference. No device-specific V60 binary patch was

@@ -2,7 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p out
-flags=(-O2 -ffreestanding -nostdlib -fno-pic -fno-builtin -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra -Werror -I.. -DFB_BASE=0xe5000000UL -DFB_H=2448)
+version="${ASUS_XNU_VERSION:-0001}"
+[[ "$version" =~ ^[0-9]{4}$ ]] || { echo 'ASUS_XNU_VERSION must be four digits' >&2; exit 1; }
+flags=(-O2 -ffreestanding -nostdlib -fno-pic -fno-builtin -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra -Werror -I.. -DFB_BASE=0xe5000000UL -DFB_H=2448 "-DASUS_XNU_VERSION=\"$version\"")
 for spec in 'start:../start.S' 'main:main.c' 'console:../console.c' 'fdt:../fdt.c' 'loader:../loader.c'; do
     aarch64-linux-gnu-gcc "${flags[@]}" -c "${spec#*:}" -o "out/${spec%%:*}.o"
 done
@@ -39,5 +41,5 @@ c = h + b'TRAILER!!!\0'
 c += b'\0' * (-len(c) % 4)
 Path('out/ramdisk.gz').write_bytes(gzip.compress(c, mtime=0))
 PY
-python3 "${MKBOOTIMG:-../../../mkbootimg/mkbootimg.py}" --header_version 3 --kernel out/Image --ramdisk out/ramdisk.gz --os_version 11.0.0 --os_patch_level 2023-07 --cmdline 'console=null' -o out/asus-i007-xnu-0001.img
-sha256sum out/asus-i007-xnu-0001.img
+python3 "${MKBOOTIMG:-../../../mkbootimg/mkbootimg.py}" --header_version 3 --kernel out/Image --ramdisk out/ramdisk.gz --os_version 11.0.0 --os_patch_level 2023-07 --cmdline 'console=null' -o "out/asus-i007-xnu-$version.img"
+sha256sum "out/asus-i007-xnu-$version.img"
