@@ -4,6 +4,17 @@
 
 ### Current next action: isolated Apple launchd (phase 4)
 
+- SHA retest ../qemu-asus-launchd-sha confirms SHA1 crash is gone. Launchd
+  proceeds through boot tasks and then exits with namespace 7/code 1:
+  `unable to resolve 'mobile': 114`. Minimal root lacked account files.
+- Added restore default private/etc/master.passwd and group, /etc symlink,
+  preseeded private/var dirs in NEW ../asus-launchd-root/launchd-accounts-v2.hfs,
+  fsck OK, SHA f1f0be1f8d7d53b681a913619e025490fe8719da2bc8e9484c24af02048aaaa3.
+  QEMU ../qemu-asus-launchd-accounts-v2 is running with SHA kernel 8df7c031.
+  No phone launchd test yet. Prior launchd-accounts.hfs image was abandoned
+  after libdmg-hfsplus failed to remove an empty /var directory; its QEMU run
+  was explicitly stopped. V2 uses a fresh copy and adds only the missing /etc
+  link, leaving the existing empty /var and /tmp directories unchanged.
 - Phase 3 achieved on phone: source XNU, HFS RAM root, Apple dyld/libSystem,
   own dynamic PID 1 with five-second heartbeat (0006). Android returned;
   boot_a/vendor_boot_a/dtbo_a hashes still match original backups afterward.
@@ -11,7 +22,13 @@
   hostname/IPv6 setup reaches absent SHA-1 provider and panics. Generic
   software hash patches 0032/0033 apply locally and are now included only
   in optional HFS profile; UFS and intervening board/root-write patches are
-  excluded. Source commit 4763c9f; CI 41728043185 is building.
+  excluded. Source commit 4763c9f; CI 41728043185 SUCCEEDED. Kernel SHA256
+  8df7c031e03bfdaea18942d1368dc8fdf57f49e8ac897867a6dfb6ea29f369e6,
+  downloaded and verified in ../asus-ci-41728043185. New QEMU retest running
+  at ../qemu-asus-launchd-sha (same launchd root, --ios-userland).
+- Actual patched XNU SHA1 wrapper was extracted and host-compiled against
+  the pinned staged BearSSL source; 135 streaming/chunk-boundary cases match
+  Python hashlib. Script ../check_sha1_wrapper.py, artifacts ../sha1-host-check.
 - Once successful, download that kernel and repeat ../run_asus_qemu.py with
   ../asus-launchd-root/launchd-probe.hfs and --ios-userland, 150 seconds.
   Require `ASUS LAUNCHD CHILD` with parent 1 and heartbeat before sending a
