@@ -4,6 +4,20 @@
 
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
+- Current blocker: 0005 photo confirms HFS mounted, then immediate SIGKILL of
+  init, namespace 9 / code 1 = OS_REASON_EXEC / EXEC_EXIT_REASON_BAD_MACHO.
+  This does NOT establish a code-signing failure (namespace 3) or dyld
+  execution. No ASUS DYLD heartbeat observed. Photo kept privately at
+  ../asus-dyld-root/0005-signing-panic.png (historical filename; reason is EXEC).
+- Added ASUS-only `9998-asus-exec-diagnostics.patch` to the HFS profile:
+  log load_machfile return code, failing file/pass/load command, dyld result.
+  Checks remain intact. Applied locally; full build CI 41723309780 at bb4c31b.
+  Next 0006 should use this diagnostic source kernel with the EXACT same
+  0005 private root. Do not add speculative trust-policy changes first.
+- HFS follow-up CI 41721394060 SUCCEEDED at 326e3d3; kernel artifact SHA
+  f7f25006ff6628a839388ea764914dd03d43ec594d5836c0eb42d94beb9ef7f5.
+  No source kernel changes relative to the HFS kernel tested in 0004/0005;
+  verifier and RAM-root workflow fixes changed only host tooling.
 - HFS MILESTONE: image 0004 booted temporarily; user confirmed
   `hfs: mounted ASUSRamRoot`, PID 1 and five-second heartbeat. Then user
   returned Android; ADB sys.boot_completed=1. Kernel from CI 41719763180,
