@@ -1,5 +1,56 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## ASUS I007 bring-up handoff (2026-11-03, separate device)
+
+- User requested trying this project on ASUS Smartphone for Snapdragon Insiders;
+  confirmed an unlocked bootloader and USB connection. No authorization to erase
+  this ASUS's Android/data has been given. Historical sweet/topaz wipe approvals
+  below do not apply to this device.
+- Base branch `topaz`, commit `e4772911e116ab4ab6c4ac1f38e6106fefe8b483`.
+  Connected Android identifies as ASUS_I007D / ASUS_I007_1, lahaina / SM8350,
+  stock Android 11 build 18.1055.2307.269, active slot a, Magisk root available.
+- Private captures and backups are outside the repo, at sibling directory
+  `../asus-probe-20261103-224059/`: live-root.dtb/.dts, root iomem, boot_a.img,
+  vendor_boot_a.img, dtbo_a.img, backup-sha256.json and probe-0001-screen.png.
+  Do not commit these files: the DT contains device identifiers.
+- Windows ADB works. Windows bootloader USB 0b05:4daf has no usable Fastboot
+  driver. Existing usbipd-win 5.3.0 + Ubuntu WSL2 works: shared bus 2-1,
+  `usbipd attach --wsl --busid 2-1`, then Linux fastboot as root. Keep WSL
+  running during attach. Android re-enumerates separately and Windows ADB works.
+- Installed in Ubuntu: gcc/binutils-aarch64-linux-gnu, device-tree-compiler,
+  fastboot. AOSP mkbootimg is a sibling checkout `../mkbootimg`, commit
+  `d2bb0af5ba6d3198a3e99529c97eda1be0b5a093`.
+- Transport verified: temporarily booted the backed-up stock boot_a.img from
+  RAM; Fastboot returned OKAY and Android boot_completed=1. Product lahaina,
+  unlocked yes, max-download-size 536870912. No partitions flashed.
+- MILESTONE: `shim/asus-probe/build.sh` builds a separate CPU/display-only
+  diagnostic using the existing entry assembly and font. Probe 0001 was sent
+  with fastboot boot, returned OKAY, and the user's photo confirms execution
+  and readable display output. No storage driver is linked. It returned to
+  Android (ADB device, boot_completed=1). All three partition SHA256s still
+  match their pre-experiment backups.
+- Photo observations: EL=4 (EL1), MIDR=0x412fd050 (Cortex-A55),
+  MPIDR=0x81000000, MMFR0=0x101122 (16K granule advertised),
+  MMFR1=0x10212122, PFR0=0x11112222, ISAR0=0x100010211120,
+  ISAR1=0x100001, CNTFRQ=0x124f800 (19.2 MHz), incoming DTB=0xafd73000,
+  inherited linear FB=0xe5000000, stride=0x10e0 (4320), four bytes per pixel.
+  CTL_TOP value and final reset text were not captured in the photo.
+- Hardware from live DT: GICD 0x17a00000, GICR 0x17a60000/0x100000;
+  CPU affinities 0x0,0x100,...,0x700 (4 A55 + 3 A78 + 1 X1);
+  UFS 0x01d84000; MDP 0x0ae00000, CTL0 offset 0x16000;
+  splash reservation 0xe5000000+0x2300000. Active panel
+  ams678_er2_fhd_plus_dsc_cmd, 1080x2448, command mode with DSC.
+- Probe 0001 image SHA256:
+  `5f06cac77f757907fa4259e487a56780953258d180faaafc414e830080ccb6e2`.
+  Build checks: -Wall -Wextra -Werror, no ABS64 relocations, unpacked Android
+  header v3 / Android 11 / patch 2023-07, kernel 77824 bytes, ramdisk 48 bytes.
+- NEXT: verify real 16K MMU operation and GIC virtual timer on this CPU before
+  adapting XNU. No XNU kernel or iOS userland has run on this ASUS yet. Do not
+  boot the existing topaz payload: its CPU topology, RAM, GIC, UFS and panel
+  assumptions differ. Future root storage should initially be a RAM disk.
+- GitHub CLI is authenticated; no remote repo was created or pushed, no CI
+  run was triggered during this milestone.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
