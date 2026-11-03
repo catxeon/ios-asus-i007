@@ -1,0 +1,48 @@
+name: asus-ramroot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  own-init-hfs:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build own init and HFS+ RAM root
+        run: |
+          set -euo pipefail
+          mkdir out
+          clang -target arm64-apple-ios16.0 -DASUS_I007=1 -c tools/sweet-init.S -o out/asus-init.o
+          python3 tools/mkinit.py out/asus-init.o out/asus-init
+          hdiutil create -size 8m -layout NONE -fs HFS+ -volname ASUSRamRoot -format UDRW out/own-init.dmg
+          mountpoint="$RUNNER_TEMP/asus-ramroot"
+          mkdir "$mountpoint"
+          hdiutil attach -nobrowse -mountpoint "$mountpoint" out/own-init.dmg
+          trap 'hdiutil detach "$mountpoint" || true' EXIT
+          mkdir "$mountpoint/sbin" "$mountpoint/dev"
+          install -m 0755 out/asus-init "$mountpoint/sbin/launchd"
+          sync
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct
+          data = Path('out/own-init.dmg').read_bytes()
+          assert data[1024:1026] == b'H+'
+          block_size, blocks = struct.unpack_from('>II', data, 1024 + 40)
+          size = block_size * blocks
+          assert 0 < size <= len(data) and size <= 8 * 1024 * 1024
+          Path('out/asus-own-init.hfs').write_bytes(data[:size])
+          PY
+          fsck_hfs -fn out/asus-own-init.hfs
+          (cd out && shasum -a 256 asus-own-init.hfs > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asus-own-init-hfs
+          path: |
+            out/asus-own-init.hfs
+            out/SHA256SUMS
