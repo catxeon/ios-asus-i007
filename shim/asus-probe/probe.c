@@ -4,6 +4,11 @@
  */
 #include <stdint.h>
 #include "font.h"
+#include "mmu.h"
+
+#ifndef PROBE_VERSION
+#define PROBE_VERSION "0005"
+#endif
 
 #define MDP 0x0ae00000UL
 #define SPLASH 0xe5000000UL
@@ -15,9 +20,9 @@ static uintptr_t framebuffer;
 static unsigned stride, bytes_per_pixel, row;
 static uint32_t ctl_top;
 static volatile unsigned faulting;
+extern char _head[];
 
 static uint32_t read32(uintptr_t address) { return *(volatile uint32_t *)address; }
-static void write32(uintptr_t address, uint32_t value) { *(volatile uint32_t *)address = value; }
 static uint32_t be32(uintptr_t address) { return __builtin_bswap32(read32(address)); }
 
 static void delay(unsigned seconds)
@@ -82,7 +87,8 @@ static int find_framebuffer(void)
         if (base < SPLASH || base >= SPLASH_END || (bpp != 3 && bpp != 4) ||
             (format >> 30) || ((format >> 19) & 3) ||
             (size >> 16) != HEIGHT || pitch < WIDTH * bpp || pitch > 8192 ||
-            base + (uint64_t)pitch * HEIGHT > SPLASH_END) continue;
+            base + (uint64_t)pitch * HEIGHT > SPLASH_END ||
+            (bpp == 4 && ((base | pitch) & 3))) continue;
         if (!framebuffer || base < framebuffer) {
             framebuffer = base;
             stride = pitch;
@@ -95,15 +101,16 @@ static int find_framebuffer(void)
 static void present(void)
 {
     __asm__ volatile("dsb sy" ::: "memory");
-    /* CTL0 is the primary controller in the live DT. No flush needed: only
-     * pixel memory changed. Kick inherited command-mode scanout if configured.
+    /* Leave ABL's autonomous refresh running. Starting CTL directly without
+     * the full DSC/DSI sequencing may disrupt the inherited display pipeline.
+     * This probe writes pixel RAM only, never display controller registers.
      */
-    if (ctl_top & (1U << 17)) write32(MDP + 0x16000 + 0x1c, 1);
 }
 
 static void pixel(unsigned x, unsigned y, unsigned on)
 {
-    volatile unsigned char *p = (void *)(framebuffer + y * stride + x * bytes_per_pixel);
+    uintptr_t address = framebuffer + y * stride + x * bytes_per_pixel;
+    volatile unsigned char *p = (void *)address;
     for (unsigned c = 0; c < bytes_per_pixel; c++) p[c] = on ? 0xff : 0;
 }
 
@@ -163,27 +170,57 @@ void __attribute__((noreturn)) shim_main(uintptr_t fdt)
     if (R("CurrentEL") != 4 || !is_picasso(fdt)) { delay(5); reset(); }
     ctl_top = read32(MDP + 0x16000 + 0x14);
     if (!find_framebuffer()) { delay(10); reset(); }
+    /* Avoid rendering the whole report with uncached instruction fetches.
+     * Enable I-cache first; only one progress line precedes the MMU test.
+     */
+    uint64_t control = R("sctlr_el1") | (1UL << 12);
+    __asm__ volatile("msr sctlr_el1, %0; isb" : : "r"(control) : "memory");
+    text("MMU", "ENTERING 16K TEST");
+    present();
+    struct mmu_info info = {0};
+    int mmu_result = -2;
+    if ((R("id_aa64mmfr0_el1") >> 20) & 15) mmu_result = mmu_enable(&info);
     /* Only touch the verified inherited linear buffer in reserved splash RAM. */
     for (unsigned y = 0; y < HEIGHT; y++)
         for (unsigned x = 0; x < WIDTH; x++) pixel(x, y, 0);
-    text("ASUS", "I007 RAM PROBE 0001");
+    row = 0;
+    text("ASUS", "I007 RAM PROBE " PROBE_VERSION);
+    if (mmu_result == -2) {
+        text("MMU", "16K NOT SUPPORTED");
+    } else {
+        if (mmu_result) {
+            hex("MMU_ERROR", (uint64_t)mmu_result);
+        } else {
+            uint64_t code = mmu_probe((uintptr_t)_head);
+            uint64_t fb = mmu_probe(framebuffer);
+            uint64_t hole = mmu_probe(0x400000000UL);
+            const uint64_t pa_mask = 0x0000fffffffff000UL;
+            int pass = !(code & 1) && !(fb & 1) && (hole & 1) &&
+                (code & pa_mask) == ((uintptr_t)_head & pa_mask) &&
+                (fb & pa_mask) == (framebuffer & pa_mask) &&
+                (code >> 56) == 0xff && (fb >> 56) == 0 &&
+                ((R("tcr_el1") >> 14) & 3) == 2 && (info.sctlr_after & 1);
+            text("MMU", pass ? "16K CHECK PASS" : "16K CHECK FAILED");
+            hex("TCR", R("tcr_el1"));
+            hex("SCTLR", info.sctlr_after);
+            hex("PAR_CODE", code);
+            hex("PAR_FB", fb);
+            hex("PAR_HOLE", hole);
+        }
+    }
     text("STORAGE", "NO DRIVERS / NO WRITES");
     hex("EL", R("CurrentEL"));
     hex("MIDR", R("midr_el1"));
     hex("MPIDR", R("mpidr_el1"));
     hex("MMFR0", R("id_aa64mmfr0_el1"));
-    hex("MMFR1", R("id_aa64mmfr1_el1"));
-    hex("PFR0", R("id_aa64pfr0_el1"));
-    hex("ISAR0", R("id_aa64isar0_el1"));
-    hex("ISAR1", R("id_aa64isar1_el1"));
     hex("CNTFRQ", R("cntfrq_el0"));
     hex("DTB", fdt);
     hex("FB", framebuffer);
     hex("STRIDE", stride);
     hex("BPP", bytes_per_pixel);
     hex("CTL_TOP", ctl_top);
-    text("RESET", "ANDROID IN 45 SECONDS");
+    text("RESET", "ANDROID IN 120 SECONDS");
     present();
-    delay(45);
+    delay(120);
     reset();
 }

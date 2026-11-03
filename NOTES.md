@@ -44,10 +44,43 @@
   `5f06cac77f757907fa4259e487a56780953258d180faaafc414e830080ccb6e2`.
   Build checks: -Wall -Wextra -Werror, no ABS64 relocations, unpacked Android
   header v3 / Android 11 / patch 2023-07, kernel 77824 bytes, ramdisk 48 bytes.
-- NEXT: verify real 16K MMU operation and GIC virtual timer on this CPU before
+- NEXT: verify GIC virtual timer and SGI delivery on this CPU before
   adapting XNU. No XNU kernel or iOS userland has run on this ASUS yet. Do not
   boot the existing topaz payload: its CPU topology, RAM, GIC, UFS and panel
   assumptions differ. Future root storage should initially be a RAM disk.
+- Follow-up probes: 0002 image SHA256
+  `2d544f0883a80604ec6157d075286084f86df1d365a2a3ffa8c59e423a94f222`;
+  fastboot accepted it, the user's photo shows only the start of the MMU label
+  (no pass/fail captured), Android returned. It also shows CTL_TOP=0xf0020000
+  and a colorful band over the first text row. MMU success remains unverified.
+- Probe 0003 enabled I-cache, moved the MMU setup before bulk text rendering,
+  and used 32-bit pixel stores. SHA256
+  `fa57f72fe681592527b3cfc18d636456b10a18dc370b017ed8a49e92f323730b`.
+  Fastboot accepted it; user reported a screen full of artifacts and missed
+  the photo. Android returned (ADB device, boot_completed=1). Do not treat this
+  as a successful MMU test or a diagnosed CPU fault.
+- Probe 0004 restores byte pixel stores and compiles the existing MMU with an
+  explicit Device framebuffer mapping, retaining default NC for topaz. It
+  checks real code/FB PA translations, MAIR attributes and an unmapped hole.
+  Its report remains visible for 120 seconds. SHA256
+  `41a4d5e2617635da8d4ffe82f7718d674b9a6f759fb077ea09e7a942cb514f59`.
+  Header v3, kernel 147456 bytes, no ABS64 relocations, warning-free build.
+  Fastboot accepted it; photo confirms full-screen artifacts. User manually
+  rebooted with Power + Volume Down and confirmed Android returned. ADB
+  boot_completed=1 and all three partition hashes still match the backups.
+- MILESTONE: probe 0005 removed the direct CTL_START write as its only
+  behavioral change from 0004. User confirmed a readable screen and
+  **16K CHECK PASS**. Thus the previous screen disruption was caused by the
+  manual CTL start in the inherited DSC/DSI pipeline, rather than establishing
+  an MMU failure. The small original top-edge band was not separately assessed.
+  No display-controller registers are written in the working probe.
+- Probe 0005 SHA256:
+  `29ed276309e54fba1424963828ee5c134319a3bfc5d572777b7553b1aa4e0052`.
+  Same header v3 / kernel 147456 / ramdisk 48, warning-free build and no ABS64
+  relocations. The PASS condition checks SCTLR.M, TCR.TG0=16K, AT S1E1R physical
+  addresses and MAIR attributes (code WB / framebuffer Device), and a fault
+  for a deliberately unmapped address at 16 GiB. Only the boot A55 was tested;
+  no GIC, SMP or storage driver test and no XNU/iOS boot has occurred yet.
 - GitHub CLI is authenticated; no remote repo was created or pushed, no CI
   run was triggered during this milestone.
 
