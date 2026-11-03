@@ -97,8 +97,12 @@
 - Probe 0007 SHA256:
   `f1a5555dd651f0c1cfd06572def2d8205934bd2a51de3370d6cd091223c44467`.
   Header v3, kernel 147456, ramdisk 48; -Wall -Wextra -Werror and ABS64 check
-  passed, Android header unpack verified. Awaiting Android return after the
-  120-second report pause. Do not mix the timer numbering with older notes.
+  passed, Android header unpack verified. After the 120-second report pause,
+  Android returned automatically: ADB device, boot_completed=1. Re-read all
+  three boot/vendor_boot/dtbo hashes and they still match the original backups.
+  Stopped the task's WSL keepalive process; no fastboot command remains running.
+  Do not mix the timer numbering with older notes. Local GIC source commit:
+  45763a6. No remote push, fork creation or CI dispatch has occurred.
 - GitHub CLI is authenticated; no remote repo was created or pushed, no CI
   run was triggered during this milestone.
 
