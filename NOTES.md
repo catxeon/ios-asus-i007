@@ -81,6 +81,10 @@
   addresses and MAIR attributes (code WB / framebuffer Device), and a fault
   for a deliberately unmapped address at 16 GiB. Only the boot A55 was tested;
   no GIC, SMP or storage driver test and no XNU/iOS boot has occurred yet.
+- After 0005 the phone returned to Android (ADB device, boot_completed=1).
+  Re-read boot_a/vendor_boot_a/dtbo_a SHA256 values match all three original
+  backups. Automatic return was observed this time; no further manual reset
+  was requested. Working source commits: e297d13, 45c1aa4.
 - GitHub CLI is authenticated; no remote repo was created or pushed, no CI
   run was triggered during this milestone.
 
