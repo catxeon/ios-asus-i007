@@ -4,6 +4,15 @@
 
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
+- Actual Apple launchd executes in QEMU: logs hello, version 7.0.0, restore
+  environment, then creates system bootstrap context. No child heartbeat yet.
+  Kernel panic PC=0xfffffe00079cb144 = SHA1Init/sha1_init+0x34, FAR=0x28,
+  ESR=0x96000006; LR=0xfffffe00077214ec = in6_nigroup+0x10c. Missing SHA-1
+  crypto provider, reached through IPv6 hostname setup ("localhost").
+  Log ../qemu-asus-launchd/fb.txt; root ../asus-launchd-root/launchd-probe.hfs.
+  This root has NOT been sent to the phone. Add only generic software hash
+  patches 0032/0033 to HFS profile (not intervening UFS/write/root patches),
+  then rebuild and repeat QEMU before any phone launchd attempt.
 - PHONE MILESTONE: user confirmed image 0006 prints ASUS DYLD and repeated
   libSystem heartbeat approximately every five seconds. Thus Apple dyld and
   standalone libSystem run on ASUS, with our own dynamic PID 1. Apple launchd
