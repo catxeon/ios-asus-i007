@@ -84,3 +84,8 @@ sets and checks mode 0755 on both init and `/usr/lib/dyld`, round-trips every
 file to verify its hash, and checks HFS consistency. `hfsplus addall` does
 not preserve input modes: omitting the explicit dyld chmod caused image
 0005's `LOAD_PROTECT` failure. No kernel trust checks were removed to fix it.
+
+For an iOS-platform dynamic init, set `ASUS_IOS_USERLAND=1` when building
+the image with an explicit HFS root. This adds XNU's DEVELOPMENT boot arg
+`unentitled_ios_sim_launch=1`; the macOS-profile kernel otherwise refuses
+the iOS exec with `WRONG_PLATFORM`. This does not change Mach-O platform tags.

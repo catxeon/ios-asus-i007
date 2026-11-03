@@ -24,5 +24,11 @@ else
     ramdisk="$out/asus-init"
 fi
 python3 "$repo/tools/mkadt-asus.py" "$out/asus.adt"
-python3 "$repo/tools/mkpayload.py" "$kernel" "$out/asus.adt" "$out/payload.bin" --ramdisk "$ramdisk" --cmdline 'debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0'
+cmdline='debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0'
+if [ "${ASUS_IOS_USERLAND:-0}" = 1 ]; then
+    [ "$#" -gt 1 ] || { echo 'iOS userspace requires an explicit HFS RAM root' >&2; exit 1; }
+    # XNU's DEVELOPMENT macOS profile otherwise refuses an iOS-platform exec.
+    cmdline+=' unentitled_ios_sim_launch=1'
+fi
+python3 "$repo/tools/mkpayload.py" "$kernel" "$out/asus.adt" "$out/payload.bin" --ramdisk "$ramdisk" --cmdline "$cmdline"
 bash "$repo/shim/asus-xnu/build.sh" "$out/payload.bin"

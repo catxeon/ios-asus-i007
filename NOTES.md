@@ -4,6 +4,14 @@
 
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
+- Corrected dyld mode advances QEMU to `ASUS DYLD LOAD ... ret=0`, then
+  namespace 9/code 0xe = EXEC_EXIT_REASON_WRONG_PLATFORM. Source kern_exec.c
+  explicitly permits an iOS binary in a DEVELOPMENT macOS-profile kernel
+  with boot arg `unentitled_ios_sim_launch=1`. Added optional
+  ASUS_IOS_USERLAND=1 in the image builder (requires explicit HFS root),
+  and currently testing the flag with corrected root in QEMU. No new kernel
+  bypass or platform-tag edits were added. Artifacts ../qemu-asus-dyld-exec
+  (without flag) and ../qemu-asus-ios-allow (with flag, running).
 - Root cause of 0005 established in QEMU: GDB at load_machfile's return
   gives 6 = LOAD_PROTECT. Source-built diagnostic kernel from successful
   CI 41723309780 prints `/usr/lib/dyld ret=6`. HFS listing shows dyld mode
