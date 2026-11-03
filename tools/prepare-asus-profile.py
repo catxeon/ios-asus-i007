@@ -27,6 +27,7 @@ selected += [repo / 'xnu/patches/0019-stage-libpthread.sh',
              repo / 'xnu/asus/9999-asus-i007-bringup.patch']
 if args.hfs:
     selected.append(repo / 'xnu/patches/0026-stage-hfs.sh')
+    selected.append(repo / 'xnu/asus/9998-asus-exec-diagnostics.patch')
 manifest = []
 for path in selected:
     data = path.read_bytes().replace(b'\r\n', b'\n')

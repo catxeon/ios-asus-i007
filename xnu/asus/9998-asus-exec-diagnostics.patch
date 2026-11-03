@@ -1,0 +1,48 @@
+diff --git a/bsd/kern/mach_loader.c b/bsd/kern/mach_loader.c
+--- a/bsd/kern/mach_loader.c
++++ b/bsd/kern/mach_loader.c
+@@ -773,7 +773,7 @@
+ 	)
+ {
+ 	uint32_t                ncmds;
+-	struct load_command     *lcp;
++	struct load_command     *lcp = NULL;
+ 	struct dylinker_command *dlp = 0;
+ 	void *                  control;
+ 	load_return_t           ret = LOAD_SUCCESS;
+@@ -1512,6 +1512,12 @@
+ 		ret = LOAD_BADMACHO_UPX;
+ 	}
+ 
++#if defined(ASUS_I007)
++	if (ret != LOAD_SUCCESS) {
++		printf("ASUS MACHO: file=%s depth=%d pass=%d cmd=0x%x ret=%d\n",
++		    vp->v_name, depth, pass, lcp ? lcp->cmd : 0, ret);
++	}
++#endif
+ 	kfree_data(addr, alloc_size);
+ 
+ 	return ret;
+@@ -3182,6 +3188,9 @@
+ 	vnode_put(vp);
+ 	kfree_type(struct vnode_attr, va);
+ novp_out:
++#if defined(ASUS_I007)
++	printf("ASUS DYLD LOAD: path=%s ret=%d\n", name, ret);
++#endif
+ 	kfree_type(typeof(*dyld_data), dyld_data);
+ 	return ret;
+ }
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -1316,6 +1316,9 @@
+ 	 */
+ 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
+ 	if (lret != LOAD_SUCCESS) {
++#if defined(ASUS_I007)
++		printf("ASUS EXEC: load_machfile returned %d for %s\n", lret, imgp->ip_vp->v_name);
++#endif
+ 		error = load_return_to_errno(lret);
+ 
+ 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
