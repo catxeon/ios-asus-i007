@@ -4,11 +4,41 @@
 
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
+- Root cause of 0005 established in QEMU: GDB at load_machfile's return
+  gives 6 = LOAD_PROTECT. Source-built diagnostic kernel from successful
+  CI 41723309780 prints `/usr/lib/dyld ret=6`. HFS listing shows dyld mode
+  100644; get_macho_vnode requires EXECUTE|READ_DATA. libdmg-hfsplus addall
+  ignores staging file modes for /usr/lib, defaulting to 0644. Thus this was
+  our root packaging error, not evidence requiring a kernel trust bypass.
+- Corrected copy ../asus-dyld-root/dyld-probe-exec.hfs changes only dyld mode
+  to 0755, fsck OK, SHA c20990bb0db9f423f1f43361133322509bd244282c54c936c98bef6dd351c195.
+  Testing this in QEMU with diagnostic source kernel. No phone 0006 yet.
+- Added tools/mkasus-dyld-root.py: own dynamic init + dependency closure only,
+  explicit executable mode checks, full round-trip file hashes and fsck.
+  It successfully rebuilt private ../asus-dyld-root/checked-root.hfs (38 files).
+  No Apple restore programs/jobs are included. Original 0005 root is preserved.
+- Diagnostic kernel CI 41723309780 succeeded; SHA
+  1a6a5f4c7a366c825e7d7b72b282332eb14671724bf9184658da13e592741bfe.
+  GDB QEMU process was stopped through QMP after extracting the return code;
+  corrected-root QEMU test is the remaining process to inspect.
 - Current blocker: 0005 photo confirms HFS mounted, then immediate SIGKILL of
   init, namespace 9 / code 1 = OS_REASON_EXEC / EXEC_EXIT_REASON_BAD_MACHO.
   This does NOT establish a code-signing failure (namespace 3) or dyld
   execution. No ASUS DYLD heartbeat observed. Photo kept privately at
   ../asus-dyld-root/0005-signing-panic.png (historical filename; reason is EXEC).
+- QEMU now reproduces the exact same 0005 HFS -> EXEC/BAD_MACHO panic, same
+  panic caller 0xfffffe0007b34b6c, without phone access. Private harness
+  ../run_asus_qemu.py adapts the existing qemu-sweet helper: ASUS FB e5000000,
+  height 2448, GIC virt addresses, 62.5 MHz timebase, Cortex-A55, automatic RAM
+  size from payload, Unix monitor socket in /tmp (DrvFS cannot bind sockets),
+  no default NIC. 35 seconds was too short; use 150 seconds. Results in
+  ../qemu-asus-0005-long/fb.txt/.png and result.json. Decoder has zero unknown
+  glyphs. Own nlist reader supplies iso_font instead of requiring llvm-nm.
+- All 38 user CodeDirectories and 2394 code-page hashes validate locally
+  against the private extracted files (../check_user_code_pages.py). This
+  checks page content, not CMS trust or complete loader acceptance.
+- After 0005 Android is back (ADB boot_completed=1); all three original boot
+  partition hashes still match. Keep it in Android while debugging in QEMU.
 - Added ASUS-only `9998-asus-exec-diagnostics.patch` to the HFS profile:
   log load_machfile return code, failing file/pass/load command, dyld result.
   Checks remain intact. Applied locally; full build CI 41723309780 at bb4c31b.

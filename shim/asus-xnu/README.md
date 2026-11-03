@@ -76,3 +76,11 @@ For a separate Apple dyld/libSystem test, `tools/asus-dyld-init.c` builds our
 dynamic PID 1 with `tools/build-asus-dyld-init.sh`. Apple's binaries are
 private inputs, never part of the public source/archive/CI artifacts. Never
 boot the unmodified Apple restore root or its restore jobs on ASUS.
+
+`tools/mkasus-dyld-root.py` packs only our init and its dependency closure
+from a locally extracted restore root. It requires the HFS base artifact,
+libdmg-hfsplus's `hfsplus` utility and Linux `fsck.hfsplus`. It explicitly
+sets and checks mode 0755 on both init and `/usr/lib/dyld`, round-trips every
+file to verify its hash, and checks HFS consistency. `hfsplus addall` does
+not preserve input modes: omitting the explicit dyld chmod caused image
+0005's `LOAD_PROTECT` failure. No kernel trust checks were removed to fix it.
