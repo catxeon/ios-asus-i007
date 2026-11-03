@@ -18,7 +18,7 @@ jobs:
           mkdir out
           clang -target arm64-apple-ios16.0 -DASUS_I007=1 -c tools/sweet-init.S -o out/asus-init.o
           python3 tools/mkinit.py out/asus-init.o out/asus-init
-          hdiutil create -size 8m -layout NONE -fs HFS+ -volname ASUSRamRoot -format UDRW out/own-init.dmg
+          hdiutil create -size 8m -layout NONE -fs HFS+ -volname ASUSRamRoot out/own-init.dmg
           mountpoint="$RUNNER_TEMP/asus-ramroot"
           mkdir "$mountpoint"
           hdiutil attach -nobrowse -mountpoint "$mountpoint" out/own-init.dmg
