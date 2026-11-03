@@ -1,3 +1,21 @@
+# ASUS I007 experimental XNU port
+
+This fork's `asus-i007` branch targets the ASUS Smartphone for Snapdragon
+Insiders (SM8350). XNU and our own static PID 1 have run on the boot Cortex-A55;
+the user observed `ASUS init: still alive` every five seconds in diagnostic
+image 0002. The matching source fix builds successfully in
+[CI 41716816697](https://github.com/catxeon/ios-asus-i007/actions/runs/41716816697).
+Source-built image 0003 also reached PID 1 with a heartbeat every five seconds,
+confirmed by the user on 2026-11-04.
+
+This ASUS profile uses one CPU, 512 MiB RAM and a tiny RAM root. Apple iOS
+userland, SpringBoard and board peripheral drivers have not been tested on
+this phone. Tests use temporary `fastboot boot`; Android is preserved.
+See [ASUS build and boot instructions](shim/asus-xnu/README.md).
+
+The original project's README follows. Its Xiaomi hardware results and
+installation instructions do not describe this ASUS port.
+
 # ios-topaz
 
 **Apple's iOS 16 running on a Redmi Note 12 4G.**

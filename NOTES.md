@@ -2,6 +2,38 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Active status (2026-11-04): XNU and own PID 1 observed
+
+- Diagnostic image 0002 reached PID 1. The user confirmed that
+  `ASUS init: still alive` continues approximately every five seconds. This
+  confirms the own static Mach-O init and its timed system-call wait, not an
+  Apple iOS userland boot. Android subsequently returned; ADB reported
+  sys.boot_completed=1 before the next test.
+- Full source rebuild with the ASUS CNTP guard succeeded in CI 41716816697,
+  source commit bc049f2. Kernel SHA256:
+  ca9c190be6567ea5670aeeeefb752dbdc0031678d5b127cafca5425141ff4cec.
+  Downloaded artifact checksums match. The new verifier audits instructions
+  in fiq_context_init: it accepts this kernel and diagnostic 0002 and rejects
+  the original trapping kernel. Generic topaz is also rejected.
+- Built source-based image 0003; SHA256:
+  ab12c926a399d66aabbbda93bd588babb2742549ac51c365652ccd4c5bd1739b.
+  Fastboot transfer and boot returned OKAY. The user confirmed PID 1 and a
+  heartbeat every five seconds in image 0003. This is the source-built
+  on-device success, independent of diagnostic binary patch 0002.
+- RAM/reservation, FB block offset, CPU/timer DT, own init and patch
+  reverse/forward checks pass. Scratch source had CRLF line endings; normalized
+  the ten patch targets back to LF before checking. This was a host check
+  issue; the clean macOS CI applied and compiled the source patch successfully.
+- After 0003 the user confirmed Android returned; ADB sys.boot_completed=1.
+  Re-read boot_a, vendor_boot_a and dtbo_a SHA256 values match all three
+  pre-experiment backups. No partition was flashed or erased.
+- Phase 2 single-core XNU + own RAM-root init is achieved. Next technical stage
+  is planning an Apple userland RAM-root test and the required kernel support;
+  Apple launchd/SpringBoard and ASUS peripherals remain untested. Deliver the
+  checked 0003 image, current source archive and report in workspace outputs.
+  No ASUS erase or partition write is authorized. Historical entries below
+  describe earlier checkpoints and may say that XNU has not run yet.
+
 ### Phase 2: XNU candidate prepared (2026-11-03)
 
 - First real XNU boot, image 0001: kernel SHA256

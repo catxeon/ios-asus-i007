@@ -1,7 +1,11 @@
 # ASUS I007: first XNU RAM-root boot
 
-This is a **candidate, not yet an on-device XNU result**. Hardware probe 0007
-already verified the boot A55, 16K MMU, virtual timer INTID 27, and self-SGI.
+Diagnostic image 0002 reached XNU and our own PID 1. The user observed the
+`ASUS init: still alive` heartbeat approximately every five seconds. The
+matching source fix built successfully in CI 41716816697; the user confirmed
+the same PID 1 and five-second heartbeat in source-built image 0003 on
+2026-11-04. Hardware probe 0007 also
+verified the boot A55, 16K MMU, virtual timer INTID 27, and self-SGI.
 
 The separate `asus-xnu` GitHub workflow builds xnu-8796.141.3 with base patches
 0001 through 0025 and `xnu/asus/9999-asus-i007-bringup.patch`. No patch 0028
@@ -26,24 +30,27 @@ Build the workflow on a macOS runner with Xcode 15. Download its
 # Needs aarch64-linux-gnu-gcc/binutils, clang and Python 3.
 # Keep AOSP system/tools/mkbootimg checked out next to this repo,
 # or export MKBOOTIMG=/absolute/path/to/mkbootimg.py.
-bash tools/build-asus-image.sh /absolute/path/to/kernel.development.sweet
+ASUS_XNU_VERSION=0003 bash tools/build-asus-image.sh /absolute/path/to/kernel.development.sweet
 ```
 
-The builder rejects kernels without the ASUS build markers. It generates an
+The builder rejects kernels without the ASUS build markers and kernels that
+still access CNTP_CTL_EL0 in fiq_context_init (which trapped on this phone).
+The ASUS source guard retains the virtual timer and omits that physical-timer
+access. The builder generates an
 ad-hoc signed static Mach-O init from our assembly, embeds that tiny binary
 as the mockfs RAM root, packs the kernel/ADT/root and creates boot image v3:
-`shim/asus-xnu/out/asus-i007-xnu-0001.img`. No Apple userland is needed here.
+`shim/asus-xnu/out/asus-i007-xnu-0003.img`. No Apple userland is needed here.
 
 Only on the verified, unlocked ASUS I007, the hardware test will use:
 
 ```sh
-fastboot boot shim/asus-xnu/out/asus-i007-xnu-0001.img
+fastboot boot shim/asus-xnu/out/asus-i007-xnu-0003.img
 ```
 
 Expected evidence is XNU boot output, followed by `ASUS XNU userspace: init
 running as PID 1` and repeated `ASUS init: still alive` messages. These messages
-have **not yet been observed on this phone**. Until then, a successful build
-or fastboot transfer proves neither XNU execution nor userspace operation.
+were observed on this phone in diagnostic image 0002. Reconfirm them for
+each changed kernel; a successful transfer alone does not prove execution.
 
 The successful init intentionally stays alive. There is no ADB/USB driver in
 this XNU profile and no automatic timed return once XNU is entered. Return
