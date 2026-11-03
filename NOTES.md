@@ -14,6 +14,12 @@
   boot_a/vendor_boot_a/dtbo_a match original backups. Keep Apple-containing
   image/root private in ignored out and sibling work folders. No partition
   has been flashed or erased. Phase 4 hardware test is achieved.
+- Final artifacts: workspace outputs/ASUS-XNU-launchd.md, selected-source
+  archive asus-i007-hfs-source.zip, local own-code recipes archive and
+  asus-i007-launchd-manifest.json. No Apple binaries were copied to outputs.
+  All QEMU runs ended; own WSL keepalive stopped; read-only APFS FUSE mount
+  was unmounted. Remount ../apple-20H392/087-86719-047.apfs read-only at
+  ../apple-20H392/restore-mount before reading restore files on resume.
 - Next substantial stage is GUI: actual SpringBoard/root dependencies and
   ASUS display presentation/input support, with a storage/RAM strategy that
   preserves Android. Do not claim full iOS or a usable phone OS. Earlier
