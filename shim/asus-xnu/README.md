@@ -61,7 +61,8 @@ No phone partition is flashed by any build/test command in this document.
 
 Image 0004 mounted `ASUSRamRoot` and ran our own PID 1 with the five-second
 heartbeat, confirmed on the phone. Dispatch `asus-xnu.yml` with `hfs=true`
-to include patches 0026/0027 (Apple OSS HFS and MD5), still excluding UFS.
+to include patches 0026/0027 (Apple OSS HFS and MD5), plus software SHA-1 and
+SHA-384/512 patches 0032/0033, still excluding UFS and root-write patches.
 The `asus-ramroot.yml` workflow builds an 8 MiB HFS+ root containing only
 our static init and `/dev`, and checks it with Apple's fsck on a read-only
 attached device.

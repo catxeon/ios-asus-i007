@@ -2,6 +2,22 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Current next action: isolated Apple launchd (phase 4)
+
+- Phase 3 achieved on phone: source XNU, HFS RAM root, Apple dyld/libSystem,
+  own dynamic PID 1 with five-second heartbeat (0006). Android returned;
+  boot_a/vendor_boot_a/dtbo_a hashes still match original backups afterward.
+- Launchd experiment remains QEMU-only. Actual Apple launchd starts, but
+  hostname/IPv6 setup reaches absent SHA-1 provider and panics. Generic
+  software hash patches 0032/0033 apply locally and are now included only
+  in optional HFS profile; UFS and intervening board/root-write patches are
+  excluded. Source commit 4763c9f; CI 41728043185 is building.
+- Once successful, download that kernel and repeat ../run_asus_qemu.py with
+  ../asus-launchd-root/launchd-probe.hfs and --ios-userland, 150 seconds.
+  Require `ASUS LAUNCHD CHILD` with parent 1 and heartbeat before sending a
+  launchd image to the phone. If another failure, use console and symbols.
+  Do not claim GUI, actual launchd on phone, or a usable iOS installation.
+
 ### Phase 3 active (2026-11-04): filesystem RAM root toward Apple userland
 
 - Actual Apple launchd executes in QEMU: logs hello, version 7.0.0, restore
