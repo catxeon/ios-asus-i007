@@ -2,6 +2,31 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Phase 5: IOSurface presentation
+
+- QEMU verified the ASUS display profile. Apple launchd spawned the display
+  job (PID 3, parent 1). Apple's IOSurface framework created a 768x384 BGRA
+  surface. The IOKit swap copied it to x=156, y=800 in the 1080x2448 boot
+  framebuffer. QMP read back all three expected pixel colors, and the
+  console logged consecutive swaps. See ../qemu-asus-display-v1.
+- Optional display kernel at 43c0432, GitHub Actions 41793014761 succeeded.
+  Kernel SHA256 2e60743b5a680d945f11d3f5b205c30dd6ce622e77b836da09625c5eb12f4ef0.
+  The kernel presents via aligned stores to the inherited framebuffer. The
+  ASUS display entry's name matches the platform expert's DT selection.
+  The ABL refresh configuration is used as inherited. No DPU/DSI, GPU,
+  input, or storage hardware driver is included.
+- Private HFS image ../asus-display-root/display-v1.hfs is 104 MiB, with
+  82 Mach-O files checked byte-for-byte and fsck clean. HFS SHA256
+  4640cec2d2ce8fc936841c80a98baf805d5e2e416269bb61bad5ad30251fe3e5.
+  Build using tools/build-asus-display-probe.sh and tools/mkasus-display-root.py
+  against the existing private Apple launchd HFS root. Apple files stay local.
+- Build phone image with ASUS_XNU_VERSION=0008 ASUS_IOS_USERLAND=1
+  ASUS_DISPLAY=1 tools/build-asus-image.sh KERNEL DISPLAY_HFS. Image SHA256
+  d2bd24f39501ec0f0b04ad9b422544172f4043deb43e5c6c4b88825468c9a21d
+  and size 125972480 bytes. Payload 125879904 bytes fits the loader limit.
+  Physical presentation is pending. The expected image is a rectangle of
+  three colored bands rotating every four seconds with console text nearby.
+
 ### Current status: Apple launchd on ASUS (phase 4 achieved)
 
 - PHONE MILESTONE: user confirmed image 0007 shows `ASUS LAUNCHD CHILD:

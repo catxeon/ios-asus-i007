@@ -38,7 +38,9 @@ def build(display=False):
     ])
     devices = [gic]
     if display:
-        devices.append(node('disp0', [
+        # The platform expert selects this entry by its DT name before
+        # IOPlatformDevice matching can examine the compatible property.
+        devices.append(node('asus,display', [
             ('compatible', cstr('asus,display')),
             ('device_type', cstr('display-subsystem')),
             ('canvas-width', u32(FB_WIDTH)), ('canvas-height', u32(FB_HEIGHT)),
