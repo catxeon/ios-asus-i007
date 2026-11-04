@@ -943,7 +943,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,472 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -1243,10 +1243,27 @@
 +	}
 +}
 +
++/*
++ * On iOS the compositor (backboardd) runs as mobile, not root. Besides
++ * administrators, accept clients the kernel classified as platform binaries
++ * (CS_PLATFORM_BINARY: only trust-cache / pinned signatures get it here).
++ */
++extern "C" void *get_bsdtask_info(task_t);
++extern "C" int csproc_get_platform_binary(struct proc *);
++
++static bool
++asus_fb_platform_client(task_t task)
++{
++	struct proc *p = (struct proc *)get_bsdtask_info(task);
++	return p != NULL && csproc_get_platform_binary(p) != 0;
++}
++
 +bool
 +IOMobileFramebufferUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
 +{
-+	if (type != 0 || clientHasPrivilege(securityID, kIOClientPrivilegeAdministrator) != kIOReturnSuccess ||
++	if (type != 0 ||
++	    (clientHasPrivilege(securityID, kIOClientPrivilegeAdministrator) != kIOReturnSuccess &&
++	    !asus_fb_platform_client(owningTask)) ||
 +	    !IOUserClient::initWithTask(owningTask, securityID, type)) {
 +		return false;
 +	}

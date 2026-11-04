@@ -14,12 +14,53 @@ FB_SIZE = (FB_STRIDE * FB_HEIGHT + 0x3fff) & ~0x3fff
 SOC_BASE = 0x01000000
 
 
-def build(display=False):
+
+GUI_DISP0 = ('dot-pitch', 'display-default-color', 'max-avg-bpp', 'max-peak-bpp', 'max-scaling-ratio')
+
+
+def gui_nodes(source):
+    """Product description nodes for iOS userland, from a local iPhone X (D22AP) ADT.
+
+    backboardd/MobileGestalt read /product, /buttons (home-button-type 2 = no home
+    button), /backlight, /chosen display-* and /arm-io/disp0. Placeholder (syscfg)
+    properties and anything wiring Apple hardware (function-*, interrupts, reg,
+    clocks, phandle parents) are dropped; no driver matches these nodes.
+    """
+    root, _ = adt.parse(Path(source).read_bytes())
+
+    def find(path):
+        n = root
+        for part in path.split('/'):
+            n = next(c for c in n.children if c.name == part)
+        return n
+
+    def clean(n, keep=None):
+        props = [(k, f, v) for k, f, v in n.props
+                 if not f and (keep is None or k in keep or k == 'name')
+                 and not k.startswith(('function-', 'interrupt', 'AAPL,phandle', 'reg', 'clock',
+                                       'power-gates', 'iommu-parent'))]
+        out = adt.Node()
+        out.props = props
+        out.children = [clean(c) for c in n.children] if keep is None else []
+        return out
+
+    # iBoot fills the D22AP /chosen display-* templates at boot (they are empty in the
+    # IPSW), so set them here: 1080x2448 at 3x = 360x816 points, portrait, as on sweet.
+    chosen = [('display-scale', 0, u32(3)), ('display-rotation', 0, u32(0)),
+              ('display-boot-rotation', 0, u32(0))]
+    disp0 = clean(find('arm-io/disp0'), GUI_DISP0)
+    disp0.props = [(k, f, v) for k, f, v in disp0.props if k == 'name' or v.strip(b'\0')]
+    return chosen, [clean(find('product')), clean(find('buttons')), clean(find('backlight'))], disp0
+
+
+def build(display=False, ios_gui=None):
+    gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(MEM_SIZE)),
         ('random-seed', os.urandom(64)), ('debug-enabled', u32(1)),
         ('firmware-version', cstr('asus-i007-shim')),
     ], [node('memory-map')])
+    chosen.props += gui_chosen
     cpu = node('cpu0', [
         ('device_type', cstr('cpu')), ('compatible', cstr('arm,cortex-a55') + cstr('ARM,v8')),
         ('reg', u32(0)), ('cpu-id', u32(0)), ('cluster-id', u32(0)),
@@ -45,6 +86,8 @@ def build(display=False):
             ('device_type', cstr('display-subsystem')),
             ('canvas-width', u32(FB_WIDTH)), ('canvas-height', u32(FB_HEIGHT)),
         ]))
+    if gui_disp0 is not None:
+        devices.append(gui_disp0)
     arm_io = node('arm-io', [
         ('device_type', cstr('sweet-io')), ('compatible', cstr('sweet-io') + cstr('arm-io')),
         ('#address-cells', u32(2)), ('#size-cells', u32(2)),
@@ -58,16 +101,18 @@ def build(display=False):
         ('compatible', cstr('asus,picasso') + cstr('qcom,lahaina') + cstr('AppleARM')),
         ('model', cstr('ASUS_I007D')), ('target-type', cstr('PICASSO')),
         ('manufacturer', cstr('ASUS')), ('#address-cells', u32(2)), ('#size-cells', u32(2)),
-    ], [chosen, node('defaults'), cpus, arm_io, fbcon])
+    ], [chosen, node('defaults'), cpus, arm_io, fbcon, *gui_top])
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
     parser.add_argument('--display', action='store_true')
+    parser.add_argument('--ios-gui', type=Path, metavar='D22AP_ADT',
+                        help='add iPhone X product/buttons/backlight/display-scale nodes from a local decoded ADT')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
-    root = build(args.display)
+    root = build(args.display, args.ios_gui)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:
