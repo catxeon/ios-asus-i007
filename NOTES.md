@@ -4,6 +4,11 @@
 
 ### Phase 5: IOSurface presentation
 
+- PHONE MILESTONE: user confirmed image 0008 shows all three color bands
+  and that their order changes. Fastboot accepted temporary RAM boot.
+  This validates display presentation from a launchd job on the ASUS panel.
+  After reboot Android reported sys.boot_completed=1. SHA256 checks of
+  boot_a, vendor_boot_a and dtbo_a all matched the original backups.
 - QEMU verified the ASUS display profile. Apple launchd spawned the display
   job (PID 3, parent 1). Apple's IOSurface framework created a 768x384 BGRA
   surface. The IOKit swap copied it to x=156, y=800 in the 1080x2448 boot
@@ -24,8 +29,11 @@
   ASUS_DISPLAY=1 tools/build-asus-image.sh KERNEL DISPLAY_HFS. Image SHA256
   d2bd24f39501ec0f0b04ad9b422544172f4043deb43e5c6c4b88825468c9a21d
   and size 125972480 bytes. Payload 125879904 bytes fits the loader limit.
-  Physical presentation is pending. The expected image is a rectangle of
-  three colored bands rotating every four seconds with console text nearby.
+  The image shows a rectangle of three colored bands rotating every four
+  seconds with console text nearby.
+- Next experiment: run the iOS display compositor in QEMU with this profile
+  and log missing services and dependencies before trying it on the ASUS.
+  SpringBoard, touchscreen input, and accelerated rendering remain untested.
 
 ### Current status: Apple launchd on ASUS (phase 4 achieved)
 
