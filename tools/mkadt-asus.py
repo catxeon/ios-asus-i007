@@ -2,6 +2,7 @@
 """Minimal ASUS I007 Apple DT for a single A55 + RAM-only XNU bring-up."""
 import argparse
 import os
+import struct
 from pathlib import Path
 import adt
 from mkadt import node, u32, u64, cstr
@@ -53,7 +54,24 @@ def gui_nodes(source):
     return chosen, [clean(find('product')), clean(find('buttons')), clean(find('backlight'))], disp0
 
 
-def build(display=False, ios_gui=None):
+def trust_cache_prop(path):
+    """The OS image's static trust cache (IM4P or raw v2 payload) for the kernel's
+    --userland ASUS TRUST policy, like iBoot passes it on iOS."""
+    data = Path(path).read_bytes()
+    if data[:1] == b'\x30' and b'IM4P' in data[:16]:
+        data, info = adt.im4p_payload(data)
+        if info['type'] != 'trst' or info['encrypted']:
+            raise ValueError('not a plain trust cache IM4P')
+    version, count = struct.unpack_from('<I16xI', data)
+    if version != 2 or len(data) != 24 + 24 * count:
+        raise ValueError(f'unexpected trust cache (version {version}, {count} entries, {len(data)} bytes)')
+    hashes = [data[24 + 24 * i:44 + 24 * i] for i in range(count)]
+    if hashes != sorted(hashes):
+        raise ValueError('trust cache entries are not sorted')
+    return ('asus-static-trust-cache', 0, data)
+
+
+def build(display=False, ios_gui=None, trust_cache=None):
     gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(MEM_SIZE)),
@@ -61,6 +79,8 @@ def build(display=False, ios_gui=None):
         ('firmware-version', cstr('asus-i007-shim')),
     ], [node('memory-map')])
     chosen.props += gui_chosen
+    if trust_cache:
+        chosen.props.append(trust_cache_prop(trust_cache))
     cpu = node('cpu0', [
         ('device_type', cstr('cpu')), ('compatible', cstr('arm,cortex-a55') + cstr('ARM,v8')),
         ('reg', u32(0)), ('cpu-id', u32(0)), ('cluster-id', u32(0)),
@@ -110,9 +130,11 @@ if __name__ == '__main__':
     parser.add_argument('--display', action='store_true')
     parser.add_argument('--ios-gui', type=Path, metavar='D22AP_ADT',
                         help='add iPhone X product/buttons/backlight/display-scale nodes from a local decoded ADT')
+    parser.add_argument('--trust-cache', type=Path, metavar='TRUSTCACHE',
+                        help='pass the OS static trust cache (IM4P or raw v2) in /chosen')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
-    root = build(args.display, args.ios_gui)
+    root = build(args.display, args.ios_gui, args.trust_cache)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:

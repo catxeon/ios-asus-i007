@@ -76,7 +76,8 @@ def verify(path, require_hfs=False, require_display=False):
                                      b'backboardd\0', b'containermanagerd\0', b'notifyd\0'))),
             'userland': all(marker in data for marker in
                             (b'ASUS Sandbox: permissive policy', b'_asus_userland_register\0',
-                             b'mounting dirty non-journaled root read-write'))}
+                             b'mounting dirty non-journaled root read-write',
+                             b'ASUS TRUST: static trust cache v2'))}
 
 
 if __name__ == '__main__':

@@ -100,7 +100,7 @@
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
 --- /dev/null
 +++ b/bsd/kern/asus_userland.c
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,178 @@
 +/*
 + * ASUS I007 userland services (optional profile --userland).
 + *
@@ -123,6 +123,12 @@
 +#include <sys/proc.h>
 +#include <security/mac_policy.h>
 +#include <sys/systm.h>
++#include <kern/kalloc.h>
++#include <pexpert/device_tree.h>
++#include <sys/codesign.h>
++#include <sys/mount.h>
++#include <sys/ubc_internal.h>
++#include <sys/vnode.h>
 +
 +static uint64_t asus_sandbox_seen;
 +
@@ -156,13 +162,120 @@
 +	.mpc_ops = &asus_sandbox_ops,
 +};
 +
++/*
++ * Static trust cache. On iOS, iBoot hands the OS image's static trust cache
++ * to the kernel and AMFI marks every binary whose code directory hash is in
++ * it as a platform binary. The ASUS loader passes the stock trust cache
++ * (version 2: 24-byte header, sorted 24-byte entries cdhash[20], hash type,
++ * flags, 2 reserved) in /chosen/asus-static-trust-cache. It is copied at
++ * boot; without the property nothing is trusted here. Only binaries on the
++ * root filesystem are considered, the hash type must match, and page hash
++ * validation stays with the kernel.
++ */
++static uint8_t *asus_tc_entries;
++static uint32_t asus_tc_count;
++static uint32_t asus_tc_logged;
++
++static void
++asus_trust_cache_init(void)
++{
++	DTEntry chosen;
++	void const *prop;
++	unsigned int size;
++	uint32_t tc_version, tc_count;
++
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, "asus-static-trust-cache", &prop, &size) != kSuccess) {
++		printf("ASUS TRUST: no static trust cache in /chosen\n");
++		return;
++	}
++	if (size < 24) {
++		printf("ASUS TRUST: trust cache too small (%u)\n", size);
++		return;
++	}
++	memcpy(&tc_version, prop, sizeof(tc_version));
++	memcpy(&tc_count, (const uint8_t *)prop + 20, sizeof(tc_count));
++	if (tc_version != 2 || (uint64_t)size != 24 + 24ULL * tc_count) {
++		printf("ASUS TRUST: rejected trust cache (version %u, %u entries, %u bytes)\n",
++		    tc_version, tc_count, size);
++		return;
++	}
++	asus_tc_entries = kalloc_data(24ULL * tc_count, Z_WAITOK);
++	if (asus_tc_entries == NULL) {
++		return;
++	}
++	memcpy(asus_tc_entries, (const uint8_t *)prop + 24, 24ULL * tc_count);
++	asus_tc_count = tc_count;
++	printf("ASUS TRUST: static trust cache v2, %u entries\n", tc_count);
++}
++
++static bool
++asus_tc_contains(const uint8_t *cdhash, uint8_t hash_type)
++{
++	uint32_t lo = 0, hi = asus_tc_count;
++	while (lo < hi) {
++		uint32_t mid = lo + (hi - lo) / 2;
++		const uint8_t *entry = asus_tc_entries + 24ULL * mid;
++		int c = memcmp(entry, cdhash, CS_CDHASH_LEN);
++		if (c == 0) {
++			return entry[CS_CDHASH_LEN] == hash_type;
++		}
++		if (c < 0) {
++			lo = mid + 1;
++		} else {
++			hi = mid;
++		}
++	}
++	return false;
++}
++
++static int
++asus_trust_check_signature(struct vnode *vp, __unused struct label *label,
++    __unused cpu_type_t cpu_type, struct cs_blob *cs_blob,
++    unsigned int *cs_flags, __unused unsigned int *signer_type,
++    __unused int flags, __unused unsigned int platform,
++    __unused char **failure, __unused size_t *failure_len)
++{
++	mount_t mp = vnode_mount(vp);
++	if (asus_tc_count == 0 || mp == NULL || (vfs_flags(mp) & MNT_ROOTFS) == 0) {
++		return 0;
++	}
++	if (asus_tc_contains(cs_blob->csb_cdhash, csblob_get_hashtype(cs_blob))) {
++		*cs_flags |= CS_SIGNED | CS_PLATFORM_BINARY;
++		if (asus_tc_logged < 64) {
++			const char *name = vnode_getname(vp);
++			asus_tc_logged++;
++			printf("ASUS TRUST: platform binary %s\n", name ? name : "?");
++			if (name) {
++				vnode_putname(name);
++			}
++		}
++	}
++	return 0;
++}
++
++static const struct mac_policy_ops asus_trust_ops = {
++	.mpo_vnode_check_signature = asus_trust_check_signature,
++};
++
++static struct mac_policy_conf asus_trust_conf = {
++	.mpc_name = "ASUS TRUST",
++	.mpc_fullname = "ASUS static trust cache platform binaries",
++	.mpc_ops = &asus_trust_ops,
++};
++
 +void asus_userland_register(void);
 +void
 +asus_userland_register(void)
 +{
-+	static mac_policy_handle_t handle;
++	static mac_policy_handle_t handle, trust_handle;
 +	int error = mac_policy_register(&asus_sandbox_conf, &handle, NULL);
 +	printf("ASUS Sandbox: permissive policy %s (%d)\n",
 +	    error ? "NOT registered" : "registered", error);
++	asus_trust_cache_init();
++	if (asus_tc_count) {
++		error = mac_policy_register(&asus_trust_conf, &trust_handle, NULL);
++		printf("ASUS TRUST: policy registration %d\n", error);
++	}
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
