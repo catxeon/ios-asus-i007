@@ -162,6 +162,31 @@
   IOSurface (id 2, bpr 4352) and swaps it twice; the framebuffer shows the white
   Apple logo centred on black (../qemu-v8-fb.png). Then the interrupt-duration
   panic above. runningboardd crash-loops (corpse every ~1 s); cause not yet read.
+- 2026-11-05 SPRINGBOARD PROGRESS (QEMU, root v8 in ~/asus-roots):
+  - runningboardd crash-looped: exit "Error setting low space io policy: 1
+    (Operation not permitted)" = IOCurrentTaskHasEntitlement in
+    iopolicysys_vfs_allow_lowspace_writes; the ASUS AMFI had no entitlements.
+    Fix: --userland now carries sweet 0035's SweetEntitlements (XML blob, only if
+    it matches the code directory) + AMFI query functions, attached by the "ASUS
+    ENTITLEMENTS" MAC policy (no root-fs platform marking). CI 41919403942 (kernel
+    upload timed out; kernel from buildtree, SHA256 59b0b8c1...). runningboardd OK.
+  - SpringBoard then trapped (EXC_BREAKPOINT) in MobileKeyBag MKBEventsRegister.cold.2
+    <- [SBFMobileKeyBag init] <- SBUIBiometricResource <- SBBiometricsService <-
+    initializeSystemServicesBeforeApplicationDidFinishLaunching: no AppleKeyStore.
+    Fix: SweetKeyStore.cpp (sweet 0038+0043+0055) + IOResources personality in
+    --userland. CI 41926126933, kernel
+    884e0b3ba52526173a12a9b8109a460cfd30a318ec8758554c89bf45446a3cd6.
+  - QEMU MILESTONE: SpringBoard stays up (no corpses); AKS clients SpringBoard,
+    lsd, containermanagerd, backboardd, datamigrator; backboardd 16 swaps with two
+    alternating surfaces. Screen: Apple logo + DATA MIGRATION progress bar (~1/3,
+    static from 420 s to 900 s) (../qemu-v8d-fb.png).
+  - Root v9 = v8 + /private/var/mobile/Library/Preferences/com.apple.migration.plist
+    {LastSystemVersion: 20H392} 501:501 0600 (sweet image v12 fix), file
+    ~/asus-roots/springboard-v9.hfs, SHA256
+    e79d488735ba90a740a24ab6a8ce7ff5cc339ebfab8573204d858b3e29c11593. Testing.
+  - GDB crash capture for kernel 59b0b8c1/884e0b3b symbol layout:
+    ../capture_crash_k59b0.gdb (exception_triage +0x2c at 0xfffffe00073282dc);
+    saves frames per exception under OUT/crash-NN-<proc>.
 - NEXT: a client that draws: SpringBoard (or a minimal CA client app) with
   FrontBoard/RunningBoard deps; port the topaz/sweet userland patches already
   in xnu/patches (0038 AKS, 0058 HID, 0059 identity, 0064 work interval ...)
