@@ -100,7 +100,7 @@
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
 --- /dev/null
 +++ b/bsd/kern/asus_userland.c
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,65 @@
 +/*
 + * ASUS I007 userland services (optional profile --userland).
 + *
@@ -116,9 +116,12 @@
 + * and page validation and the no-entitlements AMFI provider are unchanged.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
-+#include <security/mac_policy.h>
++#include <kern/debug.h>
++#include <mach/kern_return.h>
++#include <mach/mach_types.h>
 +#include <sys/errno.h>
 +#include <sys/proc.h>
++#include <security/mac_policy.h>
 +#include <sys/systm.h>
 +
 +static uint64_t asus_sandbox_seen;
@@ -127,8 +130,8 @@
 +asus_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
 +{
 +	if (call >= 0 && call < 64 && !(asus_sandbox_seen & (1ULL << call))) {
-+		asus_sandbox_seen |= 1ULL << call;
 +		char name[32];
++		asus_sandbox_seen |= 1ULL << call;
 +		proc_name(proc_pid(p), name, sizeof(name));
 +		printf("ASUS Sandbox: %s op %d\n", name, call);
 +	}
