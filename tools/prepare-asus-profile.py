@@ -11,7 +11,10 @@ repo = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('dxb', type=Path)
 parser.add_argument('--hfs', action='store_true', help='Include built-in HFS+ and MD5 for a filesystem RAM root')
+parser.add_argument('--display', action='store_true', help='Include ASUS boot framebuffer presentation')
 args = parser.parse_args()
+if args.display and not args.hfs:
+    parser.error('--display requires --hfs')
 dxb = args.dxb.resolve()
 if not (dxb / 'build.sh').is_file() or not (dxb / 'patches').is_dir():
     raise SystemExit('Expected a fresh darwin-xnu-build checkout')
@@ -30,6 +33,8 @@ if args.hfs:
     selected += [repo / 'xnu/patches/0032-sweet-bearssl-sha1.patch',
                  repo / 'xnu/patches/0033-sweet-bearssl-sha384-sha512.patch']
     selected.append(repo / 'xnu/asus/9998-asus-exec-diagnostics.patch')
+if args.display:
+    selected.append(repo / 'xnu/asus/9999-asus-i007-display.patch')
 manifest = []
 for path in selected:
     data = path.read_bytes().replace(b'\r\n', b'\n')
@@ -54,6 +59,6 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
     'device': 'ASUS_I007D', 'soc': 'SM8350', 'xnu': 'xnu-8796.141.3',
     'cpu': 'cortex-a55', 'cpus': 1, 'page_size': 16384,
     'root': 'HFS+ or mockfs RAM disk' if args.hfs else 'mockfs RAM disk',
-    'hfs': args.hfs, 'storage_driver': False, 'patches': manifest,
+    'hfs': args.hfs, 'display': args.display, 'storage_driver': False, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
 print(f'Staged {len(selected)} ASUS files; no UFS, input, modem, GPU or USB drivers')

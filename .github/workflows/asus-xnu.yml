@@ -7,6 +7,10 @@ on:
         description: Include HFS+ for a filesystem RAM root
         type: boolean
         default: false
+      display:
+        description: Include ASUS boot framebuffer presentation (requires HFS+)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,11 +35,10 @@ jobs:
           git init -q dxb
           git -C dxb fetch -q --depth 1 https://github.com/blacktop/darwin-xnu-build 663906528d1cd5ea8fde7de6f16de73db9511549
           git -C dxb checkout -q FETCH_HEAD
-          if [ '${{ inputs.hfs }}' = true ]; then
-            python3 tools/prepare-asus-profile.py dxb --hfs
-          else
-            python3 tools/prepare-asus-profile.py dxb
-          fi
+          args=()
+          if [ '${{ inputs.hfs }}' = true ]; then args+=(--hfs); fi
+          if [ '${{ inputs.display }}' = true ]; then args+=(--display); fi
+          python3 tools/prepare-asus-profile.py dxb "${args[@]}"
       - name: Select matching Xcode and dependencies
         run: |
           brew install jq gum bash cmake ninja
@@ -56,11 +59,10 @@ jobs:
           mkdir -p out
           cp dxb/fakeroot/System/Library/Kernels/kernel.development.sweet out/
           cp dxb/asus-profile.json out/
-          if [ '${{ inputs.hfs }}' = true ]; then
-            python3 tools/verify-asus-kernel.py out/kernel.development.sweet --require-hfs > out/asus-kernel.json
-          else
-            python3 tools/verify-asus-kernel.py out/kernel.development.sweet > out/asus-kernel.json
-          fi
+          args=()
+          if [ '${{ inputs.hfs }}' = true ]; then args+=(--require-hfs); fi
+          if [ '${{ inputs.display }}' = true ]; then args+=(--require-display); fi
+          python3 tools/verify-asus-kernel.py out/kernel.development.sweet "${args[@]}" > out/asus-kernel.json
           (cd out && shasum -a 256 kernel.development.sweet > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:

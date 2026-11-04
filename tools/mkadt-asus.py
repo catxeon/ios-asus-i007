@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Minimal ASUS I007 Apple DT for a single A55 + RAM-only XNU bring-up."""
+import argparse
 import os
 from pathlib import Path
-import sys
 import adt
 from mkadt import node, u32, u64, cstr
 
@@ -14,7 +14,7 @@ FB_SIZE = (FB_STRIDE * FB_HEIGHT + 0x3fff) & ~0x3fff
 SOC_BASE = 0x01000000
 
 
-def build():
+def build(display=False):
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(MEM_SIZE)),
         ('random-seed', os.urandom(64)), ('debug-enabled', u32(1)),
@@ -36,11 +36,18 @@ def build():
         ('virtual-timer-intid', u32(27)),
         ('reg', u64(0x17a00000 - SOC_BASE, 0x10000, 0x17a60000 - SOC_BASE, 0x100000)),
     ])
+    devices = [gic]
+    if display:
+        devices.append(node('disp0', [
+            ('compatible', cstr('asus,display')),
+            ('device_type', cstr('display-subsystem')),
+            ('canvas-width', u32(FB_WIDTH)), ('canvas-height', u32(FB_HEIGHT)),
+        ]))
     arm_io = node('arm-io', [
         ('device_type', cstr('sweet-io')), ('compatible', cstr('sweet-io') + cstr('arm-io')),
         ('#address-cells', u32(2)), ('#size-cells', u32(2)),
         ('ranges', u64(0, SOC_BASE, 0x100000000 - SOC_BASE)),
-    ], [gic])
+    ], devices)
     fbcon = node('sweet-fbcon', [
         ('reg', u64(FB, FB_SIZE)), ('width', u32(FB_WIDTH)),
         ('height', u32(FB_HEIGHT)), ('stride', u32(FB_STRIDE)),
@@ -53,9 +60,14 @@ def build():
 
 
 if __name__ == '__main__':
-    root = build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('output', type=Path)
+    parser.add_argument('--display', action='store_true')
+    parser.add_argument('--dump', action='store_true')
+    args = parser.parse_args()
+    root = build(args.display)
     blob = adt.serialize(root)
-    Path(sys.argv[1]).write_bytes(blob)
-    if '--dump' in sys.argv:
+    args.output.write_bytes(blob)
+    if args.dump:
         adt.dump(adt.parse(blob)[0])
     print(f'ASUS ADT: {len(blob)} bytes; one CPU, 512 MiB at 0x{PHYS_BASE:x}; no UFS node')

@@ -44,7 +44,7 @@ def virtual_timer_only(data, header):
     raise ValueError('Timer initialization is outside file-backed segments')
 
 
-def verify(path, require_hfs=False):
+def verify(path, require_hfs=False, require_display=False):
     data = Path(path).read_bytes()
     header = parse_macho(data)
     if header['cputype'] != 0x100000c or header['cpusub'] != 0 or not header['entry']:
@@ -63,14 +63,19 @@ def verify(path, require_hfs=False):
                   (b'_hfs_vfsops\0', b'_hfs_mountfs\0', b'_sweet_hfs_register\0'))
     if require_hfs and not has_hfs:
         raise ValueError('Expected the ASUS HFS RAM-root profile')
+    has_display = all(marker in data for marker in
+                      (b'ASUS FB: AppleCLCD', b'IOSurfaceRootUserClient', b'asus,display'))
+    if require_display and not (has_display and has_hfs):
+        raise ValueError('Expected the ASUS display and HFS RAM-root profile')
     return {'kernel_sha256': hashlib.sha256(data).hexdigest(),
             'size': len(data), 'entry': hex(header['entry']), 'arm64e': False,
-            'physical_timer_access': False, 'hfs': has_hfs}
+            'physical_timer_access': False, 'hfs': has_hfs, 'display': has_display}
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('kernel')
     parser.add_argument('--require-hfs', action='store_true')
+    parser.add_argument('--require-display', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(verify(args.kernel, args.require_hfs), indent=2))
+    print(json.dumps(verify(args.kernel, args.require_hfs, args.require_display), indent=2))
