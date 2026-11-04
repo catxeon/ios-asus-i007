@@ -77,6 +77,60 @@
     No compositor frame yet; whether it blocks or idles is not determined.
   Container error names: libsystem_containermanager table at cache VA
   0x1d9bedb90 (unslid), e.g. 55 NOT_ENTITLED, 102 HOME_MISSING, 52 XPC_INTERRUPTED.
+- Tools added (in ../, private): qmp_msgbuf.py (dump kernel msgbuf of a running
+  guest via QMP), msgbuf_run.sh, late_sample.sh + sample_threads_gdb.py (start
+  QEMU's gdbstub over QMP at T seconds, walk allproc -> task -> threads, read each
+  thread's upcb and its user stack physically through the pmap's 16K tables;
+  offsets: p_comm +0x5c0, task = proc + *(0xfffffe0007bb8750), threads +0x80,
+  thread link +0x478, map +0x50, pmap +0x40, ttep +8, upcb +0x110; TCR VA bits
+  47), iokit_trace_v7.gdb (backboardd-only trace of IOKit MIG handlers with
+  matching-dict strings, registry paths, property names, service_open result).
+- v6 sample: backboardd main thread idles in CFRunLoopRun, CA::Render::Server
+  thread exists, HID/CoreMotion runloops; one worker waits forever in
+  dispatch_group_wait from -[... applyDefinitions:] (SSHB home-button setup:
+  "not configuring SSHB because we don't have a real home button" only when
+  homeButtonType == 2). libdispatch was mapped FROM DISK: the root still had
+  66 restore-ramdisk dylibs in /usr/lib that only exist in the cache on iOS.
+  ../make_backboardd_v7.py moves them to /private/root-disk-dylibs (dyld kept;
+  fsck -y zeroes libdmg-hfsplus' unerased nodes) -> backboardd-v7.hfs SHA256
+  2305ef4d95a4431d17c1bcc6107a3deedfca7cee915b03e317a720329e799687. Same
+  idle state, now cache libdispatch.
+- IOKit trace (v7): backboardd adds an IOMobileFramebuffer notification and
+  IOServiceOpen(type 0) returns 0xe00002c2 kIOReturnBadArgument: the ASUS
+  IOMobileFramebufferUserClient required administrator privilege, backboardd
+  is uid 501. So CoreAnimation never had a display (no ASUS FB sel / SWEET SURF
+  logs). Fix (display patch): also accept CS_PLATFORM_BINARY clients. It also
+  reads /product (display-corner-radius, product-id, artwork-*), /arm-io
+  device_type/compatible, /chosen keys, /arm-io/disp0 supports-apt, /backlight,
+  /buttons home-button-type + function-button_halleffect, and looks for
+  AppleM2ScalerCSCDriver, backlight-control, aop-smart-cover, haptics.
+- ADT: mkadt-asus.py --ios-gui ../apple-20H392/devicetree/d22ap.adt (decoded
+  from the local IPSW's DeviceTree.d22ap.im4p; needs WSL `lzfse`, installed
+  from Ubuntu) adds /product, /buttons (home-button-type 2), /backlight,
+  property-only /arm-io/disp0, /chosen display-scale 3, rotations 0.
+  run_asus_qemu.py --ios-gui PATH; wrapper env IOSGUI=PATH.
+- Kernel CI: 41860249396 and 41864875474 never got a macos-14 runner (GitHub
+  marked them failed/cancelled with no steps); 41872709855 at 952fc66 SUCCEEDED.
+  Kernel ../asus-ci-41872709855/kernel.development.sweet, SHA256
+  48b93783e1fa113287284d9d928fe7d170b9dd7a1f64c21e164fc3f691930226 (hfs,
+  display, compositor, userland; initWithTask calls csproc_get_platform_binary).
+- Before that kernel, ../iokit_override_v7.gdb proved the cause in QEMU by forcing
+  IOUserClient::clientHasPrivilege(..., "root") = 0 for backboardd only
+  (kIOClientPrivilegeAdministrator is the string "root").
+- QEMU MILESTONE (kernel 48b93783, root v7, IOSGUI d22ap ADT, no GDB):
+  backboardd opens the ASUS AppleCLCD and every IOMobileFramebuffer call
+  succeeds: sel 57, 15, 22, 8, 28, 29, 33, 79 (1580-byte out), 74, then after
+  ~55 s SWEET SURF sel 13 and sel 12, 79, 6, 27/17 (3084-byte in/out), 84, 50,
+  all -> 0x0 (../qemu-asus-backboardd-v7-k48b9/msgbuf-220.txt). No `ASUS FB:
+  swap` within 10 min: backboardd has no client drawing yet, the panel still
+  shows the console (../qemu-asus-backboardd-v7-override3/fb.png).
+  ../snap_fb.py QMP_SOCK OUT.png saves the framebuffer of a running guest.
+- NEXT: a client that draws: SpringBoard (or a minimal CA client app) with
+  FrontBoard/RunningBoard deps; port the topaz/sweet userland patches already
+  in xnu/patches (0038 AKS, 0058 HID, 0059 identity, 0064 work interval ...)
+  as ASUS-profile patches as each wall appears. Related public ports listed at
+  hackiosx.dev: Pixel 4 (SD855, Adreno 640, Mesa Turnip Metal) is the closest
+  GPU reference for SM8350 later.
 - Disk: each HFS root is 2.9 GB; QEMU needs an 8 GB ram.bin while running
   (17-20 GB free on C:). v3/v4 deleted (rebuildable by the scripts).
 - NEXT: find what backboardd waits on after ~1:37 (GDB sample of its
