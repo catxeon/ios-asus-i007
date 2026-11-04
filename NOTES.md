@@ -125,6 +125,23 @@
   swap` within 10 min: backboardd has no client drawing yet, the panel still
   shows the console (../qemu-asus-backboardd-v7-override3/fb.png).
   ../snap_fb.py QMP_SOCK OUT.png saves the framebuffer of a running guest.
+- STATIC TRUST CACHE (CI 41878547659, kernel f3918b15c31e752ad669c49105a4e5c79c0b9dc280b822ed8969b88211b57260):
+  --userland now copies /chosen/asus-static-trust-cache (mkadt-asus.py
+  --trust-cache ../apple-20H392/os.trustcache.im4p; wrapper env TRUSTCACHE)
+  and its ASUS TRUST MAC policy marks root-fs binaries whose cdhash+hash type
+  are in it CS_SIGNED|CS_PLATFORM_BINARY. QEMU v7: "static trust cache v2,
+  2760 entries", platform binary launchd, dyld, xpcproxy, backboardd,
+  containermanagerd, notifyd; backboardd still drives AppleCLCD
+  (../qemu-asus-v7-trust/msgbuf-160.txt). Pinned cdhashes no longer needed.
+- Root builder: tools/asus-hfs-addtree.c (-> ../asus-launchd-root/hfs-addtree)
+  copies a host tree into an HFS image with lstat modes/uid/gid and real
+  symlinks, keeping existing entries; libdmg-hfsplus addall follows links and
+  drops modes. ../make_springboard_v8.py: v7 + whole OS root (minus
+  LaunchDaemons/LaunchAgents/xpc) + SystemOS extras + jobs SpringBoard,
+  runningboardd, cfprefsd, MobileGestaltHelper, lsd, usermanagerd,
+  iconservicesagent -> 12 GB springboard-v8.hfs (building).
+- Disk: with user approval deleted ../qemu-asus-backboardd-abort/ram.bin and
+  backboardd-v1/v2.hfs; v3-v6 removed as rebuildable (37 GB free before v8).
 - NEXT: a client that draws: SpringBoard (or a minimal CA client app) with
   FrontBoard/RunningBoard deps; port the topaz/sweet userland patches already
   in xnu/patches (0038 AKS, 0058 HID, 0059 identity, 0064 work interval ...)
