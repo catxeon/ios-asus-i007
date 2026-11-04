@@ -36,7 +36,13 @@
   platform classification only to that hash on the read-only root and
   keeps page validation. It requires compositor=true and the QEMU boot
   argument asus_qemu_compositor_trust=1; the phone builder rejects this
-  kernel profile. CI 41798008462 at abff953, QEMU retest pending.
+  kernel profile. CI 41798008462 at abff953 succeeded. QEMU with that
+  kernel matched the pinned cdhash but still panicked at the same check.
+  Disassembly of the local launchd shows csops(pid, CS_OPS_STATUS, ...),
+  followed by a check of bit 26 (CS_PLATFORM_BINARY). XNU obtains that
+  status from csproc_get_blob, which requires the process's CS_SIGNED
+  flag. Set CS_SIGNED alongside CS_PLATFORM_BINARY for the same pinned
+  signature, keeping the existing signature and page verification.
 
 ### Phase 5: IOSurface presentation
 

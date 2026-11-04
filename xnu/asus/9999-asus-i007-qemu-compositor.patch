@@ -57,7 +57,7 @@
 +	const uint32_t required = MNT_ROOTFS | MNT_RDONLY;
 +	if (mp != NULL && (vfs_flags(mp) & required) == required &&
 +	    memcmp(cs_blob->csb_cdhash, backboardd_20h392_cdhash, CS_CDHASH_LEN) == 0) {
-+		*cs_flags |= CS_PLATFORM_BINARY;
++		*cs_flags |= CS_SIGNED | CS_PLATFORM_BINARY;
 +		printf("ASUS QEMU COMPOSITOR: 20H392 backboardd platform signature\n");
 +	}
 +	return 0;
