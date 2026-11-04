@@ -30,20 +30,36 @@
  static void
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
-@@ -173,4 +173,53 @@
+@@ -173,4 +173,74 @@
  	printf("SWEET AMFI: built-in interface registered (no entitlements)\n");
  }
  STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, sweet_amfi_register);
 +#if DEVELOPMENT
 +/*
-+ * QEMU compositor experiment. The single SHA-256 CodeDirectory hash below
-+ * occurs in the stock iPhone X 20H392 OS trust cache (version 2, type 2).
++ * QEMU compositor experiment. Each SHA-256 CodeDirectory hash below
++ * occurs in the stock iPhone X 20H392 OS trust cache (version 2, type 2):
++ * /usr/libexec/backboardd, /usr/libexec/containermanagerd, /usr/sbin/notifyd.
 + * Keep XNU page hash validation and all entitlement decisions in place.
 + */
 +static TUNABLE(uint32_t, asus_qemu_compositor_trust, "asus_qemu_compositor_trust", 0);
-+static const uint8_t backboardd_20h392_cdhash[CS_CDHASH_LEN] = {
-+	0x89, 0xe6, 0x32, 0x85, 0x41, 0xc2, 0xe3, 0x75, 0x22, 0xd9,
-+	0x0f, 0xa4, 0xa6, 0x93, 0xc7, 0x46, 0x82, 0x5b, 0x22, 0xa8,
++static const char *const asus_20h392_names[] = {
++	"backboardd",
++	"containermanagerd",
++	"notifyd",
++};
++static const uint8_t asus_20h392_cdhashes[][CS_CDHASH_LEN] = {
++	{
++		0x89, 0xe6, 0x32, 0x85, 0x41, 0xc2, 0xe3, 0x75, 0x22, 0xd9,
++		0x0f, 0xa4, 0xa6, 0x93, 0xc7, 0x46, 0x82, 0x5b, 0x22, 0xa8,
++	},
++	{
++		0x41, 0xa7, 0xbd, 0x3a, 0xd5, 0x27, 0xe5, 0x6c, 0xe1, 0xdb,
++		0x2f, 0xe9, 0xff, 0x31, 0x03, 0x30, 0x49, 0x1d, 0xf3, 0x96,
++	},
++	{
++		0x99, 0xa6, 0x9e, 0x0d, 0xe8, 0x42, 0x61, 0x50, 0x15, 0xef,
++		0xbb, 0x93, 0xcc, 0x49, 0xd8, 0xc2, 0x2a, 0xe1, 0x5b, 0xc8,
++	},
 +};
 +
 +static int
@@ -55,10 +71,15 @@
 +{
 +	mount_t mp = vnode_mount(vp);
 +	const uint32_t required = MNT_ROOTFS; /* rootrw=1 (--userland) keeps it writable */
-+	if (mp != NULL && (vfs_flags(mp) & required) == required &&
-+	    memcmp(cs_blob->csb_cdhash, backboardd_20h392_cdhash, CS_CDHASH_LEN) == 0) {
-+		*cs_flags |= CS_SIGNED | CS_PLATFORM_BINARY;
-+		printf("ASUS QEMU COMPOSITOR: 20H392 backboardd platform signature\n");
++	if (mp == NULL || (vfs_flags(mp) & required) != required) {
++		return 0;
++	}
++	for (size_t i = 0; i < sizeof(asus_20h392_cdhashes) / sizeof(asus_20h392_cdhashes[0]); i++) {
++		if (memcmp(cs_blob->csb_cdhash, asus_20h392_cdhashes[i], CS_CDHASH_LEN) == 0) {
++			*cs_flags |= CS_SIGNED | CS_PLATFORM_BINARY;
++			printf("ASUS QEMU COMPOSITOR: 20H392 %s platform signature\n", asus_20h392_names[i]);
++			break;
++		}
 +	}
 +	return 0;
 +}
