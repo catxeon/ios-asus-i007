@@ -43,6 +43,17 @@
   status from csproc_get_blob, which requires the process's CS_SIGNED
   flag. Set CS_SIGNED alongside CS_PLATFORM_BINARY for the same pinned
   signature, keeping the existing signature and page verification.
+- QEMU MILESTONE: CI 41800086188 at 335362f succeeded (kernel SHA256
+  89e2885edce4955f68a71fca5c8a9932218fab1f0b714ea689264c4b4336af7b).
+  With the same backboardd-v2.hfs, Apple launchd spawned original backboardd
+  as PID 3 under mobile (uid 501). It ran for about 14 seconds of guest time
+  and reached Mach service lookups. Logs show error 159 for logd,
+  notification_center, oscard, ACCHWComponentAuthService, iohideventsystem
+  and containermanagerd. The process self-terminated with SIGABRT; launchd
+  remained up. Those denials are observations, not a proven cause of abort.
+  No rendered compositor frame was observed. See ../qemu-asus-backboardd-csops.
+  Next: capture and symbolicate the abort stack, then supply the specific
+  services and entitlements it needs. The Android phone was not used here.
 
 ### Phase 5: IOSurface presentation
 
