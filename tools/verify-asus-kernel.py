@@ -70,7 +70,10 @@ def verify(path, require_hfs=False, require_display=False):
     return {'kernel_sha256': hashlib.sha256(data).hexdigest(),
             'size': len(data), 'entry': hex(header['entry']), 'arm64e': False,
             'physical_timer_access': False, 'hfs': has_hfs, 'display': has_display,
-            'qemu_compositor': b'ASUS QEMU COMPOSITOR: 20H392 backboardd platform signature' in data,
+            'qemu_compositor': (b'ASUS QEMU COMPOSITOR: 20H392 backboardd platform signature' in data or
+                                all(marker in data for marker in
+                                    (b'ASUS QEMU COMPOSITOR: 20H392 %s platform signature',
+                                     b'backboardd\0', b'containermanagerd\0', b'notifyd\0'))),
             'userland': all(marker in data for marker in
                             (b'ASUS Sandbox: permissive policy', b'_asus_userland_register\0',
                              b'mounting dirty non-journaled root read-write'))}
