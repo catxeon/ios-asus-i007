@@ -90,3 +90,35 @@ For an iOS-platform dynamic init, set `ASUS_IOS_USERLAND=1` when building
 the image with an explicit HFS root. This adds XNU's DEVELOPMENT boot arg
 `unentitled_ios_sim_launch=1`; the macOS-profile kernel otherwise refuses
 the iOS exec with `WRONG_PLATFORM`. This does not change Mach-O platform tags.
+
+## Display test
+
+Dispatch the workflow with `hfs=true` and `display=true` for the display
+kernel. Build the job with `tools/build-asus-display-probe.sh` and add it to
+the known-good private launchd HFS image with `tools/mkasus-display-root.py`.
+Build the phone image with `ASUS_DISPLAY=1 ASUS_IOS_USERLAND=1` and pass that
+HFS image as the second argument. This profile accepts up to 104 MiB for
+the root. The combined payload must still fit the 128 MiB shim limit.
+
+Image 0008 displayed rotating color bands from a userspace IOSurface on
+the phone. Android booted again afterward, and the hashes of the three
+checked boot partitions matched the original backups.
+
+## QEMU compositor experiment
+
+The private QEMU root uses `tools/mkasus-compositor-root.py`, the display
+HFS base, and the OS and SystemOS volumes from iPhone X iOS 16.7.16
+(20H392). It packs backboardd, its launch job as `mobile`, and its original
+shared cache. The host tools and the kernel source can be published
+independently of this root image.
+
+The QEMU payload describes the external HFS image in the ADT's
+`/chosen/memory-map/RAMDisk` property. Pass it to `tools/qemu-sweet.py`
+with `--external-ramdisk` and use `ignition_level=1` to find the cache.
+The lab harness and exact image hashes are recorded in [NOTES.md](../../NOTES.md).
+
+The optional `compositor=true` workflow input enables a development
+policy for the exact stock backboardd CodeDirectory hash, verified against
+the 20H392 OS trust cache. It is inactive unless the QEMU boot argument
+`asus_qemu_compositor_trust=1` is present. The phone image builder rejects
+this kernel.

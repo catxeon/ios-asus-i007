@@ -16,13 +16,13 @@ the phone. This test does not start Apple's launchd or restore programs.
 
 Image 0007 then ran **Apple launchd** and its one controlled test job on
 the ASUS: the child printed its PID, `parent 1`, and repeated heartbeats,
-confirmed by the user. This is a minimal RAM-root userspace milestone;
-SpringBoard, the graphical interface and ASUS peripheral drivers remain
-unimplemented in this profile.
+confirmed by the user. In image 0008, a launchd job used Apple's IOSurface
+framework and the built-in IOMobileFramebuffer service to show rotating
+color bands on the ASUS panel.
 
-This ASUS profile uses one CPU, 512 MiB RAM and a tiny RAM root. Apple iOS
-userland, SpringBoard and board peripheral drivers have not been tested on
-this phone. Tests use temporary `fastboot boot`; Android is preserved.
+The phone profile uses one CPU and a 512 MiB kernel memory range. Tests
+use temporary `fastboot boot`, and the tested ASUS returns to Android.
+SpringBoard, touch input, and accelerated rendering remain untested.
 See [ASUS build and boot instructions](shim/asus-xnu/README.md).
 
 The original project's README follows. Its Xiaomi hardware results and

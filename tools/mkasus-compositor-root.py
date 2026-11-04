@@ -13,6 +13,7 @@ CACHE_DIR = '/System/Library/Caches/com.apple.dyld'
 CACHE_NAME = 'dyld_shared_cache_arm64'
 JOB = '/System/Library/LaunchDaemons/com.apple.backboardd.plist'
 PROBE_JOB = '/System/Library/LaunchDaemons/dev.asus.launchd-probe.plist'
+SYSTEM_VERSION = '/System/Library/CoreServices/SystemVersion.plist'
 CHUNK = 32 << 20
 
 
@@ -24,6 +25,11 @@ def sha256(path):
 def build(args):
     if args.output.exists():
         raise ValueError('Refusing to overwrite an existing HFS image')
+    os_root = args.os_root.resolve() if args.os_root else None
+    if os_root:
+        version = plistlib.loads((os_root / SYSTEM_VERSION.lstrip('/')).read_bytes())
+        if version.get('ProductBuildVersion') != '20H392':
+            raise ValueError('The QEMU compositor profile expects iOS build 20H392')
     cache_dir = args.systemos_root / CACHE_DIR.lstrip('/')
     files = sorted(p for p in cache_dir.glob(CACHE_NAME + '*')
                    if p.is_file() and not p.name.endswith('.symbols'))
@@ -69,8 +75,7 @@ def build(args):
             add(source, f'{CACHE_DIR}/{source.name}', '0644', restricted=True)
         print(f'Packed {len(files)} cache files ({cache_bytes} bytes)', flush=True)
 
-        if args.os_root:
-            os_root = args.os_root.resolve()
+        if os_root:
             stock = plistlib.loads((os_root / JOB.lstrip('/')).read_bytes())
             program = stock.get('Program') or stock['ProgramArguments'][0]
             if program != '/usr/libexec/backboardd':
@@ -87,8 +92,7 @@ def build(args):
             folder = '/System/Library/CoreServices'
             hfs('mkdir', folder)
             own(folder)
-            version = f'{folder}/SystemVersion.plist'
-            add(os_root / version.lstrip('/'), version, '0644')
+            add(os_root / SYSTEM_VERSION.lstrip('/'), SYSTEM_VERSION, '0644')
 
         subprocess.run([args.fsck, '-f', '-n', str(image)], check=True)
         if args.scratch:

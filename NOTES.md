@@ -24,8 +24,19 @@
 - On the existing display kernel, QEMU with ignition_level=1 loaded the cache
   and launchd attempted the job under mobile. xpcproxy reported
   posix_spawn(/usr/libexec/backboardd) EACCES, then exited 78. File and parent
-  directory modes are executable (0755). A second root tests the same job
-  without /dev/console stdout/stderr redirects. No phone compositor test yet.
+  directory modes are executable (0755).
+- Removing only /dev/console stdout/stderr redirects allowed exec of
+  backboardd. ../asus-compositor-root/backboardd-v2.hfs passed fsck, SHA256
+  99fc1cbab067b91e4c27faff0473c11d9fb77f7f7030b6b8b6aceaecb6bfab38.
+  QEMU ../qemu-asus-backboardd-v2: load_dylinker ret=0, then launchd
+  panics with "unexpected exec of non-platform binary" for backboardd[3].
+- The exact SHA-256 CodeDirectory digest (cdhash
+  89e6328541c2e37522d90fa4a693c746825b22a8) is present as type 2 in
+  Firmware/087-86698-044.dmg.trustcache. The new opt-in QEMU policy grants
+  platform classification only to that hash on the read-only root and
+  keeps page validation. It requires compositor=true and the QEMU boot
+  argument asus_qemu_compositor_trust=1; the phone builder rejects this
+  kernel profile. CI 41798008462 at abff953, QEMU retest pending.
 
 ### Phase 5: IOSurface presentation
 
