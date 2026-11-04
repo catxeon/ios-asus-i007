@@ -20,12 +20,14 @@ snapshot of the circular screen, not a complete boot log. --fail-on-panic
 returns 2 when a panic is visible; absence of a panic does not prove boot.
 An undecodable or blank screen returns 3 with --fail-on-panic.
 """
-import argparse, json, os, socket, struct, subprocess, sys, time, zlib
+import argparse, json, os, shutil, socket, struct, subprocess, sys, time, zlib
+import adt
 
 FB_BASE, FB_W, FB_H = 0x9c000000, 1080, 2400
 FB_STRIDE = FB_W * 4
 PAGE = 0x4000
 STUB_PA = 0x40200000	# above the dtb QEMU places at RAM base
+VIRT_RAM_BASE = 0x40000000
 BOOT_LINE_LENGTH = 608
 
 
@@ -57,6 +59,39 @@ def build_image(payload):
 def stub(ba_pa, entry_pa):
     # ldr x0, =ba ; ldr x1, =entry ; br x1 ; nop ; .quad ba ; .quad entry
     return struct.pack('<4I2Q', 0x58000080, 0x580000a1, 0xd61f0020, 0xd503201f, ba_pa, entry_pa)
+
+
+def write_external_ram(path, payload, kernel_image, phys_base, boot_args, root, ram_bytes):
+    """Preload a large QEMU-only RAM disk through private file-backed guest RAM."""
+    adt_offset, adt_size = struct.unpack_from('<QQ', payload, 0x20)
+    tree, _ = adt.parse(payload[adt_offset:adt_offset + adt_size])
+    chosen = next(n for n in tree.children if n.name == 'chosen')
+    memory_map = next(n for n in chosen.children if n.name == 'memory-map')
+    entry = memory_map.prop('RAMDisk')
+    if entry is None or len(entry) != 16:
+        raise ValueError('External RAM disk requires an ADT RAMDisk address and size')
+    root_pa, root_size = struct.unpack('<QQ', entry)
+    kernel_mem = struct.unpack_from('<Q', payload, 0x40)[0]
+    top = root_pa + root_size
+    if (root_size == 0 or (root_pa | root_size) & (PAGE - 1) or
+            root_pa < phys_base + len(kernel_image) or
+            top + (256 << 20) > phys_base + kernel_mem):
+        raise ValueError('External RAM disk overlaps kernel data or leaves too little guest RAM')
+    with open(root, 'rb') as source:
+        if os.fstat(source.fileno()).st_size != root_size:
+            raise ValueError('External RAM disk size differs from its ADT entry')
+        source.seek(1024)
+        if source.read(2) not in (b'H+', b'HX'):
+            raise ValueError('Expected a raw HFS+ or HFSX RAM disk')
+        source.seek(0)
+        image = bytearray(kernel_image)
+        struct.pack_into('<Q', image, boot_args - phys_base + 32, top)
+        with open(path, 'xb') as backing:
+            backing.truncate(ram_bytes)
+            backing.seek(phys_base - VIRT_RAM_BASE)
+            backing.write(image)
+            backing.seek(root_pa - VIRT_RAM_BASE)
+            shutil.copyfileobj(source, backing, 4 << 20)
 
 
 def write_png(path, raw):
@@ -155,6 +190,7 @@ def main():
     ap.add_argument('--cpu', default='cortex-a76')	# ARMv8.2 like Kryo 470, same ID_AA64MMFR0
     ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (uses llvm-nm)')
     ap.add_argument('--fail-on-panic', action='store_true', help='exit 2 for a visible panic, 3 for incomplete/blank decoding; requires --kernel')
+    ap.add_argument('--external-ramdisk', help='preload an HFS RAM disk named in the payload ADT')
     a = ap.parse_args()
     if a.fail_on_panic and not a.kernel:
         ap.error('--fail-on-panic requires --kernel')
@@ -171,7 +207,6 @@ def main():
     out = os.path.abspath(a.outdir)
 
     phys_base, img, ba_pa, entry_pa = build_image(payload)
-    open(f'{out}/ram.bin', 'wb').write(img)
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
 
@@ -180,11 +215,20 @@ def main():
         os.unlink(mon)
     # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
     mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
-    ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
+    ram_gib = max(4, -(-(phys_base + mem_size - VIRT_RAM_BASE) // (1 << 30)))
+    ram_path = f'{out}/ram.bin'
+    if a.external_ramdisk:
+        write_external_ram(ram_path, payload, img, phys_base, ba_pa, a.external_ramdisk, ram_gib << 30)
+        ram_args = ['-object', f'memory-backend-file,id=guest-ram,size={ram_gib}G,mem-path={ram_path},share=off',
+                    '-machine', 'memory-backend=guest-ram']
+    else:
+        with open(ram_path, 'wb') as f:
+            f.write(img)
+        ram_args = ['-device', f'loader,file={ram_path},addr={phys_base:#x},force-raw=on']
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
            '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
            '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
-           '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
+           *ram_args,
            '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
            '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
     if a.gdb:

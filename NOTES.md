@@ -2,6 +2,31 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Phase 6: iOS compositor in QEMU
+
+- The iOS 16.7.16 (20H392) restore ramdisk lacks backboardd and QuartzCore.
+  The complete official IPSW was downloaded locally and SHA256 verified.
+  OS member 087-86698-044.dmg has backboardd and its launch job; SystemOS
+  member 087-86593-047.dmg has the plain arm64 dyld cache. The two members
+  passed ZIP CRC verification. All 45 strong library imports are indexed in
+  the cache (dyld itself is supplied by the base HFS).
+- For QEMU only, load the HFS root from private file-backed guest RAM.
+  ../run_asus_qemu.py --ios-userland --display --external-ramdisk builds
+  the matching RAMDisk ADT entry and runs tools/qemu-sweet.py. The existing
+  display-v1.hfs booted through this path; the final framebuffer contains
+  all three expected colors, and the original image hash is unchanged.
+- ../asus-compositor-root/backboardd-v1.hfs (2952790016 bytes) passed fsck
+  and per-file roundtrip hashes. SHA256
+  331b462cd416b92bb6edf44a2f45a81143d5d1404efd935cc66cd4ee03a8393f.
+  It contains 43 original cache files, backboardd and a one-shot launchd job
+  preserving the stock mobile user and MachServices. Cache files are root
+  owned and marked SF_RESTRICTED; no global CSR override was added.
+- On the existing display kernel, QEMU with ignition_level=1 loaded the cache
+  and launchd attempted the job under mobile. xpcproxy reported
+  posix_spawn(/usr/libexec/backboardd) EACCES, then exited 78. File and parent
+  directory modes are executable (0755). A second root tests the same job
+  without /dev/console stdout/stderr redirects. No phone compositor test yet.
+
 ### Phase 5: IOSurface presentation
 
 - PHONE MILESTONE: user confirmed image 0008 shows all three color bands

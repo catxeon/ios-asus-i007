@@ -69,7 +69,8 @@ def verify(path, require_hfs=False, require_display=False):
         raise ValueError('Expected the ASUS display and HFS RAM-root profile')
     return {'kernel_sha256': hashlib.sha256(data).hexdigest(),
             'size': len(data), 'entry': hex(header['entry']), 'arm64e': False,
-            'physical_timer_access': False, 'hfs': has_hfs, 'display': has_display}
+            'physical_timer_access': False, 'hfs': has_hfs, 'display': has_display,
+            'qemu_compositor': b'ASUS QEMU COMPOSITOR: 20H392 backboardd platform signature' in data}
 
 
 if __name__ == '__main__':
@@ -77,5 +78,13 @@ if __name__ == '__main__':
     parser.add_argument('kernel')
     parser.add_argument('--require-hfs', action='store_true')
     parser.add_argument('--require-display', action='store_true')
+    compositor = parser.add_mutually_exclusive_group()
+    compositor.add_argument('--require-compositor', action='store_true')
+    compositor.add_argument('--reject-compositor', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(verify(args.kernel, args.require_hfs, args.require_display), indent=2))
+    result = verify(args.kernel, args.require_hfs, args.require_display or args.require_compositor)
+    if args.require_compositor and not result['qemu_compositor']:
+        raise ValueError('Expected the QEMU compositor profile')
+    if args.reject_compositor and result['qemu_compositor']:
+        raise ValueError('The QEMU compositor profile cannot be packaged for the phone')
+    print(json.dumps(result, indent=2))

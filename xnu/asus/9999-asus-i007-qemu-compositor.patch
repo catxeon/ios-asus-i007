@@ -1,0 +1,86 @@
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -691,6 +691,11 @@
+ 	bsd_init_kprintf("calling vfsinit\n");
+ 	vfsinit();
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET) && DEVELOPMENT
++	extern void asus_qemu_compositor_policy_register(void);
++	asus_qemu_compositor_policy_register();
++#endif
++
+ #if SWEET_HFS
+ 	/* HFS is built in on SWEET: register it like its kext would, before mounting root. */
+ 	extern void sweet_hfs_register(void);
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -21,6 +21,13 @@
+ #include <libkern/amfi/amfi.h>
+ #include <mach/kern_return.h>
+ #include <sys/proc.h>
++#if DEVELOPMENT
++#include <security/mac_policy.h>
++#include <sys/codesign.h>
++#include <sys/mount.h>
++#include <sys/ubc_internal.h>
++#include <sys/vnode.h>
++#endif
+ #include <sys/systm.h>
+ 
+ static void
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -173,4 +173,53 @@
+ 	printf("SWEET AMFI: built-in interface registered (no entitlements)\n");
+ }
+ STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, sweet_amfi_register);
++#if DEVELOPMENT
++/*
++ * QEMU compositor experiment. The single SHA-256 CodeDirectory hash below
++ * occurs in the stock iPhone X 20H392 OS trust cache (version 2, type 2).
++ * Keep XNU page hash validation and all entitlement decisions in place.
++ */
++static TUNABLE(uint32_t, asus_qemu_compositor_trust, "asus_qemu_compositor_trust", 0);
++static const uint8_t backboardd_20h392_cdhash[CS_CDHASH_LEN] = {
++	0x89, 0xe6, 0x32, 0x85, 0x41, 0xc2, 0xe3, 0x75, 0x22, 0xd9,
++	0x0f, 0xa4, 0xa6, 0x93, 0xc7, 0x46, 0x82, 0x5b, 0x22, 0xa8,
++};
++
++static int
++asus_qemu_compositor_check_signature(struct vnode *vp, __unused struct label *label,
++    __unused cpu_type_t cpu_type, struct cs_blob *cs_blob,
++    unsigned int *cs_flags, __unused unsigned int *signer_type,
++    __unused int flags, __unused unsigned int platform,
++    __unused char **failure, __unused size_t *failure_len)
++{
++	mount_t mp = vnode_mount(vp);
++	const uint32_t required = MNT_ROOTFS | MNT_RDONLY;
++	if (mp != NULL && (vfs_flags(mp) & required) == required &&
++	    memcmp(cs_blob->csb_cdhash, backboardd_20h392_cdhash, CS_CDHASH_LEN) == 0) {
++		*cs_flags |= CS_PLATFORM_BINARY;
++		printf("ASUS QEMU COMPOSITOR: 20H392 backboardd platform signature\n");
++	}
++	return 0;
++}
++
++static const struct mac_policy_ops asus_qemu_compositor_ops = {
++	.mpo_vnode_check_signature = asus_qemu_compositor_check_signature,
++};
++static struct mac_policy_conf asus_qemu_compositor_policy = {
++	.mpc_name = "ASUS QEMU COMPOSITOR",
++	.mpc_fullname = "ASUS QEMU compositor signature policy",
++	.mpc_ops = &asus_qemu_compositor_ops,
++};
++
++void asus_qemu_compositor_policy_register(void);
++void
++asus_qemu_compositor_policy_register(void)
++{
++	static mac_policy_handle_t handle;
++	if (asus_qemu_compositor_trust == 1) {
++		int error = mac_policy_register(&asus_qemu_compositor_policy, &handle, NULL);
++		printf("ASUS QEMU COMPOSITOR: signature policy registration %d\n", error);
++	}
++}
++#endif /* DEVELOPMENT */
+ #endif /* ARM64_BOARD_CONFIG_SWEET */

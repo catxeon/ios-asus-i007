@@ -5,7 +5,7 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 kernel=$(realpath "${1:?Usage: tools/build-asus-image.sh ASUS_KERNEL [HFS_RAM_ROOT]}")
 out="$repo/shim/asus-xnu/out"
 mkdir -p "$out"
-verify_flags=()
+verify_flags=(--reject-compositor)
 adt_flags=()
 root_limit=96
 if [ "${ASUS_DISPLAY:-0}" = 1 ]; then
@@ -29,7 +29,7 @@ with p.open('rb') as f:
     assert f.read(2) in (b'H+', b'HX'), 'Expected a raw HFS+/HFSX volume, not a DMG container or APFS'
 PY
 else
-    python3 "$repo/tools/verify-asus-kernel.py" "$kernel"
+    python3 "$repo/tools/verify-asus-kernel.py" "$kernel" "${verify_flags[@]}"
     clang -target arm64-apple-ios16.0 -DASUS_I007=1 -c "$repo/tools/sweet-init.S" -o "$out/asus-init.o"
     python3 "$repo/tools/mkinit.py" "$out/asus-init.o" "$out/asus-init"
     ramdisk="$out/asus-init"
