@@ -37,6 +37,54 @@
 - Mount Apple images as WSL root only (`wsl -u root`, apfs-fuse -o
   ro,allow_other); FUSE mounts are invisible from Windows paths.
   Project moved to C:\Users\del\Desktop\https-github-com-makrsas-ios-topaz.
+- CI: bearssl.org git returns 502, so 0020-stage-bearssl.sh falls back to
+  xnu/vendor/bearssl-7bea48e5... (blob-hash verified). CI 41836697870 BUILT
+  the userland kernel (verify step failed only on the old compositor log
+  string, fixed in verify-asus-kernel.py). Kernel taken from that run's
+  buildtree artifact: ../asus-ci-41836697870/kernel.development.sweet,
+  SHA256 22a35cdf8de1a98e7426e6a953f10d75ee07b3048649a21931ea82906f31753b,
+  local verify: hfs, display, compositor, userland all true. A clean CI
+  artifact still needs one rerun of asus-xnu.yml (all four inputs true).
+- QEMU runs (../run_backboardd_v3.sh, ../debug_backboardd_v3.sh with
+  ROOT=..., boot-args ignition_level=1 asus_qemu_compositor_trust=1
+  rootrw=1; GDB script ../capture_asus_crash_v4.gdb logs BaseBoard's
+  container call/result, ObjC/C++ throws, abort_with_payload and every
+  exception_triage with user PC + frame chain; upcb = thread+0x110):
+  - v3: no more 159 denials (lookups now `error = 3`, missing services);
+    containermanagerd spawned on demand. Container call -> NULL, status 102
+    USER_HOME_DIRECTORY_MISSING (root /var was a real empty dir).
+  - v4 (../make_backboardd_v4.py: /var -> private/var, /tmp -> private/tmp,
+    old dirs moved to /private/root-{var,tmp}-dir; libdmg-hfsplus `mv` +
+    `symlink` work): status 52 XPC_INTERRUPTED_REPLY. containermanagerd
+    crash-loops: EXC_BAD_ACCESS at 0x8 in CoreFoundation
+    __CFGetNonObjCTypeID <- CFDateFormatterSetFormat <-
+    CFDateFormatterCreateISO8601Formatter <- [MCMMigrationStatus
+    _iso8601DateFormatter] (no ICU data in the root).
+  - v5 (../make_backboardd_v5.py: + /usr/share/icu/icudt70l.dat,
+    icutzformat.txt): CONTAINER result non-NULL, status 1 = success. Next
+    throw: NSInternalInconsistencyException "error reading
+    /System/Library/BackBoard/EventProcessorConfiguration.plist".
+  - v6 (../add_os_files.py generic copier: + that plist), SHA256
+    eff1c3d07049da6736bf138e8a72b3b0e149922cf5877ca85a85b1cbb04175f4:
+    QEMU MILESTONE: backboardd passes the container and config walls, no
+    throw/abort/exception in a 360 s GDB run, and in a 300 s plain run the
+    console shows it looking up services until ~1:37 guest time, then no
+    exit for the rest of the run (../qemu-asus-backboardd-v6/fb.png).
+    Failed lookups (absent daemons): logd, oscard, ACCHWComponentAuthService,
+    runningboard, cfprefsd.daemon, analyticsd,
+    coremedia.virtualframebuffer.xpc, mobilegestalt.xpc (x2),
+    iokit.powerdxpc, distributed_notifications@1v3, datamigrator.
+    No compositor frame yet; whether it blocks or idles is not determined.
+  Container error names: libsystem_containermanager table at cache VA
+  0x1d9bedb90 (unslid), e.g. 55 NOT_ENTITLED, 102 HOME_MISSING, 52 XPC_INTERRUPTED.
+- Disk: each HFS root is 2.9 GB; QEMU needs an 8 GB ram.bin while running
+  (17-20 GB free on C:). v3/v4 deleted (rebuildable by the scripts).
+- NEXT: find what backboardd waits on after ~1:37 (GDB sample of its
+  threads, or add mobilegestalt/cfprefsd/runningboardd jobs + their cdhashes
+  to the QEMU policy), then whether CA picks the ASUS AppleCLCD display.
+  launchd places our LaunchDaemons jobs without UserName in user/501
+  (containermanagerd runs there, possibly as uid 501); notifyd in system.
+  The phone has not been used in this phase.
 
 ### Phase 6: iOS compositor in QEMU
 
