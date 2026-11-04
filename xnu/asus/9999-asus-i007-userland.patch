@@ -1,0 +1,165 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -382,6 +382,7 @@
+ bsd/kern/kern_crossarch.c		standard
+ bsd/kern/kern_cs.c			standard
+ bsd/kern/sweet_amfi.c			standard
++bsd/kern/asus_userland.c		standard
+ 
+ # Apple OSS hfs-627.100.6, staged by xnu/patches/0026-stage-hfs.sh
+ bsd/sweet_hfs/core/BTree.c		optional sweet_hfs
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -687,6 +687,12 @@
+ 	bsd_init_kprintf("calling IOKitInitializeTime\n");
+ 	IOKitInitializeTime();
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* ASUS --userland: permissive "Sandbox" MAC policy (asus_userland.c). */
++	extern void asus_userland_register(void);
++	asus_userland_register();
++#endif
++
+ 	/* Initialize the file systems. */
+ 	bsd_init_kprintf("calling vfsinit\n");
+ 	vfsinit();
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -1257,6 +1257,18 @@
+ 
+ 		mp = vfs_rootmountalloc_internal(vfsp, "root_device");
+ 		mp->mnt_devvp = rootvp;
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		/*
++		 * ASUS --userland: there is no data volume, so /private/var lives
++		 * on the RAM root. Boot-arg rootrw=1 mounts it read-write (sweet 0031).
++		 */
++		{
++			uint32_t rootrw = 0;
++			if (PE_parse_boot_argn("rootrw", &rootrw, sizeof(rootrw)) && rootrw) {
++				mp->mnt_flag &= ~MNT_RDONLY;
++			}
++		}
++#endif
+ 
+ 		if (vfsp->vfc_mountroot) {
+ 			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
+--- a/bsd/sweet_hfs/core/hfs_vfsutils.c
++++ b/bsd/sweet_hfs/core/hfs_vfsutils.c
+@@ -202,10 +202,19 @@
+ 	/* don't mount a writable volume if its dirty, it must be cleaned by fsck_hfs */
+ 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0 && hfsmp->jnl == NULL &&
+ 	    (SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) == 0) {
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		/* ASUS --userland: the RAM root is never fsck'd before the root mount. */
++		if (vfs_flags(hfsmp->hfs_mp) & MNT_ROOTFS) {
++			printf("hfs_mounthfsplus: ASUS: mounting dirty non-journaled root read-write\n");
++		} else {
++#endif
+ 		if (HFS_MOUNT_DEBUG) {
+ 			printf("hfs_mounthfsplus: cannot mount dirty non-journaled volumes\n");
+ 		}
+ 		return (EINVAL);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		}
++#endif
+ 	}
+ 
+ 	/* Make sure we can live with the physical block size. */
+--- a/bsd/vfs/kpi_vfs.c
++++ b/bsd/vfs/kpi_vfs.c
+@@ -4459,6 +4459,18 @@
+ 					_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
+ 				}
+ 			}
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++			/*
++			 * ASUS --userland (sweet 0052): HFS has no RENAME_SWAP, which
++			 * Foundation atomic writes use. Swapping two regular files on one
++			 * volume is what exchangedata does.
++			 */
++			if (_err == ENOTSUP && flags == VFS_RENAME_SWAP && *tvpp != NULLVP &&
++			    vnode_isreg(*fvpp) && vnode_isreg(*tvpp) &&
++			    vnode_mount(*fvpp) == vnode_mount(*tvpp)) {
++				_err = VNOP_EXCHANGE(*fvpp, *tvpp, 0, ctx);
++			}
++#endif
+ 		} else {
+ 			_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
+ 		}
+--- a/config/MASTER.arm64.sweet
++++ b/config/MASTER.arm64.sweet
+@@ -31,7 +31,7 @@
+ #  BSD_RELEASE =    [ BSD_BASE ]
+ #  BSD_DEV =        [ BSD_BASE config_vnguard ]
+ #  BSD_DEBUG =      [ BSD_BASE config_vnguard ]
+-#  FILESYS_BASE =   [ devfs fdesc fifo mockfs sweet_hfs fs_compression config_protect config_mnt_rootsnap config_rosv_startup config_mount_vm config_mount_prebootrecovery config_basesystemroot config_fse quota namedstreams config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_volfs config_appledouble nullfs config_mnt_suid config_firmlinks config_dataless_files config_union_mounts config_file_leases ]
++#  FILESYS_BASE =   [ devfs fdesc fifo mockfs sweet_hfs fs_compression config_protect config_mnt_rootsnap config_rosv_startup config_mount_vm config_mount_prebootrecovery config_basesystemroot config_fse quota namedstreams config_imgsrc_access config_triggers config_searchfs config_volfs config_appledouble nullfs config_mnt_suid config_firmlinks config_dataless_files config_union_mounts config_file_leases ]
+ #  FILESYS_RELEASE= [ FILESYS_BASE ]
+ #  FILESYS_DEV =    [ FILESYS_BASE config_iocount_trace ]
+ #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
+--- /dev/null
++++ b/bsd/kern/asus_userland.c
+@@ -0,0 +1,62 @@
++/*
++ * ASUS I007 userland services (optional profile --userland).
++ *
++ * Policy "Sandbox": libsystem_sandbox calls __mac_syscall("Sandbox", op,
++ * arg). Without a MAC policy of that name every call fails with ENOPOLICY,
++ * and launchd answers Mach lookups with "error = 159: Sandbox restriction"
++ * (QEMU: backboardd could not reach logd, notifyd, iohideventsystem or
++ * containermanagerd). This profile runs without a sandbox, as the sweet
++ * port did with its patch 0050: checks are allowed and profile init is
++ * accepted; operations that must return data (container path, extension
++ * issue/consume, container expected) fail with ENOENT. The first use of
++ * each operation number is logged. Nothing else is granted: code signature
++ * and page validation and the no-entitlements AMFI provider are unchanged.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <security/mac_policy.h>
++#include <sys/errno.h>
++#include <sys/proc.h>
++#include <sys/systm.h>
++
++static uint64_t asus_sandbox_seen;
++
++static int
++asus_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
++{
++	if (call >= 0 && call < 64 && !(asus_sandbox_seen & (1ULL << call))) {
++		asus_sandbox_seen |= 1ULL << call;
++		char name[32];
++		proc_name(proc_pid(p), name, sizeof(name));
++		printf("ASUS Sandbox: %s op %d\n", name, call);
++	}
++	switch (call) {
++	case 4:         /* container path (audit token / pid) */
++	case 5:         /* extension issue */
++	case 6:         /* extension consume */
++	case 0x43:      /* container expected */
++		return ENOENT;
++	default:
++		return 0;
++	}
++}
++
++static const struct mac_policy_ops asus_sandbox_ops = {
++	.mpo_policy_syscall = asus_sandbox_syscall,
++};
++
++static struct mac_policy_conf asus_sandbox_conf = {
++	.mpc_name = "Sandbox",
++	.mpc_fullname = "ASUS permissive sandbox stand-in",
++	.mpc_ops = &asus_sandbox_ops,
++};
++
++void asus_userland_register(void);
++void
++asus_userland_register(void)
++{
++	static mac_policy_handle_t handle;
++	int error = mac_policy_register(&asus_sandbox_conf, &handle, NULL);
++	printf("ASUS Sandbox: permissive policy %s (%d)\n",
++	    error ? "NOT registered" : "registered", error);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */

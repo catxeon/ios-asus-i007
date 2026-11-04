@@ -13,7 +13,12 @@ parser.add_argument('dxb', type=Path)
 parser.add_argument('--hfs', action='store_true', help='Include built-in HFS+ and MD5 for a filesystem RAM root')
 parser.add_argument('--display', action='store_true', help='Include ASUS boot framebuffer presentation')
 parser.add_argument('--compositor', action='store_true', help='Include the QEMU compositor signature policy')
+parser.add_argument('--userland', action='store_true',
+                    help='Include iOS daemon support: permissive Sandbox policy, rootrw=1, '
+                         'HFS rename swap, no external ACL resolver')
 args = parser.parse_args()
+if args.userland and not args.hfs:
+    parser.error('--userland requires --hfs')
 if args.display and not args.hfs:
     parser.error('--display requires --hfs')
 if args.compositor and not args.display:
@@ -40,6 +45,8 @@ if args.display:
     selected.append(repo / 'xnu/asus/9999-asus-i007-display.patch')
 if args.compositor:
     selected.append(repo / 'xnu/asus/9999-asus-i007-qemu-compositor.patch')
+if args.userland:
+    selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
 manifest = []
 for path in selected:
     data = path.read_bytes().replace(b'\r\n', b'\n')
@@ -65,6 +72,7 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
     'cpu': 'cortex-a55', 'cpus': 1, 'page_size': 16384,
     'root': 'HFS+ or mockfs RAM disk' if args.hfs else 'mockfs RAM disk',
     'hfs': args.hfs, 'display': args.display, 'qemu_compositor': args.compositor,
+    'userland': args.userland,
     'storage_driver': False, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
 print(f'Staged {len(selected)} ASUS files; no UFS, input, modem, GPU or USB drivers')

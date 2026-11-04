@@ -54,7 +54,7 @@
 +    __unused char **failure, __unused size_t *failure_len)
 +{
 +	mount_t mp = vnode_mount(vp);
-+	const uint32_t required = MNT_ROOTFS | MNT_RDONLY;
++	const uint32_t required = MNT_ROOTFS; /* rootrw=1 (--userland) keeps it writable */
 +	if (mp != NULL && (vfs_flags(mp) & required) == required &&
 +	    memcmp(cs_blob->csb_cdhash, backboardd_20h392_cdhash, CS_CDHASH_LEN) == 0) {
 +		*cs_flags |= CS_SIGNED | CS_PLATFORM_BINARY;
