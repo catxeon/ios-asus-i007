@@ -87,6 +87,193 @@
  		} else {
  			_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
  		}
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -29,10 +29,38 @@
+ 	/* No OSEntitlements objects are ever created. */
+ }
+ 
++/*
++ * ASUS --userland: entitlements. Each code signature whose XML entitlements
++ * blob matches its code directory gets a SweetEntitlements object
++ * (iokit/Kernel/arm/SweetEntitlements.cpp, from sweet patch 0035), attached
++ * by asus_amfi_attach_entitlements() from the "ASUS ENTITLEMENTS" MAC policy
++ * (bsd/kern/asus_userland.c). Every query below is answered from it; nothing
++ * is granted without such a blob.
++ */
++#include <sys/codesign.h>
++#include <sys/ubc_internal.h>
++
++void *sweet_entitlements_create(const CS_GenericBlob *blob, size_t blob_len);
++void *sweet_entitlements_copy_dict(const void *ent);
++bool sweet_entitlements_copy_xml(const void *ent, CS_GenericBlob **out);
++bool sweet_entitlements_bool(const void *ent, const char *name);
++bool sweet_entitlements_string(const void *ent, const char *name, const char *value);
++void *sweet_entitlements_copy_object(const void *ent, const char *name);
++unsigned int sweet_entitlements_count(const void *ent);
++extern void osobject_release(void *object);
++
++/* The entitlements object of a process's main binary, or NULL. */
+ static void *
+-sweet_amfi_entitlements_as_dict(__unused void *os_entitlements)
+-{
+-	return NULL;
++sweet_proc_entitlements(proc_t proc)
++{
++	struct cs_blob *blob = csproc_get_blob(proc);
++	return blob != NULL ? csblob_os_entitlements_get(blob) : NULL;
++}
++
++static void *
++sweet_amfi_entitlements_as_dict(void *os_entitlements)
++{
++	return sweet_entitlements_copy_dict(os_entitlements);
+ }
+ 
+ static CEError_t
+@@ -51,10 +79,9 @@
+ }
+ 
+ static bool
+-sweet_amfi_entitlements_get_xml(__unused void *os_entitlements,
+-    __unused CS_GenericBlob **blob)
+-{
+-	return false;
++sweet_amfi_entitlements_get_xml(void *os_entitlements, CS_GenericBlob **blob)
++{
++	return sweet_entitlements_copy_xml(os_entitlements, blob);
+ }
+ 
+ static bool
+@@ -94,51 +121,84 @@
+ }
+ 
+ static kern_return_t
+-sweet_amfi_query_boolean(__unused const void *os_entitlements,
+-    __unused const char *entitlement_name)
+-{
+-	return KERN_DENIED;
+-}
+-
+-static kern_return_t
+-sweet_amfi_query_boolean_with_proc(__unused const proc_t proc,
+-    __unused const char *entitlement_name)
+-{
+-	return KERN_DENIED;
+-}
+-
+-static kern_return_t
+-sweet_amfi_query_string(__unused const void *os_entitlements,
+-    __unused const char *entitlement_name, __unused const char *entitlement_value)
+-{
+-	return KERN_DENIED;
+-}
+-
+-static kern_return_t
+-sweet_amfi_query_string_with_proc(__unused const proc_t proc,
+-    __unused const char *entitlement_name, __unused const char *entitlement_value)
+-{
+-	return KERN_DENIED;
+-}
+-
+-static kern_return_t
+-sweet_amfi_copy_object(__unused const void *os_entitlements,
+-    __unused const char *entitlement_name, void **entitlement_object)
+-{
++sweet_amfi_query_boolean(const void *os_entitlements, const char *entitlement_name)
++{
++	return sweet_entitlements_bool(os_entitlements, entitlement_name) ? KERN_SUCCESS : KERN_DENIED;
++}
++
++static kern_return_t
++sweet_amfi_query_boolean_with_proc(const proc_t proc, const char *entitlement_name)
++{
++	return sweet_amfi_query_boolean(sweet_proc_entitlements(proc), entitlement_name);
++}
++
++static kern_return_t
++sweet_amfi_query_string(const void *os_entitlements,
++    const char *entitlement_name, const char *entitlement_value)
++{
++	return sweet_entitlements_string(os_entitlements, entitlement_name, entitlement_value) ?
++	       KERN_SUCCESS : KERN_DENIED;
++}
++
++static kern_return_t
++sweet_amfi_query_string_with_proc(const proc_t proc,
++    const char *entitlement_name, const char *entitlement_value)
++{
++	return sweet_amfi_query_string(sweet_proc_entitlements(proc), entitlement_name,
++	           entitlement_value);
++}
++
++static kern_return_t
++sweet_amfi_copy_object(const void *os_entitlements,
++    const char *entitlement_name, void **entitlement_object)
++{
++	void *obj = sweet_entitlements_copy_object(os_entitlements, entitlement_name);
+ 	if (entitlement_object) {
+-		*entitlement_object = NULL;
+-	}
+-	return KERN_NOT_FOUND;
+-}
+-
+-static kern_return_t
+-sweet_amfi_copy_object_with_proc(__unused const proc_t proc,
+-    __unused const char *entitlement_name, void **entitlement_object)
+-{
+-	if (entitlement_object) {
+-		*entitlement_object = NULL;
+-	}
+-	return KERN_NOT_FOUND;
++		*entitlement_object = obj;
++	} else if (obj) {
++		osobject_release(obj);
++	}
++	return obj ? KERN_SUCCESS : KERN_NOT_FOUND;
++}
++
++static kern_return_t
++sweet_amfi_copy_object_with_proc(const proc_t proc,
++    const char *entitlement_name, void **entitlement_object)
++{
++	return sweet_amfi_copy_object(sweet_proc_entitlements(proc), entitlement_name,
++	           entitlement_object);
++}
++
++/*
++ * Attach the parsed XML entitlements to a code signature being added. Must
++ * run from a vnode_check_signature MAC hook, like AMFI: converting a 4K-page
++ * signature to multilevel hashes later drops the XML blob. Nothing is
++ * granted when the blob is missing, unreadable or does not match its code
++ * directory hash.
++ */
++void asus_amfi_attach_entitlements(struct cs_blob *code_signing_blob);
++void
++asus_amfi_attach_entitlements(struct cs_blob *code_signing_blob)
++{
++	void *xml = NULL;
++	size_t xml_len = 0;
++
++	if (csblob_get_entitlements(code_signing_blob, &xml, &xml_len) != 0) {
++		printf("ASUS AMFI: %s: entitlements do not match the code directory, granting none\n",
++		    csblob_get_identity(code_signing_blob));
++		return;
++	}
++	if (xml == NULL) {
++		return;
++	}
++	void *ent = sweet_entitlements_create(xml, xml_len);
++	if (ent == NULL) {
++		printf("ASUS AMFI: %s: unreadable entitlements (%zu bytes), granting none\n",
++		    csblob_get_identity(code_signing_blob), xml_len);
++		return;
++	}
++	csblob_os_entitlements_set(code_signing_blob, ent);    /* takes a reference */
++	osobject_release(ent);
+ }
+ 
+ static const amfi_t sweet_amfi = {
 --- a/bsd/dev/memdev.c
 +++ b/bsd/dev/memdev.c
 @@ -247,10 +247,10 @@
@@ -154,7 +341,7 @@
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
 --- /dev/null
 +++ b/bsd/kern/asus_userland.c
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,211 @@
 +/*
 + * ASUS I007 userland services (optional profile --userland).
 + *
@@ -318,13 +505,46 @@
 +	.mpc_ops = &asus_trust_ops,
 +};
 +
++/*
++ * Entitlements: attach each new signature's XML entitlements (checked against
++ * its code directory) before exec decisions are made, like AMFI's hook. The
++ * read-only copy (csb_ro_addr) is revalidation and already has them.
++ */
++void asus_amfi_attach_entitlements(struct cs_blob *code_signing_blob);    /* sweet_amfi.c */
++
++static int
++asus_entitlements_check_signature(__unused struct vnode *vp, __unused struct label *label,
++    __unused cpu_type_t cpu_type, struct cs_blob *cs_blob,
++    __unused unsigned int *cs_flags, __unused unsigned int *signer_type,
++    __unused int flags, __unused unsigned int platform,
++    __unused char **failure, __unused size_t *failure_len)
++{
++	if (cs_blob != cs_blob->csb_ro_addr && cs_blob->csb_entitlements == NULL) {
++		asus_amfi_attach_entitlements(cs_blob);
++	}
++	return 0;
++}
++
++static const struct mac_policy_ops asus_entitlements_ops = {
++	.mpo_vnode_check_signature = asus_entitlements_check_signature,
++};
++
++static struct mac_policy_conf asus_entitlements_conf = {
++	.mpc_name = "ASUS ENTITLEMENTS",
++	.mpc_fullname = "ASUS XML entitlements from code signatures",
++	.mpc_ops = &asus_entitlements_ops,
++};
++
 +void asus_userland_register(void);
 +void
 +asus_userland_register(void)
 +{
-+	static mac_policy_handle_t handle, trust_handle;
++	static mac_policy_handle_t handle, trust_handle, ent_handle;
 +	int error = mac_policy_register(&asus_sandbox_conf, &handle, NULL);
 +	printf("ASUS Sandbox: permissive policy %s (%d)\n",
++	    error ? "NOT registered" : "registered", error);
++	error = mac_policy_register(&asus_entitlements_conf, &ent_handle, NULL);
++	printf("ASUS AMFI: XML entitlements policy %s (%d)\n",
 +	    error ? "NOT registered" : "registered", error);
 +	asus_trust_cache_init();
 +	if (asus_tc_count) {
@@ -333,3 +553,196 @@
 +	}
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetEntitlements.cpp
+@@ -0,0 +1,184 @@
++/*
++ * Entitlements for the SWEET built-in AMFI interface (bsd/kern/sweet_amfi.c).
++ *
++ * Apple's AMFI keeps a CoreEntitlements context per code signature; that
++ * library is closed. Here each signature with an XML entitlements blob gets
++ * a SweetEntitlements object: the blob parsed into an OSDictionary (the
++ * representation IOKit and the kernel KPIs hand out) plus the original XML,
++ * which csops(CS_OPS_ENTITLEMENTS_BLOB) returns. The blob was already
++ * checked against the code directory by csblob_get_entitlements().
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
++#include <IOKit/IOLib.h>
++#include <libkern/c++/OSArray.h>
++#include <libkern/c++/OSBoolean.h>
++#include <libkern/c++/OSDictionary.h>
++#include <libkern/c++/OSString.h>
++#include <libkern/c++/OSUnserialize.h>
++#include <kern/cs_blobs.h>
++
++class SweetEntitlements : public OSObject {
++	OSDeclareDefaultStructors(SweetEntitlements);
++
++public:
++	OSDictionary *dict;
++	CS_GenericBlob *xml;            /* the signature's blob, header included */
++	size_t xml_len;
++
++	bool init(void) APPLE_KEXT_OVERRIDE;
++	void free(void) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(SweetEntitlements, OSObject);
++
++bool
++SweetEntitlements::init(void)
++{
++	return OSObject::init();
++}
++
++void
++SweetEntitlements::free(void)
++{
++	OSSafeReleaseNULL(dict);
++	if (xml) {
++		kfree_data(xml, xml_len);
++		xml = NULL;
++	}
++	OSObject::free();
++}
++
++static SweetEntitlements *
++sweet_ent(const void *obj)
++{
++	return OSDynamicCast(SweetEntitlements, (OSObject *)(uintptr_t)obj);
++}
++
++extern "C" {
++/* Parsed entitlements for one XML blob (header included), or NULL. Retained. */
++void *
++sweet_entitlements_create(const CS_GenericBlob *blob, size_t blob_len)
++{
++	if (blob == NULL || blob_len <= sizeof(CS_GenericBlob) ||
++	    ntohl(blob->magic) != CSMAGIC_EMBEDDED_ENTITLEMENTS ||
++	    ntohl(blob->length) != blob_len) {
++		return NULL;
++	}
++
++	/* OSUnserializeXML needs a terminating NUL inside the buffer. */
++	size_t text_len = blob_len - sizeof(CS_GenericBlob);
++	char *text = (char *)kalloc_data(text_len + 1, Z_WAITOK);
++	if (text == NULL) {
++		return NULL;
++	}
++	memcpy(text, blob->data, text_len);
++	text[text_len] = '\0';
++	OSObject *parsed = OSUnserializeXML(text, text_len + 1);
++	kfree_data(text, text_len + 1);
++
++	OSDictionary *dict = OSDynamicCast(OSDictionary, parsed);
++	if (dict == NULL) {
++		OSSafeReleaseNULL(parsed);
++		return NULL;
++	}
++
++	SweetEntitlements *ent = OSTypeAlloc(SweetEntitlements);
++	CS_GenericBlob *xml = (CS_GenericBlob *)kalloc_data(blob_len, Z_WAITOK);
++	if (ent == NULL || !ent->init() || xml == NULL) {
++		OSSafeReleaseNULL(ent);
++		if (xml) {
++			kfree_data(xml, blob_len);
++		}
++		dict->release();
++		return NULL;
++	}
++	memcpy(xml, blob, blob_len);
++	ent->dict = dict;
++	ent->xml = xml;
++	ent->xml_len = blob_len;
++	return ent;
++}
++
++/* The entitlements as an OSDictionary. Retained. */
++void *
++sweet_entitlements_copy_dict(const void *obj)
++{
++	SweetEntitlements *ent = sweet_ent(obj);
++	if (ent == NULL) {
++		return NULL;
++	}
++	ent->dict->retain();
++	return ent->dict;
++}
++
++/* A kalloc_data copy of the XML blob; the caller frees it (blob length). */
++bool
++sweet_entitlements_copy_xml(const void *obj, CS_GenericBlob **out)
++{
++	SweetEntitlements *ent = sweet_ent(obj);
++	if (ent == NULL) {
++		return false;
++	}
++	CS_GenericBlob *copy = (CS_GenericBlob *)kalloc_data(ent->xml_len, Z_WAITOK);
++	if (copy == NULL) {
++		return false;
++	}
++	memcpy(copy, ent->xml, ent->xml_len);
++	*out = copy;
++	return true;
++}
++
++/* name is true (a boolean entitlement). */
++bool
++sweet_entitlements_bool(const void *obj, const char *name)
++{
++	SweetEntitlements *ent = sweet_ent(obj);
++	return ent != NULL && ent->dict->getObject(name) == kOSBooleanTrue;
++}
++
++/* name is the string value, or an array containing it. */
++bool
++sweet_entitlements_string(const void *obj, const char *name, const char *value)
++{
++	SweetEntitlements *ent = sweet_ent(obj);
++	if (ent == NULL || value == NULL) {
++		return false;
++	}
++	OSObject *v = ent->dict->getObject(name);
++	OSString *s = OSDynamicCast(OSString, v);
++	if (s != NULL) {
++		return s->isEqualTo(value);
++	}
++	OSArray *a = OSDynamicCast(OSArray, v);
++	for (unsigned int i = 0; a != NULL && i < a->getCount(); i++) {
++		s = OSDynamicCast(OSString, a->getObject(i));
++		if (s != NULL && s->isEqualTo(value)) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/* Number of entitlements. */
++unsigned int
++sweet_entitlements_count(const void *obj)
++{
++	SweetEntitlements *ent = sweet_ent(obj);
++	return ent != NULL ? ent->dict->getCount() : 0;
++}
++
++/* The value of name, or NULL. Retained. */
++void *
++sweet_entitlements_copy_object(const void *obj, const char *name)
++{
++	SweetEntitlements *ent = sweet_ent(obj);
++	OSObject *v = ent != NULL ? ent->dict->getObject(name) : NULL;
++	if (v != NULL) {
++		v->retain();
++	}
++	return v;
++}
++}
++#endif /* SWEET */
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -10,2 +10,3 @@
+ iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
++iokit/Kernel/arm/SweetEntitlements.cpp                          optional iokitcpp
+ 
