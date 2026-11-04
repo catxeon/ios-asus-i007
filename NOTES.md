@@ -142,6 +142,26 @@
   iconservicesagent -> 12 GB springboard-v8.hfs (building).
 - Disk: with user approval deleted ../qemu-asus-backboardd-abort/ram.bin and
   backboardd-v1/v2.hfs; v3-v6 removed as rebuildable (37 GB free before v8).
+- FULL ROOT (QEMU, 2026-11-04/05): ~/asus-roots/springboard-v8.hfs in WSL ext4
+  (12 GiB; ~10x faster to build there than through /mnt/c). Fixes on the way:
+  libdmg-hfsplus allocate() 32-bit offset (tools/libdmg-hfsplus-64bit-allocate.patch;
+  patched hfsplus/libhfs in ~/asus-roots), fresh mkfs.hfsplus + asus-hfs-copyvol
+  instead of `grow`, root folder mode (mkfs leaves mode 0 -> uid 501 EACCES in
+  proc_pidpathinfo, SpringBoard died in dyld), SystemOS cryptex copied to
+  /private/preboot/Cryptexes/OS (OS root links /System/Cryptexes/OS there; dyld
+  cache excluded). Kernel: memdev mdSize<<12 was 32-bit, a 12 GiB md0 had size 0
+  (hfs EINVAL) -> fixed in --userland, CI 41905468060, kernel
+  3c621f3a22e1d1cfd832e3ed8152959a28b74810463df6b70b9a1b1fa4eeef4e.
+  QEMU needs ASUS_QEMU_SHARE=1 (share=on backing; a 13 GB private mapping is
+  refused by the WSL VM's overcommit) and boot-args
+  interrupt-masked-debug-mode=0 sched-preemption-disable-debug-mode=0 (TCG made a
+  vsync interrupt take 20.8 ms > 13.6 ms timeout -> panic).
+- QEMU MILESTONE: iOS BOOT SCREEN RENDERED BY BACKBOARDD. With root v8 (SHA256
+  7e706ecee7c3ccbf015cdef649d1f9c4150f08f340702b4f9e3a42a93c552857), kernel
+  3c621f3a, trust cache + iPhone X ADT nodes: backboardd creates a 1080x2448 BGRA
+  IOSurface (id 2, bpr 4352) and swaps it twice; the framebuffer shows the white
+  Apple logo centred on black (../qemu-v8-fb.png). Then the interrupt-duration
+  panic above. runningboardd crash-loops (corpse every ~1 s); cause not yet read.
 - NEXT: a client that draws: SpringBoard (or a minimal CA client app) with
   FrontBoard/RunningBoard deps; port the topaz/sweet userland patches already
   in xnu/patches (0038 AKS, 0058 HID, 0059 identity, 0064 work interval ...)
