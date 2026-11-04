@@ -2,6 +2,42 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Phase 7 (2026-11-04 afternoon): backboardd system container
+
+- ABORT CAUSE (QEMU, ../qemu-asus-backboardd-throw/symbolicated.txt):
+  uncaught NSInvalidArgumentException `-[NSURL initFileURLWithPath:]: nil
+  string parameter` from `-[BSSystemContainerForCurrentProcessPathProvider
+  libraryPath]` <- `cachesPath` <- backboardd (StartWindowServer shader
+  cache path). BaseBoard `__BSSystemSharedDirectoryForCurrentProcess`
+  calls `container_system_path_for_identifier(bundleID, &err)`
+  (libsystem_containermanager -> containermanagerd XPC); it returned NULL.
+  This is the exact wall the sweet port hit (topaz NOTES boot 0051n).
+- launchd's `error = 159: Sandbox restriction` for every backboardd lookup
+  means no MAC policy named "Sandbox" (sweet 0050), not only absent
+  daemons. Also no containermanagerd job and no /private/var/containers.
+- CS_OPS_DER_ENTITLEMENTS_BLOB returns the hash-checked DER blob from the
+  signature without AMFI, so daemons can still read clients' entitlements
+  with our no-entitlements AMFI provider (unverified at runtime).
+- Kernel: new optional profile `--userland` (xnu/asus/9999-asus-i007-
+  userland.patch, workflow input `userland`): permissive "Sandbox" MAC
+  policy (logs `ASUS Sandbox: <proc> op N`), boot-arg rootrw=1 for the RAM
+  root + dirty non-journaled HFS root accepted, RENAME_SWAP via
+  VNOP_EXCHANGE (sweet 0052), no config_ext_resolver (sweet 0057).
+  Compositor cdhash policy now pins backboardd, containermanagerd
+  (41a7bd3a...) and notifyd (99a69e0d...), all type 2 in the stock OS
+  trust cache, and requires MNT_ROOTFS only (rootrw keeps it writable).
+  Commits 2dc9544, then cdhash table; CI 41832894570 (first attempt failed
+  only on a bearssl.org 502, rerun).
+- Root: ../make_backboardd_v3.py -> ../asus-compositor-root/backboardd-v3.hfs
+  = v2 + /usr/libexec/containermanagerd, /usr/sbin/notifyd, their stock
+  jobs (feature-flag #Else branches, no _PanicOnCrash) and
+  /private/var/containers/{Bundle,Data/System,Shared/SystemGroup,Temp}.
+  fsck clean, SHA256 b7ce3969a6abe0b0309dfb6fc27a138970c434b5aa76cfdba33410e7721ec5f7.
+  Note: root /var and /tmp are real directories, not links to /private.
+- Mount Apple images as WSL root only (`wsl -u root`, apfs-fuse -o
+  ro,allow_other); FUSE mounts are invisible from Windows paths.
+  Project moved to C:\Users\del\Desktop\https-github-com-makrsas-ios-topaz.
+
 ### Phase 6: iOS compositor in QEMU
 
 - The iOS 16.7.16 (20H392) restore ramdisk lacks backboardd and QuartzCore.

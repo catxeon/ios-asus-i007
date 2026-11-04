@@ -7,11 +7,33 @@ bearssl_sha=7bea48e5e850ab4cafbe68d3765cdaba13a86d6f
 bearssl_tmp=$(mktemp -d)
 trap 'rm -rf "$bearssl_tmp"' EXIT
 git init -q "$bearssl_tmp"
-git -C "$bearssl_tmp" fetch -q --depth 1 \
-    https://www.bearssl.org/git/BearSSL "$bearssl_sha"
-git -C "$bearssl_tmp" checkout -q FETCH_HEAD
-[[ "$(git -C "$bearssl_tmp" rev-parse HEAD)" == "$bearssl_sha" ]]
-python3 - "$bearssl_tmp" <<'PY'
+fetched=
+for attempt in 1 2 3; do
+    if git -C "$bearssl_tmp" fetch -q --depth 1 \
+        https://www.bearssl.org/git/BearSSL "$bearssl_sha"; then
+        fetched=1
+        break
+    fi
+    [[ $attempt == 3 ]] || sleep $((attempt * 10))
+done
+if [[ -n "$fetched" ]]; then
+    bearssl_src="$bearssl_tmp"
+    git -C "$bearssl_tmp" checkout -q FETCH_HEAD
+    [[ "$(git -C "$bearssl_tmp" rev-parse HEAD)" == "$bearssl_sha" ]]
+else
+    # bearssl.org's git endpoint has returned 502 (2026-11-04). Fall back to the
+    # subset of the same commit kept in this repository; every file must match
+    # its git blob hash from the upstream tree (recorded in BLOBS).
+    vendor="${BEARSSL_VENDOR:-$(cd "$(dirname "$0")/../.." && pwd)/xnu/vendor/bearssl-$bearssl_sha}"
+    [[ -f "$vendor/BLOBS" ]] || { echo "BearSSL fetch failed and no vendored copy at $vendor" >&2; exit 1; }
+    while read -r blob file; do
+        [[ "$(git hash-object --no-filters "$vendor/$file")" == "$blob" ]] ||
+            { echo "Vendored BearSSL mismatch: $file" >&2; exit 1; }
+    done < "$vendor/BLOBS"
+    echo "bearssl.org unreachable: using verified vendored BearSSL $bearssl_sha"
+    bearssl_src="$vendor"
+fi
+python3 - "$bearssl_src" <<'PY'
 from pathlib import Path
 import shutil
 import sys
