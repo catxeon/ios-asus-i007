@@ -1,0 +1,13 @@
+diff --git a/hfs/rawfile.c b/hfs/rawfile.c
+index 9023acf..d172e53 100644
+--- a/hfs/rawfile.c
++++ b/hfs/rawfile.c
+@@ -88,7 +88,7 @@ int allocate(RawFile* rawFile, off_t size) {
+ 				}
+ 
+ 				/* zero out allocated block */
+-				ASSERT(WRITE(volume->image, curBlock * volume->volumeHeader->blockSize, volume->volumeHeader->blockSize, zeros), "WRITE");
++				ASSERT(WRITE(volume->image, (off_t)curBlock * volume->volumeHeader->blockSize, volume->volumeHeader->blockSize, zeros), "WRITE");
+ 
+ 				setBlockUsed(volume, curBlock, TRUE);
+ 				volume->volumeHeader->freeBlocks--;
