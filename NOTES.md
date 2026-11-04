@@ -183,7 +183,15 @@
   - Root v9 = v8 + /private/var/mobile/Library/Preferences/com.apple.migration.plist
     {LastSystemVersion: 20H392} 501:501 0600 (sweet image v12 fix), file
     ~/asus-roots/springboard-v9.hfs, SHA256
-    e79d488735ba90a740a24ab6a8ce7ff5cc339ebfab8573204d858b3e29c11593. Testing.
+    e79d488735ba90a740a24ab6a8ce7ff5cc339ebfab8573204d858b3e29c11593.
+  - QEMU MILESTONE (2026-11-05 ~02:12, kernel 884e0b3b, root v9): NO MIGRATION;
+    SpringBoard creates its own IOSurfaces (312x202 LA08, 272x184 BGRA, 230x186 LA08)
+    and Setup (PurpleBuddy) shows the iOS HELLO SCREEN: animated "hello" stroke,
+    "Skub op for at åbne" (Danish: no locale chosen yet), (i) button, home
+    indicator, and SpringBoard's red internal crash banner (Setup crashed once).
+    Screenshot ../qemu-v9-peek.png. SpringBoard AKS calls: 17, 35, 7, 26/27
+    (assert hold/drop), 8 and 32 -> kIOReturnUnsupported (0xe00002c7).
+    This is the same first-GUI point sweet reached on its phone (image v12).
   - GDB crash capture for kernel 59b0b8c1/884e0b3b symbol layout:
     ../capture_crash_k59b0.gdb (exception_triage +0x2c at 0xfffffe00073282dc);
     saves frames per exception under OUT/crash-NN-<proc>.
