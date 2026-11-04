@@ -137,6 +137,24 @@ int main(int argc, char **argv)
     dst = openVolume(dio);
     if (!src || !dst) return 1;
     walk(kHFSRootFolderID, "/");
+    {
+        /* mkfs.hfsplus leaves the root folder with mode 0: copy the source root's
+         * BSD info, or uid 501 processes cannot look anything up (EACCES). */
+        HFSPlusCatalogFolder *from = (HFSPlusCatalogFolder *)getRecordByCNID(kHFSRootFolderID, src);
+        HFSPlusCatalogFolder *to = (HFSPlusCatalogFolder *)getRecordByCNID(kHFSRootFolderID, dst);
+        if (from == NULL || to == NULL || (from->permissions.fileMode & 0170000) != 0040000) {
+            fprintf(stderr, "root folder attributes not copied\n");
+            failed++;
+        } else {
+            to->permissions = from->permissions;
+            if (!updateCatalog(dst, (HFSPlusCatalogRecord *)to)) {
+                fprintf(stderr, "root folder update failed\n");
+                failed++;
+            }
+        }
+        free(from);
+        free(to);
+    }
     closeVolume(dst);
     CLOSE(dio);
     closeVolume(src);
