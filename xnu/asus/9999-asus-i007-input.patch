@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1174 @@
+@@ -0,0 +1,1246 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21680,6 +21680,9 @@
 +#include <sys/errno.h>
 +
 +extern "C" void sweet_hid_key(int key, int down);
++extern "C" void sweet_hid_touch(int finger, int down, int x, int y);
++#define TOUCH_FINGERS   10u             /* FocalTech max-touch-number = SWEET_TOUCH_FINGERS */
++#define TOUCH_POLL_MS   8u
 +extern "C" void asus_log_mark(const char *line);   /* bsd/dev/sweet_ufs.c; weak fallback below */
 +extern "C" bool asus_log_ready(void);
 +static void amark(const char *fmt, ...) __printflike(1, 2);
@@ -21734,6 +21737,13 @@
 +	static void poll(OSObject *owner, IOTimerEventSource *sender);
 +	static void touchFired(OSObject *owner, IOTimerEventSource *sender);
 +	IOTimerEventSource *fTouchTimer;
++	static void touchPollFired(OSObject *owner, IOTimerEventSource *sender);
++	void touchRead();
++	IOTimerEventSource *fTouchPoll;
++	IOMemoryMap *fTlmmKeep;
++	bool fTouchDown[TOUCH_FINGERS];
++	int fTouchX[TOUCH_FINGERS], fTouchY[TOUCH_FINGERS];
++	unsigned fTouchErrors, fTouchLogged;
 +	IOMemoryMap *fCore, *fCnfg, *fObs;
 +	IOWorkLoop *fLoop;
 +	IOTimerEventSource *fTimer;
@@ -22339,6 +22349,8 @@
 +		return 0;
 +	}
 +};
++BitI2C gTouchBus;
++volatile uint32_t *gTouchIrq;
 +}
 +
 +void
@@ -22390,24 +22402,84 @@
 +		amark("ASUS TOUCH: bitbang scan done, sda=%u scl=%u\n", b.sda(), b.scl());
 +		return;
 +	}
-+	/* 60 s of touch polling while the IRQ line (GPIO23, active low) is asserted. */
-+	volatile uint32_t *irqIo = t + 23 * 0x400 + 1;
-+	unsigned events = 0;
-+	for (unsigned ms = 0; ms < 60000 && events < 60; ms += 10) {
-+		if (*irqIo & 1u) {
-+			IOSleep(10);
++	/*
++	 * Touch input for iOS: poll the IRQ line (GPIO23, active low) every TOUCH_POLL_MS
++	 * on the work loop and read the report only while it is asserted (image 0027: one
++	 * report per 10 ms while a finger is down). The panel reports native 1080x2448
++	 * coordinates, which is what sweet_hid_touch() takes.
++	 */
++	gTouchBus = b;
++	gTouchIrq = t + 23 * 0x400 + 1;
++	fTlmmKeep = tlmm;
++	tlmm->retain();
++	fTouchPoll = IOTimerEventSource::timerEventSource(this, &AsusPhoneInput::touchPollFired);
++	if (!fTouchPoll || fLoop->addEventSource(fTouchPoll) != kIOReturnSuccess) {
++		amark("ASUS TOUCH: no poll timer\n");
++		return;
++	}
++	fTouchPoll->setTimeoutMS(TOUCH_POLL_MS);
++	amark("ASUS TOUCH: FocalTech reports -> iOS (poll %u ms, %u fingers)\n", TOUCH_POLL_MS, TOUCH_FINGERS);
++}
++
++void
++AsusPhoneInput::touchPollFired(OSObject *owner, IOTimerEventSource *sender)
++{
++	((AsusPhoneInput *)owner)->touchRead();
++	sender->setTimeoutMS(TOUCH_POLL_MS);
++}
++
++/*
++ * FocalTech report from reg 0x02: [0] = number of points, then 6 bytes per point:
++ * event (bits 7:6 of byte 0: 0 down, 1 up, 2 contact, 3 none) | x[11:8], x[7:0],
++ * id (bits 7:4) | y[11:8], y[7:0], weight, area (Linux focaltech_touch).
++ */
++void
++AsusPhoneInput::touchRead()
++{
++	if (*gTouchIrq & 1u) {
++		return;
++	}
++	uint8_t d[1 + 6 * TOUCH_FINGERS];
++	int e = gTouchBus.read(0x38, 0x02, d, sizeof(d));
++	if (e) {
++		if (fTouchErrors++ < 10) {
++			IOLog("ASUS TOUCH: report read error %d\n", e);
++		}
++		gTouchBus.recover();
++		return;
++	}
++	bool seen[TOUCH_FINGERS] = { false };
++	unsigned n = d[0] & 0xf;
++	for (unsigned i = 0; i < TOUCH_FINGERS && i < n + 1; i++) {
++		const uint8_t *p = d + 1 + 6 * i;
++		unsigned ev = p[0] >> 6, id = p[2] >> 4;
++		if (ev == 3 || id >= TOUCH_FINGERS || p[0] == 0xff) {
 +			continue;
 +		}
-+		uint8_t d[1 + 6 * 2];
-+		if (b.read(0x38, 0x02, d, sizeof(d)) == 0) {
-+			unsigned n = d[0] & 0xf;
-+			unsigned x = ((d[1] & 0xfu) << 8) | d[2], y = ((d[3] & 0xfu) << 8) | d[4];
-+			IOLog("ASUS TOUCH: t=%u ms n=%u ev=%u id=%u x=%u y=%u\n", ms, n, (unsigned)(d[1] >> 6), (unsigned)(d[3] >> 4), x, y);
-+			events++;
++		int x = (int)(((p[0] & 0xfu) << 8) | p[1]), y = (int)(((p[2] & 0xfu) << 8) | p[3]);
++		bool down = ev != 1;
++		seen[id] = down;
++		if (!down && !fTouchDown[id]) {
++			continue;
 +		}
-+		IOSleep(10);
++		if (down) {
++			fTouchX[id] = x;
++			fTouchY[id] = y;
++		}
++		sweet_hid_touch((int)id, down, down ? x : fTouchX[id], down ? y : fTouchY[id]);
++		if (down != fTouchDown[id] && fTouchLogged < 40) {
++			fTouchLogged++;
++			IOLog("ASUS TOUCH: finger %u %s at %d,%d\n", id, down ? "down" : "up", x, y);
++		}
++		fTouchDown[id] = down;
 +	}
-+	amark("ASUS TOUCH: bitbang polling done, %u events\n", events);
++	/* A finger that is no longer reported was lifted (missed "up" report). */
++	for (unsigned id = 0; id < TOUCH_FINGERS; id++) {
++		if (fTouchDown[id] && !seen[id]) {
++			sweet_hid_touch((int)id, 0, fTouchX[id], fTouchY[id]);
++			fTouchDown[id] = false;
++		}
++	}
 +}
 +
 +/*
