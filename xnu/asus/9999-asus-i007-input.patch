@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,776 @@
+@@ -0,0 +1,828 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21725,6 +21725,8 @@
 +	uint64_t fGpiPa;
 +	unsigned fTxWp, fRxWp, fEvRp;
 +	static void poll(OSObject *owner, IOTimerEventSource *sender);
++	static void touchFired(OSObject *owner, IOTimerEventSource *sender);
++	IOTimerEventSource *fTouchTimer;
 +	IOMemoryMap *fCore, *fCnfg, *fObs;
 +	IOWorkLoop *fLoop;
 +	IOTimerEventSource *fTimer;
@@ -22139,6 +22141,8 @@
 +#define TRE_LINK        (1u << 11)
 +
 +extern "C" void flush_dcache64(addr64_t addr, unsigned count, boolean_t phys);
++/* Strong definition in bsd/dev/sweet_ufs.c (--ufs); kernels without UFS get this no-op. */
++extern "C" __attribute__((weak)) void asus_log_sync(void) {}
 +
 +bool
 +AsusPhoneInput::gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want)
@@ -22233,12 +22237,19 @@
 +void
 +AsusPhoneInput::touchGpi(IOMemoryMap *se)
 +{
-+	/* Linux geni_se_select_gpi_mode: SE IRQs off, DMA mode, GSI events on. */
-+	wr(se, 0xe1c, 0);
-+	wr(se, 0x614, 0);
-+	wr(se, 0x644, 0);
-+	wr(se, 0x258, rd(se, 0x258) | 1u);
-+	wr(se, 0xe18, 0xfu);
++	/*
++	 * Staged (image 0021 put the phone into Qualcomm EDL somewhere in here before the
++	 * log existed): boot-arg asusgpi=N runs stages 1..N; the log goes to flash
++	 * (asus_log_sync) right before each stage, so the last stage logged is the one
++	 * that crashed.
++	 */
++	uint32_t limit = 7;
++	PE_parse_boot_argn("asusgpi", &limit, sizeof(limit));
++#define STAGE(n, what) do { \
++	if (limit < (n)) { IOLog("ASUS GPI: stopping before stage %u (asusgpi=%u)\n", (n), limit); goto done; } \
++	IOLog("ASUS GPI: stage %u: %s\n", (n), (what)); \
++	asus_log_sync(); \
++} while (0)
 +	IOMemoryMap *gpi = map(GPI_PA, GPI_SIZE);
 +	fGpiMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
 +	    kIODirectionInOut | kIOMemoryPhysicallyContiguous, 0x4000, 0x0000fffffffff000ULL);
@@ -22251,9 +22262,24 @@
 +	fGpiPa = fGpiMem->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
 +	bzero(fGpiVa, 0x4000);
 +	flush_dcache64((addr64_t)(uintptr_t)fGpiVa, 0x4000, FALSE);
-+	IOLog("ASUS GPI: gpii %u before: ch0 %#x ch1 %#x ev %#x err %#x mem %#llx\n", (unsigned)GPII,
-+	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX), rd(gpi, G(0x23200)), fGpiPa);
-+	/* Leftover allocations (another EE before us): reset and free them first. */
++
++	STAGE(1u, "read GPII 1-6 contexts (HLOS gpii-mask 0x7e)");
++	for (unsigned n = 1; n <= 6; n++) {
++		uint32_t b = 0x20000 - GPI_EE + 0x4000 * n;
++		IOLog("ASUS GPI: gpii %u ch0 %#x ch1 %#x ev %#x err %#x\n", n, rd(gpi, b), rd(gpi, b + 0x80),
++		    rd(gpi, b + 0x1000), rd(gpi, b + 0x3200));
++	}
++	IOLog("ASUS GPI: dma memory %#llx\n", fGpiPa);
++
++	STAGE(2u, "SE4 to GPI mode (SE IRQs off, DMA_MODE_EN, GSI events)");
++	wr(se, 0xe1c, 0);
++	wr(se, 0x614, 0);
++	wr(se, 0x644, 0);
++	wr(se, 0x258, rd(se, 0x258) | 1u);
++	wr(se, 0xe18, 0xfu);
++	IOLog("ASUS GPI: se4 dma_mode=%#x gsi_ev=%#x status=%#x\n", rd(se, 0x258), rd(se, 0xe18), rd(se, 0x40));
++
++	STAGE(3u, "GPII 4: free leftovers, mask IRQs, allocate + configure the event ring");
 +	for (unsigned k = 0; k < 2; k++) {
 +		unsigned st = (rd(gpi, CH_CTX(k)) >> 20) & 0xf;
 +		if (st == 2) {
@@ -22296,9 +22322,9 @@
 +	wr(gpi, EV_CTX + 0x30, 0);
 +	wr(gpi, EV_CTX + 0x34, 0);
 +	fEvRp = 0;
-+	wr(gpi, EV_DB, (uint32_t)(fGpiPa + OFF_EV + 16 * (GPI_EVENTS - 1)));
-+	/* TX (chid 0, out) and RX (chid 1, in) channels on event ring 0, GPI protocol;
-+	 * scratch: pair channel, protocol 3 (I2C), serial engine 4. */
++	IOLog("ASUS GPI: ev %#x rp %#x\n", rd(gpi, EV_CTX), rd(gpi, EV_CTX + CTX_RP_LO));
++
++	STAGE(4u, "allocate + configure TX/RX channels (I2C, SE 4)");
 +	for (unsigned k = 0; k < 2; k++) {
 +		uint64_t ring = fGpiPa + (k ? OFF_RX : OFF_TX);
 +		if (!gpiCmd(gpi, CH_CMD, k, CH_CTX(k), 1)) {
@@ -22316,21 +22342,34 @@
 +		wr(gpi, CH_QOS(k), 1);
 +	}
 +	fTxWp = fRxWp = 0;
++	IOLog("ASUS GPI: ch0 %#x ch1 %#x\n", rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)));
++
++	STAGE(5u, "start TX/RX channels");
 +	for (unsigned k = 0; k < 2; k++) {
 +		if (!gpiCmd(gpi, CH_CMD, (1u << 24) | k, CH_CTX(k), 2)) {
 +			goto done;
 +		}
 +	}
-+	IOLog("ASUS GPI: gpii %u started: ch0 %#x ch1 %#x ev %#x\n", (unsigned)GPII,
-+	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX));
++	IOLog("ASUS GPI: started: ch0 %#x ch1 %#x ev %#x err %#x\n",
++	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX), rd(gpi, G(0x23200)));
++
++	STAGE(6u, "event ring doorbell");
++	wr(gpi, EV_DB, (uint32_t)(fGpiPa + OFF_EV + 16 * (GPI_EVENTS - 1)));
++	IODelay(1000);
++	IOLog("ASUS GPI: after ev doorbell: ev %#x err %#x glob %#x\n",
++	    rd(gpi, EV_CTX), rd(gpi, G(0x23200)), rd(gpi, G(0x23100)));
++
++	STAGE(7u, "transfer: channel doorbells (GPI DMA reads TREs)");
 +	{
 +		static const uint8_t regs[] = { 0xa3, 0xa6, 0x9f };
 +		for (unsigned i = 0; i < sizeof(regs); i++) {
 +			uint8_t v = 0;
 +			int e = gpiRead(gpi, regs[i], &v, 1);
 +			IOLog("ASUS TOUCH: fts 0x38 reg %#x -> %#x (err %d, gpi)\n", regs[i], v, e);
++			asus_log_sync();
 +		}
 +	}
++#undef STAGE
 +done:
 +	gpi->release();
 +}
@@ -22346,10 +22385,6 @@
 +		return false;
 +	}
 +	touchDiagnostics();
-+	uint32_t touch = 0;
-+	if (PE_parse_boot_argn("asustouch", &touch, sizeof(touch)) && touch) {
-+		touchBringup();
-+	}
 +	fCore = map(SPMI_CORE_PA, 0x2000);
 +	fCnfg = map(SPMI_CNFG_PA, 0x1000);
 +	fObs = map(SPMI_OBS_PA, 0x10000);
@@ -22384,9 +22419,26 @@
 +		return false;
 +	}
 +	fTimer->setTimeoutMS(POLL_MS);
++	uint32_t touch = 0, delay = 45;
++	if (PE_parse_boot_argn("asustouch", &touch, sizeof(touch)) && touch) {
++		/* After the UFS root and its flash log are up (image 0021 crashed before). */
++		PE_parse_boot_argn("asustouchdelay", &delay, sizeof(delay));
++		fTouchTimer = IOTimerEventSource::timerEventSource(this, &AsusPhoneInput::touchFired);
++		if (fTouchTimer && fLoop->addEventSource(fTouchTimer) == kIOReturnSuccess) {
++			fTouchTimer->setTimeoutMS(delay * 1000);
++			IOLog("ASUS TOUCH: bring-up in %u s\n", delay);
++		}
++	}
 +	registerService();
 +	IOLog("ASUS INPUT: buttons polled every %d ms (volume up + down = Home)\n", POLL_MS);
 +	return true;
++}
++
++void
++AsusPhoneInput::touchFired(OSObject *owner, IOTimerEventSource *sender)
++{
++	(void)sender;
++	((AsusPhoneInput *)owner)->touchBringup();
 +}
 +
 +void

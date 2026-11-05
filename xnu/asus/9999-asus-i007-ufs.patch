@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,917 @@
+@@ -0,0 +1,927 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -885,6 +885,16 @@
 +	if (error) {
 +		printf("ASUS: final log flush failed (%d)\n", error);
 +	}
++}
++
++/* For drivers stepping through risky hardware bring-up (AsusPhoneInput): put the log
++ * on flash before each step, so a fatal (EDL) crash still shows the last step. */
++void asus_log_sync(void);
++
++void
++asus_log_sync(void)
++{
++	asus_log_flush_now();
 +}
 +
 +static void
