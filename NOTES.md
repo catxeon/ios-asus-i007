@@ -61,6 +61,21 @@
   Write plan (needs the user's OK): re-dump and compare the on-disk GPT with the backup
   first; dd primary LBAs 1..5 (LBA 0 untouched) and the last 6 LBAs of sda, fsync, read
   back and compare; reboot; expect by-name/iosroot = sda24 and a normal Android boot.
+- **Step 3 DONE (user OK "Да, записывай", 2026-11-05): new GPT written.** On-disk GPT
+  re-checked against the backup (both SHA256 equal), images checked, then dd of primary
+  LBAs 1..5 and the last 6 LBAs (conv=fsync), blockdev --flushbufs + drop_caches, read
+  back = new images (toybox dd has no iflag=direct). Reboot: Android boot_completed;
+  by-name/iosroot -> sda24 (start 927662080, 67108824 512-byte sectors), userdata sda23
+  908840640 sectors, dm-11 resized with it, /data f2fs 433 GiB mounted, boot fsck "total
+  sectors 113605080 / FS sectors 113605075, No error was reported". Android kept, no
+  data lost. Undo = dd the saved lun0-gpt-*.bin back (f2fs stays 433 GiB).
+- iosroot is still empty (old userdata blocks, encrypted). Writing an HFS root image
+  there is a separate write step (needs the user's OK; dd from Android as root or
+  fastboot flash iosroot).
+- build-asus-image.sh ASUS_UFS=1 now passes ufsroot=${ASUS_UFS_ROOT:-iosroot}. Image
+  **0010** = 0009 + ufsroot=iosroot, SHA256 7fe1a47a...cca5bf (supersedes 0009, not
+  booted). Expected: partition list incl. `iosroot 0x6e96400 32767 MiB`, then
+  `"iosroot" on LUN 0: first block 0x6e96400, 32767 MiB, read-only`, probe 0, heartbeat.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

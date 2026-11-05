@@ -43,7 +43,7 @@ fi
 python3 "$repo/tools/mkadt-asus.py" "$out/asus.adt" "${adt_flags[@]}"
 cmdline='debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0'
 if [ "${ASUS_UFS:-0}" = 1 ]; then
-    cmdline+=' ufsprobe=1 ufslist=1'
+    cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
 fi
 if [ "${ASUS_IOS_USERLAND:-0}" = 1 ]; then
     [ "$#" -gt 1 ] || { echo 'iOS userspace requires an explicit HFS RAM root' >&2; exit 1; }
