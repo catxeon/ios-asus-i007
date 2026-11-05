@@ -124,6 +124,18 @@
   @bsd_init.c:937`. On a non-RAM-disk root bsd_init sends FSIOC_KERNEL_ROOTAUTH (sealed
   APFS); HFS cannot pass. Fix: --ufs now also takes sweet 0029 (print and continue).
   Note: the writable mount already removed 1 orphaned file + dir on iosroot.
+- **Image 0012** (kernel CI 42026509038 with 0029, SHA256 6ec041f9...f5fab3; user photo):
+  past the root-auth check, launchd ran; boot task `mount` (pid 2) exited 66 -> launchd
+  panic `mount[2] exited -- no exit reason available -- (signal 0, exit status 66)`. Before
+  that the kernel spent 23 s on a core dump of mount (~1 GB, `failed to write segment
+  ...: error 28` ENOSPC, then `core dump failed: error 14`). Exit 66 = sweet 0036's
+  "failed to get boot-manifest-hash". Fixes (commit d572246, CI 42028226278):
+  mkadt-asus.py --ios-gui adds /chosen boot-manifest-hash = SHA-384("asus i007 boot
+  manifest") (d9ca9f26...); bindfs added to FILESYS_BASE in the userland patch (sweet
+  0037; mount bind-mounts /private/preboot/<hex>/usr/standalone/firmware, ENODEV without
+  it); --ufs takes sweet 0039 (core dumps off unless sysctl kern.coredump=1).
+  Root free space: HFS LowDisk said freeblks 228291 (~0.9 GB free of the 12 GiB volume);
+  the 32 GiB partition is bigger than the volume - growing the HFS volume is a later step.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
