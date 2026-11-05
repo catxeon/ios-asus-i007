@@ -194,6 +194,19 @@
   swap). Next: console off for GUI boots (serial=0 or an asusfb_noconsole switch), keep
   the margins black, flash console log (sweet 0047 into the iosroot tail), touch +
   buttons drivers for the phone, battery power source, SMP.
+- **Image 0015** (kernel CI 42040319320 with AsusPhoneInput, commit 0d716d7; boot-arg
+  asusinput=1; SHA256 719e9f4f...cb10245; root still v14). User photo of the early log:
+  - SPMI: `arb=0x50020000 apids=512 pon-apid=88 volup-apid=122 pon=0x10/1 gpio6=0x1/1
+    mode=0/1 en=0x80/1 subtype=0x11/1` -> buttons polled every 20 ms. PON RT reads 0x10
+    at rest (bit 4; which bits are KPDPWR/RESIN on PMK8350 is to be confirmed by key
+    presses); GPIO 6 is an enabled digital input, high (not pressed, active low).
+  - Touch path as ABL leaves it: GCC 0x52008 = 0x83c2000 (QUP0 S4 bit 14 and s_ahb bit 7
+    NOT voted), S4 CBCR 0x80004220 (off), S4 RCG CMD 0x80000000 (root off) CFG 0x100000,
+    core/core2x CBCR 0x4220 (on), m_ahb 0 (on), s_ahb 0x80000002 (off) -> SE4 registers
+    not read. GPIO 20/21/22/23/131 all read cfg=0 io=0 because the diag used the DT node
+    base 0xf000000: the downstream lahaina pinctrl adds REG_BASE 0x100000, GPIO n is at
+    0xf100000 + 0x1000*n. Next: vote S4 + s_ahb, RCG from XO, read SE4 FW, fix the TLMM
+    base, then probe FocalTech 0x38 (no answer = rails L3C/L8C off).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
