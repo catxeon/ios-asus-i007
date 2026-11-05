@@ -92,5 +92,7 @@ if [ "${ASUS_IOS_USERLAND:-0}" = 1 ]; then
     # XNU's DEVELOPMENT macOS profile otherwise refuses an iOS-platform exec.
     cmdline+=' unentitled_ios_sim_launch=1'
 fi
+# ASUS_EXTRA_ARGS: more boot-args for experiments (e.g. asusgpu=1 asusepssen=1).
+[ -n "${ASUS_EXTRA_ARGS:-}" ] && cmdline+=" ${ASUS_EXTRA_ARGS}"
 python3 "$repo/tools/mkpayload.py" "$kernel" "$out/asus.adt" "$out/payload.bin" --ramdisk "$ramdisk" --cmdline "$cmdline"
 bash "$repo/shim/asus-xnu/build.sh" "$out/payload.bin"
