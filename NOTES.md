@@ -281,6 +281,17 @@
 - Next: bit-banged I2C on GPIO20/21 (TLMM only, no DMA, open drain via the OE bit),
   default when asusgpi is not given; reads FocalTech 0xa3/0x9f/0xa6/0xa8/0x02, scans the
   bus on NACK, then polls touches for 60 s while GPIO23 (IRQ) is low.
+- **Image 0026 (lab, kernel 42088068631): no EDL, self-reset back to Android.** Bit-bang
+  idle sda=1 scl=1, but 0x38 NACKs every register (ENXIO) and the 0x08..0x77 scan finds
+  nobody. Android's live DT (/proc/device-tree, phone rooted): focaltech@38 is the
+  active touch (driver fts_ts on i2c-1; st_fts@49 disabled), reset GPIO22, IRQ GPIO23,
+  vddio GPIO131, vdd-supply = pm8350c_l3 (3.008 V), vcc_i2c-supply = pm8350c_l8
+  (1.8 V), both enabled in Android; trusted-touch-mode vm_mode; i2c@990000 dmas tx/rx
+  (GPI). RPMh: cmd-db reserved-memory@80860000 (0x20000), apps_rsc drv-2 0x18220000,
+  qcom,tcs-offset 0xd00, drv-id 2, tcs-config 2 active / 3 sleep / 3 wake / 0 control.
+- Next (image 0027): cmd-db lookup of ldoc3/ldoc8 and an active-TCS vote (L8 1800 mV
+  HPM on, L3 3008 mV HPM on) before the pins/reset step (asustouchpower=0 skips it);
+  bit-bang self-test (driven-low readback).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

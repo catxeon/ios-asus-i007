@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1027 @@
+@@ -0,0 +1,1174 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21721,6 +21721,9 @@
 +	void abortCmd(IOMemoryMap *se);
 +	void touchGpi(IOMemoryMap *se);
 +	void touchBitbang(IOMemoryMap *tlmm);
++	void touchPower();
++	uint32_t cmdDbAddr(IOMemoryMap *db, const char *name);
++	bool rpmhSend(IOMemoryMap *drv, const uint32_t *addr, const uint32_t *data, unsigned n);
 +	bool gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want);
 +	int gpiRead(IOMemoryMap *gpi, uint8_t reg, uint8_t *out, unsigned len);
 +	/* GPI state for QUP0 GPII 4 (SE4 I2C) */
@@ -22045,6 +22048,14 @@
 +		IOLog("ASUS TOUCH: SE4 not an idle I2C engine; stopping\n");
 +		goto out;
 +	}
++	{
++		uint32_t power = 1;
++		PE_parse_boot_argn("asustouchpower", &power, sizeof(power));
++		if (power) {
++			amark("ASUS TOUCH: step: RPMh vote pm8350c L8 1.8 V + L3 3.008 V\n");
++			touchPower();
++		}
++	}
 +	amark("ASUS TOUCH: step: TLMM pins + reset pulse\n");
 +	/* Pins as the Android DT: SDA/SCL qup4 (function 1), 2 mA, no pull; IRQ input
 +	 * pull-up; IO supply enable high; reset low 5 ms, then high. */
@@ -22124,6 +22135,129 @@
 +	se->release();
 +	gcc->release();
 +	tlmm->release();
++}
++
++/*
++ * Touch power. Android DT: focaltech@38 vdd-supply = pm8350c_l3 (3.008 V), vcc_i2c-supply
++ * = pm8350c_l8 (1.8 V), both RPMh VRM resources ("ldoc3", "ldoc8"); image 0026 got no ACK
++ * anywhere on the bus with the bootloader's state. Addresses come from cmd-db
++ * (reserved-memory@80860000, qcom,cmd-db); the votes go through an active TCS of the
++ * apps RSC, HLOS DRV 2 (rsc@18200000: drv-2 at 0x18220000, qcom,tcs-offset 0xd00,
++ * tcs-config: 2 active, 3 sleep, 3 wake), as Linux rpmh-rsc (v2 register layout).
++ */
++#define CMD_DB_PA       0x80860000ULL
++#define CMD_DB_SIZE     0x20000
++#define RSC_DRV2_PA     0x18220000ULL
++#define RSC_DRV2_SIZE   0x10000
++#define TCS_BASE        0xd00
++#define TCS_STRIDE      0x2a0
++#define TCS_ID          1u              /* second active TCS */
++#define TCS_REG(r)      (TCS_BASE + TCS_STRIDE * TCS_ID + (r))
++#define TCS_CMD(r, j)   (TCS_REG(r) + 20 * (j))
++#define VRM_VOLTAGE     0x0
++#define VRM_ENABLE      0x4
++#define VRM_MODE        0x8
++#define PMIC5_LDO_HPM   7
++
++uint32_t
++AsusPhoneInput::cmdDbAddr(IOMemoryMap *db, const char *name)
++{
++	const uint8_t *p = (const uint8_t *)db->getVirtualAddress();
++	char id[9] = { 0 };
++	strlcpy(id, name, sizeof(id));
++	for (unsigned h = 0; h < 8; h++) {
++		const uint8_t *rh = p + 8 + 16 * h;
++		unsigned hoff = rh[2] | (rh[3] << 8), cnt = rh[6] | (rh[7] << 8);
++		for (unsigned j = 0; j < cnt; j++) {
++			const uint8_t *e = p + 144 + hoff + 24 * j;
++			if (e + 24 > p + CMD_DB_SIZE) {
++				break;
++			}
++			if (memcmp(e, id, 8) == 0) {
++				return e[16] | (e[17] << 8) | (e[18] << 16) | ((uint32_t)e[19] << 24);
++			}
++		}
++	}
++	return 0;
++}
++
++bool
++AsusPhoneInput::rpmhSend(IOMemoryMap *drv, const uint32_t *addr, const uint32_t *data, unsigned n)
++{
++	if (!rd(drv, TCS_REG(0x18))) {          /* RSC_DRV_STATUS: 0 = busy */
++		IOLog("ASUS RPMH: TCS %u busy (control %#x enable %#x)\n", TCS_ID,
++		    rd(drv, TCS_REG(0x14)), rd(drv, TCS_REG(0x1c)));
++		return false;
++	}
++	wr(drv, TCS_BASE + 0x08, 1u << TCS_ID);  /* IRQ_CLEAR */
++	wr(drv, TCS_REG(0x1c), 0);              /* CMD_ENABLE */
++	uint32_t mask = 0;
++	for (unsigned j = 0; j < n; j++) {
++		/* msgid: 4-byte payload, write, response requested (active request) */
++		wr(drv, TCS_CMD(0x30, j), 8u | (1u << 8) | (1u << 16));
++		wr(drv, TCS_CMD(0x34, j), addr[j]);
++		wr(drv, TCS_CMD(0x38, j), data[j]);
++		mask |= 1u << j;
++	}
++	wr(drv, TCS_REG(0x10), mask);           /* CMD_WAIT_FOR_CMPL */
++	wr(drv, TCS_REG(0x1c), mask);           /* CMD_ENABLE */
++	wr(drv, TCS_BASE + 0x00, rd(drv, TCS_BASE + 0x00) | (1u << TCS_ID));  /* IRQ_ENABLE (GIC line unused) */
++	uint32_t ctl = rd(drv, TCS_REG(0x14));  /* CONTROL: AMC mode, then trigger */
++	ctl &= ~(1u << 24);
++	wr(drv, TCS_REG(0x14), ctl);
++	ctl &= ~(1u << 16);
++	wr(drv, TCS_REG(0x14), ctl);
++	ctl |= 1u << 16;
++	wr(drv, TCS_REG(0x14), ctl);
++	ctl |= 1u << 24;
++	wr(drv, TCS_REG(0x14), ctl);
++	bool done = false;
++	for (unsigned i = 0; i < 2000 && !done; i++) {
++		done = rd(drv, TCS_BASE + 0x04) & (1u << TCS_ID);   /* IRQ_STATUS */
++		if (!done) {
++			IODelay(10);
++		}
++	}
++	for (unsigned j = 0; j < n; j++) {
++		IOLog("ASUS RPMH: cmd %u addr %#x data %#x status %#x\n", j, addr[j], data[j],
++		    rd(drv, TCS_CMD(0x3c, j)));
++	}
++	wr(drv, TCS_BASE + 0x08, 1u << TCS_ID);
++	wr(drv, TCS_REG(0x1c), 0);
++	wr(drv, TCS_REG(0x10), 0);
++	wr(drv, TCS_REG(0x14), rd(drv, TCS_REG(0x14)) & ~((1u << 24) | (1u << 16)));
++	return done;
++}
++
++void
++AsusPhoneInput::touchPower()
++{
++	IOMemoryMap *db = map(CMD_DB_PA, CMD_DB_SIZE);
++	if (!db) {
++		return;
++	}
++	const uint8_t *p = (const uint8_t *)db->getVirtualAddress();
++	uint32_t l3 = cmdDbAddr(db, "ldoc3"), l8 = cmdDbAddr(db, "ldoc8");
++	amark("ASUS RPMH: cmd-db version %#x magic %02x%02x%02x%02x: ldoc3 %#x ldoc8 %#x\n",
++	    p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24), p[4], p[5], p[6], p[7], l3, l8);
++	db->release();
++	if (!l3 || !l8 || (l3 >> 16) != (l8 >> 16)) {
++		IOLog("ASUS RPMH: VRM addresses not found, no vote\n");
++		return;
++	}
++	IOMemoryMap *drv = map(RSC_DRV2_PA, RSC_DRV2_SIZE);
++	if (!drv) {
++		return;
++	}
++	const uint32_t addr[] = { l8 + VRM_VOLTAGE, l8 + VRM_MODE, l8 + VRM_ENABLE,
++		                  l3 + VRM_VOLTAGE, l3 + VRM_MODE, l3 + VRM_ENABLE };
++	const uint32_t data[] = { 1800, PMIC5_LDO_HPM, 1, 3008, PMIC5_LDO_HPM, 1 };
++	amark("ASUS RPMH: TCS %u control %#x status %#x enable %#x: sending 6 votes\n", TCS_ID,
++	    rd(drv, TCS_REG(0x14)), rd(drv, TCS_REG(0x18)), rd(drv, TCS_REG(0x1c)));
++	bool ok = rpmhSend(drv, addr, data, 6);
++	amark("ASUS RPMH: votes %s\n", ok ? "completed" : "NOT completed");
++	drv->release();
++	IOSleep(20);
 +}
 +
 +/*
@@ -22223,6 +22357,19 @@
 +	b.rel(b.sclCfg);
 +	IODelay(50);
 +	IOLog("ASUS TOUCH: bitbang idle sda=%u scl=%u\n", b.sda(), b.scl());
++	/* Self-test: does enabling the output really pull each line low? */
++	b.low(b.sdaCfg);
++	IODelay(10);
++	unsigned sdaLow = b.sda();
++	b.rel(b.sdaCfg);
++	IODelay(10);
++	b.low(b.sclCfg);
++	IODelay(10);
++	unsigned sclLow = b.scl();
++	b.rel(b.sclCfg);
++	IODelay(10);
++	IOLog("ASUS TOUCH: bitbang self-test: sda driven low reads %u, scl driven low reads %u, released %u/%u\n",
++	    sdaLow, sclLow, b.sda(), b.scl());
 +	b.recover();
 +	static const uint8_t regs[] = { 0xa3, 0x9f, 0xa6, 0xa8, 0x02 };   /* chip ID, ID low, FW, vendor, touches */
 +	unsigned acks = 0;
