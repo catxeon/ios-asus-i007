@@ -15,7 +15,7 @@ parser.add_argument('--display', action='store_true', help='Include ASUS boot fr
 parser.add_argument('--compositor', action='store_true', help='Include the QEMU compositor signature policy')
 parser.add_argument('--userland', action='store_true',
                     help='Include iOS daemon support: permissive Sandbox policy, rootrw=1, '
-                         'HFS rename swap, no external ACL resolver')
+                         'HFS rename swap, no external ACL resolver, pid_hibernate syscall')
 parser.add_argument('--input', action='store_true',
                     help='Include HID event services (touch, buttons) and the QEMU virtio input '
                          'source (boot-arg asus_virtio_input=1)')
@@ -54,6 +54,9 @@ if args.input:
     selected.append(repo / 'xnu/asus/9999-asus-i007-input.patch')
 if args.userland:
     selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
+    # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
+    # app leaves the foreground: SIGSYS (QEMU: EXC_CRASH code 0xc000000 after a swipe).
+    selected.append(repo / 'xnu/patches/0070-sweet-pid-hibernate.patch')
 manifest = []
 for path in selected:
     data = path.read_bytes().replace(b'\r\n', b'\n')
