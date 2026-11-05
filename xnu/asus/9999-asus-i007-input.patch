@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1266 @@
+@@ -0,0 +1,1323 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21714,6 +21714,7 @@
 +	uint16_t findApid(uint16_t ppid, uint32_t count);
 +	bool spmiRead(uint16_t apid, uint16_t addr, uint8_t *out);
 +	void touchDiagnostics();
++	void cpuFreq();
 +	void touchBringup();
 +	void wr(IOMemoryMap *m, uint32_t off, uint32_t v);
 +	bool waitClear(IOMemoryMap *m, uint32_t off, uint32_t mask);
@@ -22798,6 +22799,61 @@
 +	gpi->release();
 +}
 +
++/*
++ * CPU frequency. Nothing under XNU drives the SM8350 cpufreq hardware, so the cores
++ * stay at whatever the bootloader left. EPSS (Android DT qcom,cpufreq-epss; Linux
++ * qcom-cpufreq-hw epss_soc_data): one 4 KiB block per frequency domain, 0x18591000
++ * cpu0-3 (A55), 0x18592000 cpu4-6 (A78), 0x18593000 cpu7 (X1); 0x0 enable,
++ * 0x20 domain state (bits 7:0 = current L value), 0x100 frequency LUT (4-byte rows,
++ * bits 7:0 L value x 19.2 MHz, bits 31:30 source), 0x320 perf-state request (LUT index).
++ * Voltage follows in firmware (CPUCP). Boot-arg asuscpufreq=0 only logs,
++ * asuscpufreq=N caps the request at LUT index N-1; default: the highest entry.
++ */
++void
++AsusPhoneInput::cpuFreq()
++{
++	static const uint64_t domains[] = { 0x18591000ULL, 0x18592000ULL, 0x18593000ULL };
++	uint32_t want = 0xff;
++	PE_parse_boot_argn("asuscpufreq", &want, sizeof(want));
++	for (unsigned d = 0; d < 3; d++) {
++		IOMemoryMap *m = map(domains[d], 0x1000);
++		if (!m) {
++			continue;
++		}
++		uint32_t en = rd(m, 0x0), state = rd(m, 0x20);
++		unsigned n = 0, top = 0;
++		uint32_t prevL = 0;
++		char lut[160];
++		size_t pos = 0;
++		lut[0] = 0;
++		for (unsigned i = 0; i < 40; i++) {
++			uint32_t row = rd(m, 0x100 + 4 * i), l = row & 0xff;
++			if (i > 0 && l == prevL) {
++				break;                  /* EPSS repeats the last entry */
++			}
++			if (l) {
++				top = i;
++			}
++			prevL = l;
++			n++;
++			if (pos + 8 < sizeof(lut)) {
++				pos += (size_t)snprintf(lut + pos, sizeof(lut) - pos, " %u", (l * 192u) / 10u);
++			}
++		}
++		IOLog("ASUS CPUFREQ: domain %u enable %#x state %#x (%u MHz) perf %#x, %u levels (MHz):%s\n",
++		    d, en, state, ((state & 0xff) * 192u) / 10u, rd(m, 0x320), n, lut);
++		if ((en & 1) && want != 0 && n > 0) {
++			unsigned idx = want == 0xff ? top : (want - 1 < top ? want - 1 : top);
++			wr(m, 0x320, idx);
++			IODelay(500);
++			uint32_t now = rd(m, 0x20);
++			IOLog("ASUS CPUFREQ: domain %u perf-state %u -> state %#x (%u MHz)\n",
++			    d, idx, now, ((now & 0xff) * 192u) / 10u);
++		}
++		m->release();
++	}
++}
++
 +bool
 +AsusPhoneInput::start(IOService *provider)
 +{
@@ -22808,6 +22864,7 @@
 +	if (!IOService::start(provider)) {
 +		return false;
 +	}
++	cpuFreq();
 +	touchDiagnostics();
 +	fCore = map(SPMI_CORE_PA, 0x2000);
 +	fCnfg = map(SPMI_CNFG_PA, 0x1000);
