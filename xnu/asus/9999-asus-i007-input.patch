@@ -22252,7 +22252,7 @@
 +	fGpiPa = fGpiMem->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
 +	bzero(fGpiVa, 0x4000);
 +	flush_dcache64((addr64_t)(uintptr_t)fGpiVa, 0x4000, FALSE);
-+	IOLog("ASUS GPI: gpii %u before: ch0 %#x ch1 %#x ev %#x err %#x mem %#llx\n", GPII,
++	IOLog("ASUS GPI: gpii %u before: ch0 %#x ch1 %#x ev %#x err %#x mem %#llx\n", (unsigned)GPII,
 +	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX), rd(gpi, G(0x23200)), fGpiPa);
 +	/* Leftover allocations (another EE before us): reset and free them first. */
 +	for (unsigned k = 0; k < 2; k++) {
@@ -22322,7 +22322,7 @@
 +			goto done;
 +		}
 +	}
-+	IOLog("ASUS GPI: gpii %u started: ch0 %#x ch1 %#x ev %#x\n", GPII,
++	IOLog("ASUS GPI: gpii %u started: ch0 %#x ch1 %#x ev %#x\n", (unsigned)GPII,
 +	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX));
 +	{
 +		static const uint8_t regs[] = { 0xa3, 0xa6, 0x9f };
