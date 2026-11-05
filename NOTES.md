@@ -310,6 +310,18 @@
   579 s; first 3072 x 4 MiB = 528ab8ee... = v14 on the first check (the tail arrived
   this time; the separate last-32-MiB push was not needed). Note: from Git Bash, `adb
   push X /data/...` needs MSYS_NO_PATHCONV=1 (the remote path got rewritten).
+- CI moved to macos-15 (macos-14 retired 2026-11-02: jobs were cancelled after 3 s with
+  "The configuration 'macos-14-arm64-us-default' is not supported"); first macos-15 run
+  42095520845 succeeded.
+- **Image 0028 (iOS from iosroot v14, kernel 42095520845, asusreboot=600): touch reaches
+  iOS.** Bring-up at 45 s (log ready at once on the disk root): RPMh votes completed,
+  FT5652 ID read, "FocalTech reports -> iOS (poll 8 ms, 10 fingers)", and
+  `SWEET HID: touch N down/up at x,y` follow the user's finger; SweetHIDTouch and
+  SweetHIDButtons opened by backboardd's IOHIDEventServiceUserClient. No lock screen
+  within 600 s: only 3 FB swaps (Apple logo); in 0014 the lock screen took 20+ min
+  (cpus=1, fresh root = data migration again). Bug: the report loop read n+1 points,
+  the stale extra one produced phantom fingers 1/2 -> fixed (i < n; missed lifts are
+  released by the "not seen" pass). Next run: asusreboot=2700.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

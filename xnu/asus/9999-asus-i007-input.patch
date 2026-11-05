@@ -22450,7 +22450,7 @@
 +	}
 +	bool seen[TOUCH_FINGERS] = { false };
 +	unsigned n = d[0] & 0xf;
-+	for (unsigned i = 0; i < TOUCH_FINGERS && i < n + 1; i++) {
++	for (unsigned i = 0; i < TOUCH_FINGERS && i < n; i++) {
 +		const uint8_t *p = d + 1 + 6 * i;
 +		unsigned ev = p[0] >> 6, id = p[2] >> 4;
 +		if (ev == 3 || id >= TOUCH_FINGERS || p[0] == 0xff) {
