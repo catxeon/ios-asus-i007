@@ -155,6 +155,23 @@
   variable tail, several MiB) - rewrote the last 32 MiB (blocks 3064..3071) from a pushed
   file; sda24 first 12 GiB = b7c0a839... = v13. Rule: always rewrite the last 32 MiB
   from a file and hash-check the whole range.
+- **Image 0014 on iosroot=v13 (user photo):** keybag passes; boot tasks auearlyboot (no
+  accessories), tzinit (bad zoneinfo link, resets), FinishRestoreFromBackup,
+  finish_demo_restore, sysstatuscheck, prng_seedctl (no kernel prng seed / virtual random
+  -147, non-fatal) run; launchd_cache_loader: `Using unsecure cache:
+  /System/Library/xpc/launchd.plist` then `abort: Failed to open fd [2|No such file or
+  directory]` -> launchd panic `launchd_cache_loader[22] exited -- exit reason namespace 7
+  subcode 0x1`. Our roots never had /System/Library/xpc (make_springboard_v8 excluded it).
+  QEMU msgbuf shows why it never mattered there: with the RAM-disk root launchd logs
+  "Skipping boot-task" for mount-phase-1, keybag, fips, tzinit, auearlyboot, ... and loads
+  the job files of /System/Library/LaunchDaemons directly (11 jobs; backboardd's is
+  dev.asus.launchd-probe.plist). On the disk root every boot task runs.
+- Root **v14** (../make_springboard_v14.py) = v13 + /System/Library/xpc/launchd.plist
+  (binary, 498749 bytes): LaunchDaemons = exactly this root's 11 job files (SpringBoard,
+  backboardd, cfprefsd, containermanagerd, iconservicesagent, lsd, usermanagerd,
+  mobileactivationd, mobilegestalt, notifyd, runningboardd); AppExtensions,
+  AppRemovalServices, SystemLibraryTreeState, Symlinks, VersionNumber 7 from the 20H392
+  OS cache. fsck OK, SHA256 528ab8ee7774f0c39cc70cac95bdc271c7a24994cbdbe2885666decf2b8bc828.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
