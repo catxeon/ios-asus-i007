@@ -150,7 +150,11 @@
   b7c0a839d25f142c57c6d1519eede1297c09cc189ba7b0cda9345f4af66b7871 (v12 unchanged);
   phone boot-args add launchd_unsecure_cache=1 (sweet's next wall: launchd_cache_loader
   "Unable to find AMFI"). Image **0014** = kernel 42028226278 + new ADT/boot-args,
-  SHA256 c128a630...dbd16. iosroot being rewritten with v13 (full: rw boots changed it).
+  SHA256 c128a630...dbd16. iosroot rewritten with v13 (full: rw boots changed it):
+  exec-in 637 s; this time blocks 3070 AND 3071 were lost (the piped stream drops a
+  variable tail, several MiB) - rewrote the last 32 MiB (blocks 3064..3071) from a pushed
+  file; sda24 first 12 GiB = b7c0a839... = v13. Rule: always rewrite the last 32 MiB
+  from a file and hash-check the whole range.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
