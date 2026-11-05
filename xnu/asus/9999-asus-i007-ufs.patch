@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,978 @@
+@@ -0,0 +1,986 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -909,6 +909,14 @@
 +/* printf/IOLog only queue text for the console thread: a marker printed right before a
 + * fatal step is not in the ring yet when the step kills the SoC. Put it there directly. */
 +void asus_log_mark(const char *line);
++bool asus_log_ready(void);
++
++/* True once the log area is known and writable: callers wait for it before risky steps. */
++bool
++asus_log_ready(void)
++{
++	return su.ready && su.writable && su.nblocks >= 2 * SWEET_LOG_BLOCKS;
++}
 +
 +void
 +asus_log_mark(const char *line)

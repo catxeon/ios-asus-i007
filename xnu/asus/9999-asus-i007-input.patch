@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,854 @@
+@@ -0,0 +1,875 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21681,6 +21681,7 @@
 +
 +extern "C" void sweet_hid_key(int key, int down);
 +extern "C" void asus_log_mark(const char *line);   /* bsd/dev/sweet_ufs.c; weak fallback below */
++extern "C" bool asus_log_ready(void);
 +static void amark(const char *fmt, ...) __printflike(1, 2);
 +
 +#define SPMI_CORE_PA    0x0c440000ULL
@@ -22155,6 +22156,12 @@
 +	IOLog("%s", line);
 +}
 +
++extern "C" __attribute__((weak)) bool
++asus_log_ready(void)
++{
++	return false;                   /* no flash log in this kernel: never run the bring-up */
++}
++
 +/*
 + * Progress marker for risky steps: IOLog/printf only queue text for the console thread,
 + * so a marker printed right before a fatal (EDL) step never reached the flash log
@@ -22463,7 +22470,21 @@
 +void
 +AsusPhoneInput::touchFired(OSObject *owner, IOTimerEventSource *sender)
 +{
-+	(void)sender;
++	/*
++	 * Never run the risky bring-up before the flash log works: with a RAM root the UFS
++	 * driver comes up late, and image 0024 crashed into EDL with no log at all. Wait for
++	 * it (2 s steps, up to 5 min), then skip the bring-up if it never comes.
++	 */
++	static unsigned waits;
++	if (!asus_log_ready()) {
++		if (++waits <= 150) {
++			sender->setTimeoutMS(2000);
++		} else {
++			IOLog("ASUS TOUCH: no flash log after 300 s, bring-up skipped\n");
++		}
++		return;
++	}
++	amark("ASUS TOUCH: flash log ready (waited %u s), starting bring-up\n", 2 * waits);
 +	((AsusPhoneInput *)owner)->touchBringup();
 +}
 +
