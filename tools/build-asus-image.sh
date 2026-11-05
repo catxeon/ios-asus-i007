@@ -59,6 +59,8 @@ if [ "${ASUS_UFS:-0}" = 1 ]; then
         cmdline+=' ignition_level=1 interrupt-masked-debug-mode=0 sched-preemption-disable-debug-mode=0'
         # launchd_cache_loader needs an AMFI IOService to trust launchd.plist (sweet 0039u).
         cmdline+=' launchd_unsecure_cache=1'
+        # AsusPhoneInput: PMIC buttons (vol up + down = Home) and touch diagnostics.
+        cmdline+=' asusinput=1'
     else
         cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
     fi

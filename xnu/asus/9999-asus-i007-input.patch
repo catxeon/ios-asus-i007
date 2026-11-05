@@ -21642,9 +21642,259 @@
 +	sender->setTimeoutMS(VIO_POLL_MS);
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- /dev/null
++++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
+@@ -0,0 +1,247 @@
++/*
++ * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
++ * QEMU has none of these blocks).
++ *
++ * Buttons, as sweet's bsd/dev/sweet_keys.c: PMIC access is READ ONLY through
++ * the SPMI arbiter v5 observer channel of EE 0 (the only MMIO write issues an
++ * EXT_READL). SM8350 has the same arbiter layout as sweet's SM7150 (core
++ * 0xc440000, cnfg 0xc40a000, obsrvr 0xe600000). Live DT: power key and
++ * volume-down are the PMK8350 (SID 0) PON KPDPWR/RESIN bits, real-time status
++ * 0x1310 (pon_hlos@1300); volume-up is PM8350 (SID 1) GPIO 6, active low,
++ * real-time status 0x8d10. Polled every 20 ms into SweetHIDButtons
++ * (sweet_hid_key: 0 power, 1 volume up, 2 volume down, 3 home). Pressing
++ * volume up and volume down together is Home (iOS has no Home key here, and
++ * there is no touch driver yet).
++ *
++ * Touch diagnostics (read only, once): the FocalTech panel controller sits on
++ * QUP0 SE4 (i2c@990000, address 0x38; SDA/SCL GPIO 20/21, reset GPIO 22, IRQ
++ * GPIO 23, IO supply enable GPIO 131; rails pm8350c L3/L8). Print what ABL
++ * left: GCC QUP0 votes and branch clocks, the TLMM pin configs, and the SE4
++ * firmware/status only when its AHB clocks are running (reading an unclocked
++ * SE stalls the bus).
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <IOKit/IOLib.h>
++#include <IOKit/IOService.h>
++#include <IOKit/IOWorkLoop.h>
++#include <IOKit/IOTimerEventSource.h>
++#include <IOKit/IODeviceMemory.h>
++#include <pexpert/pexpert.h>
++
++extern "C" void sweet_hid_key(int key, int down);
++
++#define SPMI_CORE_PA    0x0c440000ULL
++#define SPMI_CNFG_PA    0x0c40a000ULL
++#define SPMI_OBS_PA     0x0e600000ULL
++#define PON_PPID        0x013           /* SID 0, peripheral 0x13 (pon_hlos) */
++#define PON_RT          0x1310
++#define VOLUP_PPID      0x18d           /* SID 1, peripheral 0x8d (GPIO 6) */
++#define VOLUP_RT        0x8d10
++#define NO_APID         0xffff
++#define POLL_MS         20
++
++#define GCC_PA          0x00100000ULL
++#define GCC_SIZE        0x60000
++#define TLMM_PA         0x0f000000ULL
++#define TLMM_SIZE       0x84000         /* up to GPIO 131 */
++#define SE4_PA          0x00990000ULL
++
++class AsusPhoneInput : public IOService {
++	OSDeclareDefaultStructors(AsusPhoneInput);
++public:
++	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++private:
++	IOMemoryMap *map(uint64_t pa, uint64_t size);
++	uint32_t rd(IOMemoryMap *m, uint32_t off);
++	uint16_t findApid(uint16_t ppid, uint32_t count);
++	bool spmiRead(uint16_t apid, uint16_t addr, uint8_t *out);
++	void touchDiagnostics();
++	static void poll(OSObject *owner, IOTimerEventSource *sender);
++	IOMemoryMap *fCore, *fCnfg, *fObs;
++	IOWorkLoop *fLoop;
++	IOTimerEventSource *fTimer;
++	uint16_t fPonApid, fVolUpApid;
++	uint32_t fLastStatus, fErrors;
++	int fState[4];
++};
++OSDefineMetaClassAndStructors(AsusPhoneInput, IOService);
++
++IOMemoryMap *
++AsusPhoneInput::map(uint64_t pa, uint64_t size)
++{
++	IODeviceMemory *range = IODeviceMemory::withRange(pa, size);
++	IOMemoryMap *m = range ? range->map(kIOMapInhibitCache) : NULL;
++	OSSafeReleaseNULL(range);
++	return m;
++}
++
++uint32_t
++AsusPhoneInput::rd(IOMemoryMap *m, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(m->getVirtualAddress() + off);
++	__asm__ volatile ("dmb oshld" ::: "memory");
++	return v;
++}
++
++/* v5 can map one PPID more than once; prefer the apps-owned entry (sweet). */
++uint16_t
++AsusPhoneInput::findApid(uint16_t ppid, uint32_t count)
++{
++	uint16_t found = NO_APID;
++	for (uint32_t i = 0; i < count; i++) {
++		uint32_t m = rd(fCore, 0x900 + 4 * i);
++		if (m == 0 || ((m >> 8) & 0xfff) != ppid) {
++			continue;
++		}
++		uint32_t owner = rd(fCnfg, 0x700 + 4 * i) & 7;
++		if (found == NO_APID || owner == 0) {
++			found = (uint16_t)i;
++		}
++	}
++	return found;
++}
++
++bool
++AsusPhoneInput::spmiRead(uint16_t apid, uint16_t addr, uint8_t *out)
++{
++	if (apid == NO_APID) {
++		return false;
++	}
++	uint32_t off = 0x80 * apid;                     /* observer, EE 0 */
++	volatile uint32_t *cmd = (volatile uint32_t *)(fObs->getVirtualAddress() + off);
++	__asm__ volatile ("dmb oshst" ::: "memory");
++	*cmd = (1u << 27) | ((uint32_t)(addr & 0xff) << 4);     /* EXT_READL, 1 byte */
++	__asm__ volatile ("dsb osh" ::: "memory");
++	for (unsigned i = 0; i < 1000; i++) {
++		fLastStatus = rd(fObs, off + 0x08);
++		if (fLastStatus & 1) {
++			if (fLastStatus & 0x0e) {
++				return false;
++			}
++			*out = (uint8_t)rd(fObs, off + 0x18);
++			return true;
++		}
++		IODelay(1);
++	}
++	return false;
++}
++
++void
++AsusPhoneInput::touchDiagnostics()
++{
++	IOMemoryMap *gcc = map(GCC_PA, GCC_SIZE), *tlmm = map(TLMM_PA, TLMM_SIZE);
++	if (!gcc || !tlmm) {
++		IOLog("ASUS INPUT: touch diag: GCC/TLMM mapping failed\n");
++		OSSafeReleaseNULL(gcc);
++		OSSafeReleaseNULL(tlmm);
++		return;
++	}
++	uint32_t vote = rd(gcc, 0x52008);
++	uint32_t s4 = rd(gcc, 0x174cc), core = rd(gcc, 0x23000), core2x = rd(gcc, 0x23008);
++	uint32_t mahb = rd(gcc, 0x17004), sahb = rd(gcc, 0x17008);
++	IOLog("ASUS INPUT: touch diag: GCC vote 0x52008=%#x s4 cbcr=%#x rcg=%#x/%#x core=%#x core2x=%#x m_ahb=%#x s_ahb=%#x\n",
++	    vote, s4, rd(gcc, 0x174d0), rd(gcc, 0x174d4), core, core2x, mahb, sahb);
++	static const unsigned pins[] = { 20, 21, 22, 23, 131 };
++	for (unsigned i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
++		uint32_t base = pins[i] * 0x1000;
++		IOLog("ASUS INPUT: touch diag: gpio%u cfg=%#x io=%#x\n", pins[i],
++		    rd(tlmm, base), rd(tlmm, base + 4));
++	}
++	/* CBCR bit 31 = CLK_OFF. Touch the SE only if its bus clocks run. */
++	if (!(mahb & 0x80000000u) && !(sahb & 0x80000000u) && !(s4 & 0x80000000u)) {
++		IOMemoryMap *se = map(SE4_PA, 0x4000);
++		if (se) {
++			uint32_t fw = rd(se, 0x68);
++			IOLog("ASUS INPUT: touch diag: se4 fw=%#x proto=%u status=%#x\n",
++			    fw, (fw >> 8) & 0xff, rd(se, 0x40));
++			se->release();
++		}
++	} else {
++		IOLog("ASUS INPUT: touch diag: se4 clocks off, SE registers not read\n");
++	}
++	gcc->release();
++	tlmm->release();
++}
++
++bool
++AsusPhoneInput::start(IOService *provider)
++{
++	uint32_t on = 0;
++	if (!PE_parse_boot_argn("asusinput", &on, sizeof(on)) || !on) {
++		return false;
++	}
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	touchDiagnostics();
++	fCore = map(SPMI_CORE_PA, 0x2000);
++	fCnfg = map(SPMI_CNFG_PA, 0x1000);
++	fObs = map(SPMI_OBS_PA, 0x10000);
++	if (!fCore || !fCnfg || !fObs) {
++		IOLog("ASUS INPUT: SPMI mapping failed\n");
++		return false;
++	}
++	uint32_t version = rd(fCore, 0), count = rd(fCore, 4) & 0x7ff;
++	if (version < 0x50000000u || version >= 0x70000000u || count == 0 || count > 512) {
++		IOLog("ASUS INPUT: unsupported SPMI arbiter version=%#x apids=%u\n", version, count);
++		return false;
++	}
++	fPonApid = findApid(PON_PPID, count);
++	fVolUpApid = findApid(VOLUP_PPID, count);
++	uint8_t pon = 0, gpio = 0, mode = 0, en = 0, subtype = 0;
++	bool pok = spmiRead(fPonApid, PON_RT, &pon);
++	bool gok = spmiRead(fVolUpApid, VOLUP_RT, &gpio);
++	bool mok = spmiRead(fVolUpApid, 0x8d40, &mode);
++	bool eok = spmiRead(fVolUpApid, 0x8d46, &en);
++	bool sok = spmiRead(fVolUpApid, 0x8d05, &subtype);
++	IOLog("ASUS INPUT: arb=%#x apids=%u pon-apid=%u volup-apid=%u pon=%#x/%d gpio6=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
++	    version, count, fPonApid, fVolUpApid, pon, pok, gpio, gok, mode, mok, en, eok, subtype, sok);
++	/* GPIO configuration belongs to firmware: diagnose, never repair it here. */
++	unsigned dir = (subtype >= 0x10 && subtype <= 0x13) ? (mode & 3) : ((mode >> 4) & 7);
++	if (!eok || !mok || !sok || !(en & 0x80) || (dir != 0 && dir != 2)) {
++		IOLog("ASUS INPUT: volume-up GPIO not confirmed as an enabled input; volume up withheld\n");
++		fVolUpApid = NO_APID;
++	}
++	fLoop = IOWorkLoop::workLoop();
++	fTimer = IOTimerEventSource::timerEventSource(this, &AsusPhoneInput::poll);
++	if (!fLoop || !fTimer || fLoop->addEventSource(fTimer) != kIOReturnSuccess) {
++		return false;
++	}
++	fTimer->setTimeoutMS(POLL_MS);
++	registerService();
++	IOLog("ASUS INPUT: buttons polled every %d ms (volume up + down = Home)\n", POLL_MS);
++	return true;
++}
++
++void
++AsusPhoneInput::poll(OSObject *owner, IOTimerEventSource *sender)
++{
++	AsusPhoneInput *self = (AsusPhoneInput *)owner;
++	uint8_t pon = 0, gpio = 0;
++	bool pok = self->spmiRead(self->fPonApid, PON_RT, &pon);
++	bool gok = self->spmiRead(self->fVolUpApid, VOLUP_RT, &gpio);
++
++	if (!pok) {
++		if ((self->fErrors++ % 250) == 0) {
++			IOLog("ASUS INPUT: PON read error status=%#x\n", self->fLastStatus);
++		}
++	} else {
++		self->fErrors = 0;
++	}
++	int now[4] = {
++		pok ? !!(pon & 1) : self->fState[0],
++		gok ? !(gpio & 1) : 0,
++		pok ? !!(pon & 2) : self->fState[2],
++		0,
++	};
++	now[3] = now[1] && now[2];
++	for (int k = 0; k < 4; k++) {
++		if (now[k] != self->fState[k]) {
++			self->fState[k] = now[k];
++			IOLog("ASUS INPUT: key %d %s (pon=%#x gpio6=%#x)\n", k, now[k] ? "down" : "up", pon, gpio);
++			sweet_hid_key(k, now[k]);
++		}
++	}
++	sender->setTimeoutMS(POLL_MS);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
-@@ -8,2 +8,9 @@
+@@ -8,2 +8,10 @@
  
 +# ASUS input (profile --input)
 +iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
@@ -21652,11 +21902,12 @@
 +iokit/Kernel/arm/hid/IOHIDEventServiceQueue.cpp                  optional iokitcpp
 +iokit/Kernel/arm/hid/IOHIDEventServiceUserClient.cpp             optional iokitcpp
 +iokit/Kernel/arm/AsusVirtioInput.cpp                             optional iokitcpp
++iokit/Kernel/arm/AsusPhoneInput.cpp                              optional iokitcpp
 +
  # SWEET device-tree platform (empty translation unit on other boards)
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -38,2 +38,17 @@
+@@ -38,2 +38,22 @@
      "   {"
 +    "     'IOClass'         = SweetHIDButtons;"
 +    "     'IOProviderClass' = IOResources;"
@@ -21671,6 +21922,11 @@
 +    "     'IOClass'         = AsusVirtioInput;"
 +    "     'IOProviderClass' = IOResources;"
 +    "     'IOMatchCategory' = AsusVirtioInput;"
++    "   },"
++    "   {"
++    "     'IOClass'         = AsusPhoneInput;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = AsusPhoneInput;"
 +    "   },"
 +    "   {"
      "     'IOClass'         = SweetPlatformExpert;"
