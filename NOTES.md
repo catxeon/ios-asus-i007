@@ -2,6 +2,41 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### Phone path (2026-11-05): read-only UFS driver, storage facts
+
+- Phone facts (adb, read-only; root via Magisk `su` for sysfs): ASUS_I007D, WW_I007D,
+  Android 11 (RKQ1.201112.002, 18.1055.2307.269), kernel 5.4.210picasso-qgki-perf,
+  bootloader unlocked (verifiedbootstate orange). /data = f2fs on sda23, 465 GB, 27 GB
+  used; FBE v2 + metadata encryption, hardware-wrapped keys (`wrappedkey_v0`, inlinecrypt);
+  `fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0,
+  metadata_encryption=aes-256-xts:wrappedkey_v0, checkpoint=fs`.
+- LUN 0 (sda): 994770944 x 512 B (474 GiB), 4 KiB logical blocks; fully allocated.
+  userdata sda23 starts at 512-sector 18821440, 975949464 sectors, ends 40 sectors
+  (backup GPT) before the LUN end. super sda19 7 GiB (full, lpdump group max 7.5 GB),
+  xrom_a/xrom_b 512 MiB each, asdf 384 MiB: no space for an iOS root outside userdata.
+- No-wipe option (NOT done, each write needs the user's explicit OK): the phone kernel
+  has f2fs_resize_fs (F2FS_IOC_RESIZE_FS, online shrink of the mounted /data as root),
+  then shrink the userdata GPT entry from the END (start unchanged: metadata-encryption
+  sector numbers stay valid) and add an `iosroot` partition (~32 GiB) after it; root it
+  with ufsroot=iosroot. Risks: online f2fs shrink is rarely used on phones; live GPT edit.
+  Alternatives: raw HFS image in userdata (Android lost), or disable encryption via
+  vendor fstab + format (wipe once). User prefers keeping Android.
+- `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
+  xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
+  0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
+  verifier requires the guard), host ver/cap/state printed, ufslist=1 lists LUN 0 GPT,
+  ufsprobe=1 runs the driver while the root stays the RAM disk. ADT /sweet-ufs only with
+  mkadt-asus.py --ufs. Same host address as sweet (0x1d84000); ASUS DT says dma-coherent
+  and an SMMU stream (iommus) - whether ABL leaves it in bypass is untested.
+- Image **0009** (`ASUS_UFS=1 ASUS_XNU_VERSION=0009 bash tools/build-asus-image.sh
+  KERNEL ../asus-hfs-root/mac/asus-own-init.hfs`): boot-args `... rd=md0 ufsprobe=1
+  ufslist=1`, SHA256 d35a25716a58987e71a949f514f738c3469fbc3a953fc8e6805957fd4bd28d4a.
+  NOT booted yet. Expected screen: `SWEET UFS: host ver ... hce 0x1 hcs ...`, the LUN 0
+  partition list (23 entries, userdata at 4K block 0x23e628 = 18821440/8), `"userdata" on LUN 0
+  ... read-only`, `ASUS UFS probe: 0 (root stays md0)`, then our init heartbeat. A host
+  not ready / timeout message would point at ABL state or the SMMU. Return to Android:
+  Power + Volume Down.
+
 ### Phase 7 (2026-11-04 afternoon): backboardd system container
 
 - ABORT CAUSE (QEMU, ../qemu-asus-backboardd-throw/symbolicated.txt):
