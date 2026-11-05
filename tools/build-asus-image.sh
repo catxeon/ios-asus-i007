@@ -66,6 +66,15 @@ if [ "${ASUS_UFS:-0}" = 1 ]; then
         [ -n "${ASUS_REBOOT:-}" ] && cmdline+=" asusreboot=${ASUS_REBOOT}"
     else
         cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
+        if [ "${ASUS_TOUCH_LAB:-0}" = 1 ]; then
+            # Hardware bring-up lab: the root stays the RAM disk and the iosroot file system
+            # is never mounted, so a fatal crash cannot corrupt it; ufsrw=1 only lets the
+            # console log reach the iosroot tail (asus-phone-cycle.sh reads it back).
+            cmdline+=" ufsrw=1 ufslogsecs=2 asusinput=1 asustouch=1 asustouchdelay=${ASUS_TOUCH_DELAY:-20}"
+            cmdline+=' interrupt-masked-debug-mode=0 sched-preemption-disable-debug-mode=0'
+            [ -n "${ASUS_GPI_STAGES:-}" ] && cmdline+=" asusgpi=${ASUS_GPI_STAGES}"
+            [ -n "${ASUS_REBOOT:-}" ] && cmdline+=" asusreboot=${ASUS_REBOOT}"
+        fi
     fi
 fi
 if [ "${ASUS_IOS_USERLAND:-0}" = 1 ]; then
