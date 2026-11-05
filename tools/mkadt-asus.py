@@ -12,6 +12,7 @@ MEM_SIZE = 0x20000000
 FB = 0xe5000000
 FB_WIDTH, FB_HEIGHT, FB_STRIDE = 1080, 2448, 4320
 FB_SIZE = (FB_STRIDE * FB_HEIGHT + 0x3fff) & ~0x3fff
+CANVAS_WIDTH, CANVAS_HEIGHT = 1125, 2436   # iPhone X screen presented to iOS (375x812 pt @3x)
 SOC_BASE = 0x01000000
 
 
@@ -116,7 +117,8 @@ def build(display=False, ios_gui=None, trust_cache=None):
         devices.append(node('asus,display', [
             ('compatible', cstr('asus,display')),
             ('device_type', cstr('display-subsystem')),
-            ('canvas-width', u32(FB_WIDTH)), ('canvas-height', u32(FB_HEIGHT)),
+            # AppleCLCD presents the iPhone X screen (xnu/asus display patch), as sweet 0061.
+            ('canvas-width', u32(CANVAS_WIDTH)), ('canvas-height', u32(CANVAS_HEIGHT)),
         ]))
     if gui_disp0 is not None:
         devices.append(gui_disp0)

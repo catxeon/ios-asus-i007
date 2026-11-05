@@ -943,7 +943,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,472 @@
+@@ -0,0 +1,518 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -1007,7 +1007,17 @@
 +#define SWEET_FB_NOTIFY_TYPES           8
 +#define SWEET_FB_NOTIFY_VSYNC           5
 +#define SWEET_FB_VSYNC_US               16667
-+#define SWEET_FB_DOT_PITCH              395     /* diagnostic value; physical dimensions are from boot video */
++#define SWEET_FB_DOT_PITCH              458     /* ppi, as the iPhone X panel */
++/*
++ * UIKit only has status bar / layout data for real iPhone screens (the red
++ * rdar://45025538 bar for 360x816 points). The display is presented as the
++ * iPhone X panel, 1125x2436 (375x812 points @3x), as sweet 0061; the
++ * 1080x2448 panel shows it at logical offset (22, -6): 45 columns are
++ * cropped, 6 rows above and below stay black. Boot-arg asusfb_native=1
++ * presents the real panel size instead.
++ */
++#define SWEET_FB_LOGICAL_W              1125
++#define SWEET_FB_LOGICAL_H              2436
 +#define SWEET_FB_FORMAT_BGRA            0x42475241
 +
 +class IOMobileFramebuffer : public IOService {
@@ -1030,6 +1040,9 @@
 +public:
 +	uint64_t      fPhys;
 +	uint32_t      fWidth, fHeight, fRowBytes;
++	uint32_t      fLogicalW, fLogicalH;     /* size reported to userland */
++	int32_t       fOffX, fOffY;             /* logical origin of the panel */
++	bool          fMarginsCleared;
 +	uintptr_t     fPixels;          /* kernel mapping of the panel memory */
 +	SweetSurface *fSurface;         /* the panel memory as an IOSurface */
 +	IOLock       *fLock;            /* swaps and client list */
@@ -1085,6 +1098,12 @@
 +		IOLog("ASUS FB: no boot framebuffer\n");
 +		return false;
 +	}
++	int native = 0;
++	PE_parse_boot_argn("asusfb_native", &native, sizeof(native));
++	fLogicalW = native ? fWidth : SWEET_FB_LOGICAL_W;
++	fLogicalH = native ? fHeight : SWEET_FB_LOGICAL_H;
++	fOffX = ((int32_t)fLogicalW - (int32_t)fWidth) / 2;
++	fOffY = ((int32_t)fLogicalH - (int32_t)fHeight) / 2;
 +	fLock = IOLockAlloc();
 +	fClients = OSArray::withCapacity(4);
 +	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
@@ -1107,8 +1126,8 @@
 +	setProperty("external", false);
 +	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
 +	registerService();
-+	IOLog("ASUS FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u\n",
-+	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id);
++	IOLog("ASUS FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
++	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
 +	return true;
 +}
 +
@@ -1169,6 +1188,20 @@
 +{
 +	uint32_t mask = get32(rec, 0x104);
 +
++	/* Panel rows outside the presented display (fOffY < 0): black, once. */
++	if (!fMarginsCleared && fOffY < 0) {
++		fMarginsCleared = true;
++		for (uint32_t y = 0; y < fHeight; y++) {
++			if (y >= (uint32_t)-fOffY && y < fLogicalH - fOffY) {
++				continue;
++			}
++			volatile uint32_t *row = (volatile uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
++			for (uint32_t x = 0; x < fWidth; x++) {
++				row[x] = 0xff000000;
++			}
++		}
++	}
++
 +	/* Keep the diagnostic console enabled throughout the ASUS test. */
 +
 +	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
@@ -1205,6 +1238,19 @@
 +		}
 +		if (dx < 0 || dy < 0) {
 +			dx = dy = 0;
++		}
++		/* Logical (presented) display coordinates -> panel coordinates. */
++		dx -= fOffX;
++		dy -= fOffY;
++		if (dx < 0) {
++			sx -= dx;
++			w += dx;
++			dx = 0;
++		}
++		if (dy < 0) {
++			sy -= dy;
++			h += dy;
++			dy = 0;
 +		}
 +		if (w > (int32_t)s->width - sx) {
 +			w = (int32_t)s->width - sx;
@@ -1367,8 +1413,8 @@
 +		outCount = 1;
 +		break;
 +	case kSweetFBGetDisplaySize:
-+		out[0] = fFB->fWidth;
-+		out[1] = fFB->fHeight;
++		out[0] = fFB->fLogicalW;
++		out[1] = fFB->fLogicalH;
 +		outCount = 2;
 +		break;
 +	case kSweetFBIsMainDisplay:
