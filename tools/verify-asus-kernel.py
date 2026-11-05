@@ -79,7 +79,7 @@ def verify(path, require_hfs=False, require_display=False):
                              b'mounting dirty non-journaled root read-write',
                              b'ASUS TRUST: static trust cache v2')),
             'ufs_read_only': all(marker in data for marker in
-                                 (b'SWEET UFS: ufsrw ignored, this build is read-only',
+                                 (b'SWEET UFS: ufsrw ignored, writes are only allowed to iosroot',
                                   b'ASUS UFS probe: %d (root stays %s)')),
             'ufs': b'SWEET UFS:' in data,
             'input': all(marker in data for marker in
@@ -107,9 +107,9 @@ if __name__ == '__main__':
     if args.require_userland and not result['userland']:
         raise ValueError('Expected the ASUS userland services profile')
     if result['ufs'] and not result['ufs_read_only']:
-        raise ValueError('UFS driver present without the ASUS read-only guard')
+        raise ValueError('UFS driver present without the ASUS iosroot-only write guard')
     if args.require_ufs_read_only and not result['ufs_read_only']:
-        raise ValueError('Expected the ASUS read-only UFS profile')
+        raise ValueError('Expected the ASUS UFS profile with the iosroot-only write guard')
     if args.require_input and not result['input']:
         raise ValueError('Expected the ASUS input profile')
     print(json.dumps(result, indent=2))

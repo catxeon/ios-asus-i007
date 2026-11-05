@@ -20,8 +20,8 @@ parser.add_argument('--input', action='store_true',
                     help='Include HID event services (touch, buttons) and the QEMU virtio input '
                          'source (boot-arg asus_virtio_input=1)')
 parser.add_argument('--ufs', action='store_true',
-                    help='Include the read-only UFS driver (sweet 0028/0030/0034/0069, writes '
-                         'disabled; boot-args ufsprobe=1, ufslist=1, rd=ufsroot0)')
+                    help='Include the UFS driver (sweet 0028/0030/0034/0069; writes only to the '
+                         'iosroot partition with ufsrw=1; ufsprobe=1, ufslist=1, rd=ufsroot0)')
 args = parser.parse_args()
 if args.ufs and not args.hfs:
     parser.error('--ufs requires --hfs')
@@ -92,6 +92,6 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
     'userland': args.userland, 'input': args.input, 'ufs_read_only': args.ufs,
     'storage_driver': args.ufs, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
-print(f'Staged {len(selected)} ASUS files; ' + ('read-only UFS, ' if args.ufs else 'no UFS, ')
+print(f'Staged {len(selected)} ASUS files; ' + ('UFS (iosroot writes only), ' if args.ufs else 'no UFS, ')
       + 'no modem, GPU or USB drivers'
       + ('' if args.input else ', no input'))

@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,699 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -63,7 +63,8 @@
 + * outside the named partition can be written.
 + *
 + * ASUS I007 (profile --ufs): same host at 0x1d84000 (UFSHCI 3.x on SM8350),
-+ * userdata on LUN 0. This build is read-only: ufsrw is ignored. ufslist=1
++ * userdata on LUN 0. Writes only to the partition "iosroot" with ufsrw=1
++ * (created for iOS next to userdata); any other partition stays read-only. ufslist=1
 + * prints the LUN 0 partition table; ufsprobe=1 runs the driver from the root
 + * lookup without rooting on it (IOKitBSDInit.cpp).
 + */
@@ -656,11 +657,15 @@
 +	}
 +	PE_parse_boot_argn("ufsroot", want, sizeof(want));
 +	uint32_t rw = 0;
-+	/* ASUS I007: no write authorization for this phone's flash. */
-+	if (PE_parse_boot_argn("ufsrw", &rw, sizeof(rw)) && rw) {
-+		printf("SWEET UFS: ufsrw ignored, this build is read-only\n");
++	/*
++	 * ASUS I007: the only partition this kernel may ever write is "iosroot",
++	 * created for iOS next to Android's userdata (user-approved 2026-11-05).
++	 * ufsrw=1 for any other partition is ignored.
++	 */
++	if (PE_parse_boot_argn("ufsrw", &rw, sizeof(rw)) && rw && strcmp(want, "iosroot") != 0) {
++		printf("SWEET UFS: ufsrw ignored, writes are only allowed to iosroot\n");
++		rw = 0;
 +	}
-+	rw = 0;
 +	uint32_t list = 0;
 +	PE_parse_boot_argn("ufslist", &list, sizeof(list));
 +	su.list = (list != 0);
@@ -712,7 +717,7 @@
 +	devfs_make_node(su.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot0");
 +	devfs_make_node(makedev(su.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rufsroot0");
 +	/* Only now, with the partition bounds known, can writes be allowed. */
-+	su.writable = false;
++	su.writable = (rw != 0) && strcmp(want, "iosroot") == 0;
 +	su.ready = true;
 +	printf("SWEET UFS: \"%s\" on LUN %u: first block 0x%llx, %llu MiB, %s, DMA at 0x%llx\n",
 +	    want, su.lun, su.first_block, su.nblocks * UFS_BLOCK >> 20,

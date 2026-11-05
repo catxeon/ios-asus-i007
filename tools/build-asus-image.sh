@@ -16,8 +16,8 @@ if [ "${ASUS_DISPLAY:-0}" = 1 ]; then
     root_limit=104
 fi
 if [ "${ASUS_UFS:-0}" = 1 ]; then
-    # Read-only UFS probe: the kernel must carry the ASUS read-only guard; the root stays
-    # the RAM disk and the driver only reads the LUN 0 GPT (ufsprobe=1, ufslist=1).
+    # UFS: the kernel must carry the iosroot-only write guard. Without ASUS_PHONE_IOS the
+    # root stays the RAM disk and the driver only reads the LUN 0 GPT (ufsprobe=1, ufslist=1).
     verify_flags+=(--require-ufs-read-only)
     adt_flags+=(--ufs)
 fi
@@ -40,10 +40,26 @@ else
     python3 "$repo/tools/mkinit.py" "$out/asus-init.o" "$out/asus-init"
     ramdisk="$out/asus-init"
 fi
+if [ "${ASUS_PHONE_IOS:-0}" = 1 ]; then
+    # iOS from the iosroot partition on the phone: needs ASUS_UFS=1 ASUS_DISPLAY=1
+    # ASUS_IOS_USERLAND=1, a userland kernel, the private D22AP ADT and OS trust cache.
+    [ "${ASUS_UFS:-0}" = 1 ] && [ "${ASUS_DISPLAY:-0}" = 1 ] && [ "${ASUS_IOS_USERLAND:-0}" = 1 ] || {
+        echo 'ASUS_PHONE_IOS needs ASUS_UFS=1 ASUS_DISPLAY=1 ASUS_IOS_USERLAND=1' >&2; exit 1; }
+    verify_flags+=(--require-userland)
+    adt_flags+=(--ios-gui "${ASUS_IOS_GUI:?D22AP ADT}" --trust-cache "${ASUS_TRUST_CACHE:?OS trust cache}"
+                --mem-mib "${ASUS_MEM_MIB:-4096}")
+    python3 "$repo/tools/verify-asus-kernel.py" "$kernel" --require-hfs "${verify_flags[@]}"
+fi
 python3 "$repo/tools/mkadt-asus.py" "$out/asus.adt" "${adt_flags[@]}"
 cmdline='debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0'
 if [ "${ASUS_UFS:-0}" = 1 ]; then
-    cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
+    if [ "${ASUS_PHONE_IOS:-0}" = 1 ]; then
+        # Root on iosroot, writable (the kernel refuses writes to any other partition).
+        cmdline="${cmdline/rd=md0/rd=ufsroot0} ufsroot=iosroot ufsrw=1 rootrw=1 ufslist=1"
+        cmdline+=' ignition_level=1 interrupt-masked-debug-mode=0 sched-preemption-disable-debug-mode=0'
+    else
+        cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
+    fi
 fi
 if [ "${ASUS_IOS_USERLAND:-0}" = 1 ]; then
     [ "$#" -gt 1 ] || { echo 'iOS userspace requires an explicit HFS RAM root' >&2; exit 1; }

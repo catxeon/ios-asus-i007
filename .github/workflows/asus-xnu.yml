@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
       ufs:
-        description: Include the read-only UFS driver (writes disabled; requires HFS+)
+        description: Include the UFS driver (writes only to iosroot with ufsrw=1; requires HFS+)
         type: boolean
         default: false
       input:

@@ -85,10 +85,10 @@ def trust_cache_prop(path):
     return ('asus-static-trust-cache', 0, data)
 
 
-def build(display=False, ios_gui=None, trust_cache=None, ufs=False):
+def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM_SIZE):
     gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
-        ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(MEM_SIZE)),
+        ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(mem_size)),
         ('random-seed', os.urandom(64)), ('debug-enabled', u32(1)),
         ('firmware-version', cstr('asus-i007-shim')),
     ], [node('memory-map')])
@@ -152,12 +152,16 @@ if __name__ == '__main__':
     parser.add_argument('--trust-cache', type=Path, metavar='TRUSTCACHE',
                         help='pass the OS static trust cache (IM4P or raw v2) in /chosen')
     parser.add_argument('--ufs', action='store_true', help='add /sweet-ufs for the read-only UFS driver')
+    parser.add_argument('--mem-mib', type=int, default=MEM_SIZE >> 20,
+                        help='kernel RAM from 0x140000000 (phone: up to 5120, free until 0x280000000)')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
-    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs)
+    if not 512 <= args.mem_mib <= 5120 or args.mem_mib % 16:
+        parser.error('--mem-mib must be 512..5120 and a multiple of 16')
+    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs, args.mem_mib << 20)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:
         adt.dump(adt.parse(blob)[0])
-    print(f'ASUS ADT: {len(blob)} bytes; one CPU, 512 MiB at 0x{PHYS_BASE:x}; '
+    print(f'ASUS ADT: {len(blob)} bytes; one CPU, {args.mem_mib} MiB at 0x{PHYS_BASE:x}; '
           + ('UFS at 0x1d84000' if args.ufs else 'no UFS node'))
