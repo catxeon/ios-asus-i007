@@ -255,6 +255,32 @@
   writes 0 to both runtime params right before `adb reboot bootloader` (not
   persistent; the next Android boot sets them again), so a fatal secure-side error
   should reset into Android instead of EDL. Untested yet.
+- **Image 0023 (kernel 42071762478): EDL even with download_mode 0 0** (the cycle wrote 0
+  to both params). So the EDL is the secure side's own policy, not Android's crash dump
+  setting. Log header seq 0xa5a5a5a5 = written by asus_log_flush (sync), but no step
+  marker: printf/IOLog only queue text for the console thread, so a marker printed right
+  before the fatal step is never in the ring. Also: the iosroot HFS came back with
+  "BlockMarkFreeInternal ... runtime corruption detected" (rw root through repeated
+  EDL crashes; it is mounted "dirty non-journaled" on every boot since the asusreboot
+  resets never unmount). The root needs a v14 rewrite before the next iOS GUI test.
+- Fixes (7fb8c47..): asus_log_mark(line) appends to the ring and flushes (all touch/GPI
+  markers use it); halt/restart notes its type in the ring directly and, on a panic,
+  appends the tail of debug_buf. build-asus-image ASUS_TOUCH_LAB=1: RAM root, iosroot FS
+  never mounted, ufsprobe + ufsrw only for the log (a crash cannot corrupt the root).
+- Image 0024 (lab, touch after 20 s): EDL with NO log written: with a RAM root the UFS
+  probe comes late, the bring-up ran first. touchFired now waits for asus_log_ready().
+- **Image 0025 (lab, kernel 42086225176): crash located.** Log: flash log ready after
+  12 s; GCC votes, S4 RCG (DFS), SE4 fw 0x303, pins, GENI I/O init all fine; GPI stage 1
+  (GPII 1-6 idle), 2 (SE4 DMA_MODE_EN, GSI events), 3 (event ring allocated: ev
+  0x10110042), 4 (channels ch0 0x10100042, ch1 0x1010014a), 5 (started: 0x10200042 /
+  0x1020014a, err 0), 6 (ev doorbell, err 0) all fine; the last line is "stage 7:
+  transfer: channel doorbells". So the SoC dies (EDL) the moment the GPI engine fetches
+  its first TRE from DRAM; no halt/restart note, so XNU did not reset it. Most likely
+  the GPI stream (apps_smmu SID 0x5b6 in the Android DT, iommu addr pool 0x100000) has no
+  SMMU context, and the fault is fatal on the secure side. Dropped for now.
+- Next: bit-banged I2C on GPIO20/21 (TLMM only, no DMA, open drain via the OE bit),
+  default when asusgpi is not given; reads FocalTech 0xa3/0x9f/0xa6/0xa8/0x02, scans the
+  bus on NACK, then polls touches for 60 s while GPIO23 (IRQ) is low.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

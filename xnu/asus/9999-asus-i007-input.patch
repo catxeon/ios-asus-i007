@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,875 @@
+@@ -0,0 +1,1027 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21720,6 +21720,7 @@
 +	    uint8_t *rx, unsigned nr, bool stretch);
 +	void abortCmd(IOMemoryMap *se);
 +	void touchGpi(IOMemoryMap *se);
++	void touchBitbang(IOMemoryMap *tlmm);
 +	bool gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want);
 +	int gpiRead(IOMemoryMap *gpi, uint8_t reg, uint8_t *out, unsigned len);
 +	/* GPI state for QUP0 GPII 4 (SE4 I2C) */
@@ -22062,6 +22063,20 @@
 +			    rd(tlmm, pins[i] * 0x1000), rd(tlmm, pins[i] * 0x1000 + 4));
 +		}
 +	}
++	{
++		/*
++		 * Image 0025: the GPI DMA path kills the SoC (EDL) the moment the engine reads its
++		 * first TRE (no SMMU set-up for the GPI stream). Default now: bit-banged I2C on
++		 * GPIO20/21 (TLMM only, no DMA). boot-arg asusgpi=N (N > 0) keeps the GPI stages.
++		 */
++		uint32_t gpiStages = 0;
++		PE_parse_boot_argn("asusgpi", &gpiStages, sizeof(gpiStages));
++		if (gpiStages == 0) {
++			amark("ASUS TOUCH: step: bit-banged I2C on GPIO20/21\n");
++			touchBitbang(tlmm);
++			goto out;
++		}
++	}
 +	amark("ASUS TOUCH: step: GENI SE I/O init\n");
 +	/*
 +	 * Linux geni_se_init/geni_se_io_init, which sweet's SE (pre-initialised by its
@@ -22109,6 +22124,143 @@
 +	se->release();
 +	gcc->release();
 +	tlmm->release();
++}
++
++/*
++ * Bit-banged I2C master on the touch bus (SDA GPIO20, SCL GPIO21; the board pull-ups
++ * keep both high, images 0015+). Open drain: the output latch stays 0 and a line is
++ * pulled low by enabling the output (TLMM CFG bit 9), released by disabling it.
++ * About 50 kHz with IODelay(5) half periods; SCL stretching is honoured (1 ms max).
++ */
++namespace {
++struct BitI2C {
++	volatile uint32_t *sdaCfg, *sdaIo, *sclCfg, *sclIo;
++	uint32_t cfg;                   /* GPIO function 0, pull-up, 2 mA, output disabled */
++
++	void low(volatile uint32_t *c) { *c = cfg | 0x200u; __asm__ volatile ("dsb sy" ::: "memory"); }
++	void rel(volatile uint32_t *c) { *c = cfg; __asm__ volatile ("dsb sy" ::: "memory"); }
++	bool sda() { return *sdaIo & 1u; }
++	bool scl() { return *sclIo & 1u; }
++	void half() { IODelay(5); }
++	bool sclUp()
++	{
++		rel(sclCfg);
++		for (unsigned i = 0; i < 1000; i++) {
++			if (scl()) {
++				return true;
++			}
++			IODelay(1);
++		}
++		return false;
++	}
++	void start() { rel(sdaCfg); sclUp(); half(); low(sdaCfg); half(); low(sclCfg); half(); }
++	void stop() { low(sdaCfg); half(); sclUp(); half(); rel(sdaCfg); half(); }
++	void bit(bool b) { if (b) rel(sdaCfg); else low(sdaCfg); half(); sclUp(); half(); low(sclCfg); }
++	bool rbit() { rel(sdaCfg); half(); sclUp(); half(); bool b = sda(); low(sclCfg); return b; }
++	bool wbyte(uint8_t v)           /* true = ACK */
++	{
++		for (int i = 7; i >= 0; i--) {
++			bit((v >> i) & 1u);
++		}
++		return !rbit();
++	}
++	uint8_t rbyte(bool ack)
++	{
++		uint8_t v = 0;
++		for (int i = 0; i < 8; i++) {
++			v = (uint8_t)((v << 1) | (rbit() ? 1u : 0u));
++		}
++		bit(!ack);
++		return v;
++	}
++	void recover()
++	{
++		rel(sdaCfg);
++		for (int i = 0; i < 9 && !sda(); i++) {
++			low(sclCfg); half(); sclUp(); half();
++		}
++		stop();
++	}
++	/* Register read with a repeated start (Linux fts: write reg, read len). */
++	int read(uint8_t addr, uint8_t reg, uint8_t *out, unsigned len)
++	{
++		start();
++		if (!wbyte((uint8_t)(addr << 1))) {
++			stop();
++			return ENXIO;           /* address NACK */
++		}
++		if (!wbyte(reg)) {
++			stop();
++			return EIO;
++		}
++		start();
++		if (!wbyte((uint8_t)((addr << 1) | 1u))) {
++			stop();
++			return EIO;
++		}
++		for (unsigned i = 0; i < len; i++) {
++			out[i] = rbyte(i + 1 < len);
++		}
++		stop();
++		return 0;
++	}
++};
++}
++
++void
++AsusPhoneInput::touchBitbang(IOMemoryMap *tlmm)
++{
++	volatile uint32_t *t = (volatile uint32_t *)tlmm->getVirtualAddress();   /* 4-byte words */
++	BitI2C b;
++	b.sdaCfg = t + 20 * 0x400;
++	b.sdaIo = t + 20 * 0x400 + 1;
++	b.sclCfg = t + 21 * 0x400;
++	b.sclIo = t + 21 * 0x400 + 1;
++	b.cfg = 3u;                     /* func 0, pull-up, 2 mA */
++	*b.sdaIo = 0;                   /* output latch low on both lines */
++	*b.sclIo = 0;
++	b.rel(b.sdaCfg);
++	b.rel(b.sclCfg);
++	IODelay(50);
++	IOLog("ASUS TOUCH: bitbang idle sda=%u scl=%u\n", b.sda(), b.scl());
++	b.recover();
++	static const uint8_t regs[] = { 0xa3, 0x9f, 0xa6, 0xa8, 0x02 };   /* chip ID, ID low, FW, vendor, touches */
++	unsigned acks = 0;
++	for (unsigned i = 0; i < sizeof(regs); i++) {
++		uint8_t v = 0;
++		int e = b.read(0x38, regs[i], &v, 1);
++		acks += (e == 0);
++		amark("ASUS TOUCH: fts 0x38 reg %#x -> %#x (err %d, bitbang)\n", regs[i], v, e);
++	}
++	if (!acks) {
++		/* Who answers at all? (0x38 NACK: no power, wrong address or wrong pins.) */
++		for (uint8_t a = 0x08; a < 0x78; a++) {
++			uint8_t v;
++			if (b.read(a, 0, &v, 1) == 0) {
++				IOLog("ASUS TOUCH: bitbang: device at %#x\n", a);
++			}
++		}
++		amark("ASUS TOUCH: bitbang scan done, sda=%u scl=%u\n", b.sda(), b.scl());
++		return;
++	}
++	/* 60 s of touch polling while the IRQ line (GPIO23, active low) is asserted. */
++	volatile uint32_t *irqIo = t + 23 * 0x400 + 1;
++	unsigned events = 0;
++	for (unsigned ms = 0; ms < 60000 && events < 60; ms += 10) {
++		if (*irqIo & 1u) {
++			IOSleep(10);
++			continue;
++		}
++		uint8_t d[1 + 6 * 2];
++		if (b.read(0x38, 0x02, d, sizeof(d)) == 0) {
++			unsigned n = d[0] & 0xf;
++			unsigned x = ((d[1] & 0xfu) << 8) | d[2], y = ((d[3] & 0xfu) << 8) | d[4];
++			IOLog("ASUS TOUCH: t=%u ms n=%u ev=%u id=%u x=%u y=%u\n", ms, n, (unsigned)(d[1] >> 6), (unsigned)(d[3] >> 4), x, y);
++			events++;
++		}
++		IOSleep(10);
++	}
++	amark("ASUS TOUCH: bitbang polling done, %u events\n", events);
 +}
 +
 +/*
