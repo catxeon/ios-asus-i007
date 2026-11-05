@@ -330,6 +330,24 @@
   initialized, SGI1 verified`; UFS log, touch bring-up (FT5652) and the asusreboot PSCI
   reset all fine; back in Android after 156 s. The A78/X1 run as equal SMP cores (no
   AMP clusters). Next: image 0031 = iOS from iosroot with cpus=8, asusreboot=2700.
+- **Image 0031 (iOS, cpus=8): LOCK SCREEN reached, touch reaches the UI, but touch
+  behaves oddly and the UI lags heavily** (user report). Screen during boot: `hfs:
+  BlockMarkFreeInternal() trying to free unallocated blocks on volume ASUSRamRoot`,
+  `hfs_mark_inconsistent: Runtime corruption detected`, `MapFileBlockC: tmpOff <= 0`:
+  the root rewritten after 0023 was damaged again by 0028's direct PSCI reset at 600 s
+  (non-journaled HFS, no sync/unmount). Fixes prepared (next kernel):
+  - asusreboot = clean reboot_kernel(RB_AUTOBOOT) (stop processes, sync, unmount all),
+    then the halt hook's PSCI reset; a 120 s backstop thread forces the reset.
+  - Display: panel memory surface back to write-combine (sweet's mode; the ASUS patch
+    had Device/InhibitCache with per-pixel 32-bit stores = 11 MB of device stores per
+    swap in backboardd), row memcpy; the screen text console is turned off at the first
+    swap (it kept scrolling the whole panel over the GUI), asusfb_console=1 keeps it.
+    App surfaces were already cacheable (kIOMapDefaultCache).
+  - make_asus_display_patch.py now carries 952fc66 (platform-binary framebuffer
+    clients, previously a hand edit of the patch) and runs on a clean xnu-asus-source
+    (reverse the display patch first; scratchpad unpatch_display.py removes leftovers).
+  - Touch: read count + first point (7 bytes), the rest only for multi-touch (was 61
+    bytes per report, ~11 ms); bit-bang half period 2 us (~200 kHz).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

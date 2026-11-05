@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1246 @@
+@@ -0,0 +1,1255 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22274,7 +22274,8 @@
 + * Bit-banged I2C master on the touch bus (SDA GPIO20, SCL GPIO21; the board pull-ups
 + * keep both high, images 0015+). Open drain: the output latch stays 0 and a line is
 + * pulled low by enabling the output (TLMM CFG bit 9), released by disabling it.
-+ * About 50 kHz with IODelay(5) half periods; SCL stretching is honoured (1 ms max).
++ * About 200 kHz with IODelay(2) half periods (50 kHz with 5 us worked in 0027); SCL
++ * stretching is honoured (1 ms max).
 + */
 +namespace {
 +struct BitI2C {
@@ -22285,7 +22286,7 @@
 +	void rel(volatile uint32_t *c) { *c = cfg; __asm__ volatile ("dsb sy" ::: "memory"); }
 +	bool sda() { return *sdaIo & 1u; }
 +	bool scl() { return *sclIo & 1u; }
-+	void half() { IODelay(5); }
++	void half() { IODelay(2); }       /* ~200 kHz; FT5652 takes 400 kHz */
 +	bool sclUp()
 +	{
 +		rel(sclCfg);
@@ -22439,8 +22440,17 @@
 +	if (*gTouchIrq & 1u) {
 +		return;
 +	}
++	/*
++	 * Image 0031: reading all 10 points (61 bytes, ~11 ms at 50 kHz) per report made
++	 * touch lag. Read the count and the first point (7 bytes), the rest only for
++	 * multi-touch (the registers are consecutive from 0x02).
++	 */
 +	uint8_t d[1 + 6 * TOUCH_FINGERS];
-+	int e = gTouchBus.read(0x38, 0x02, d, sizeof(d));
++	int e = gTouchBus.read(0x38, 0x02, d, 7);
++	unsigned n = d[0] & 0xf;
++	if (!e && n > 1 && n <= TOUCH_FINGERS) {
++		e = gTouchBus.read(0x38, 0x09, d + 7, 6 * (n - 1));
++	}
 +	if (e) {
 +		if (fTouchErrors++ < 10) {
 +			IOLog("ASUS TOUCH: report read error %d\n", e);
@@ -22449,7 +22459,6 @@
 +		return;
 +	}
 +	bool seen[TOUCH_FINGERS] = { false };
-+	unsigned n = d[0] & 0xf;
 +	for (unsigned i = 0; i < TOUCH_FINGERS && i < n; i++) {
 +		const uint8_t *p = d + 1 + 6 * i;
 +		unsigned ev = p[0] >> 6, id = p[2] >> 4;

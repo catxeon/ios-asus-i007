@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,986 @@
+@@ -0,0 +1,1016 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -983,13 +983,43 @@
 +	}
 +}
 +
++/* Backstop for asusreboot: if the clean reboot has not reset the SoC after 120 s. */
++static void
++asus_reboot_force_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	int chan;
++	(void)tsleep(&chan, PZERO, "asusrbforce", hz * 120);
++	static const char note[] = "\nASUS: clean reboot did not finish in 120 s: forced PSCI SYSTEM_RESET\n";
++	sweet_log_append(note, sizeof(note) - 1);
++	asus_log_flush_now();
++	asus_psci_reset();
++}
++
++extern int reboot_kernel(int howto, char *message);   /* bsd/kern/kern_shutdown.c */
++
++/*
++ * asusreboot=N: a clean kernel reboot after N s (RB_AUTOBOOT: processes stopped, sync,
++ * every file system unmounted, then PEHaltRestart -> asus_halt_restart -> log flush +
++ * PSCI reset). Image 0028's direct PSCI reset left the non-journaled iosroot HFS with a
++ * stale allocation bitmap ("BlockMarkFreeInternal ... runtime corruption" next boot).
++ */
 +static void
 +asus_reboot_thread(void *arg, __unused wait_result_t wr)
 +{
 +	uint32_t secs = (uint32_t)(uintptr_t)arg;
 +	int chan;
++	thread_t force;
 +	(void)tsleep(&chan, PZERO, "asusreboot", hz * (int)secs);
-+	printf("ASUS: asusreboot=%u reached: final log flush, PSCI SYSTEM_RESET\n", secs);
++	char line[96];
++	snprintf(line, sizeof(line), "\nASUS: asusreboot=%u reached: clean reboot (sync, unmount)\n", secs);
++	sweet_log_append(line, (int)strlen(line));
++	asus_log_flush(true);
++	if (kernel_thread_start(asus_reboot_force_thread, NULL, &force) == KERN_SUCCESS) {
++		thread_deallocate(force);
++	}
++	int error = reboot_kernel(0 /* RB_AUTOBOOT */, NULL);
++	snprintf(line, sizeof(line), "\nASUS: reboot_kernel returned %d: PSCI SYSTEM_RESET\n", error);
++	sweet_log_append(line, (int)strlen(line));
 +	asus_log_flush_now();
 +	asus_psci_reset();
 +}

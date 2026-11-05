@@ -311,7 +311,7 @@
 +	s->pixelFormat = pixelFormat;
 +	s->allocSize = (uint32_t)round_page(bytesPerRow * height);
 +	s->memory = IOMemoryDescriptor::withPhysicalAddress(phys, s->allocSize, kIODirectionInOut);
-+	s->mapCache = kIOMapInhibitCache; /* same device cache mode as ASUS console */
++	s->mapCache = kIOMapWriteCombineCache; /* Normal-NC: row memcpy */
 +	if (s->memory == NULL || !sweet_surface_publish(s)) {
 +		s->release();
 +		return NULL;
@@ -943,7 +943,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,518 @@
+@@ -0,0 +1,527 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -1202,7 +1202,23 @@
 +		}
 +	}
 +
-+	/* Keep the diagnostic console enabled throughout the ASUS test. */
++	/*
++	 * The kernel text console drew over the GUI and scrolled the whole panel on
++	 * every line (image 0031: heavy lag). The console log goes to flash (iosroot
++	 * tail), so turn the screen console off at the first swap; boot-arg
++	 * asusfb_console=1 keeps it on screen.
++	 */
++	static bool consoleChecked;
++	if (!consoleChecked) {
++		int keep = 0;
++		consoleChecked = true;
++		if (!PE_parse_boot_argn("asusfb_console", &keep, sizeof(keep)) || keep == 0) {
++			PE_Video video;
++			PE_current_console(&video);
++			PE_initialize_console(&video, kPEDisableScreen);
++			IOLog("ASUS FB: screen console off (asusfb_console=1 keeps it)\n");
++		}
++	}
 +
 +	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
 +		uint32_t id = get32(rec, 0x54 + 4 * layer);
@@ -1272,16 +1288,9 @@
 +		}
 +		if (src != 0 && bpe == 4 && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
 +			for (int32_t y = 0; y < h; y++) {
-+				volatile uint32_t *dst = (volatile uint32_t *)(fPixels +
-+				    (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4);
-+				const uint8_t *row = (const uint8_t *)(src + s->offset +
-+				    (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4);
-+				/* Device memory requires aligned stores; memcpy may use vectors. */
-+				for (int32_t x = 0; x < w; x++) {
-+					uint32_t pixel;
-+					memcpy(&pixel, row + (uint64_t)x * 4, sizeof(pixel));
-+					dst[x] = pixel;
-+				}
++				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
++				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
++				    (size_t)w * 4);
 +			}
 +			__asm__ volatile("dsb oshst" ::: "memory");
 +		}
