@@ -207,6 +207,24 @@
     base 0xf000000: the downstream lahaina pinctrl adds REG_BASE 0x100000, GPIO n is at
     0xf100000 + 0x1000*n. Next: vote S4 + s_ahb, RCG from XO, read SE4 FW, fix the TLMM
     base, then probe FocalTech 0x38 (no answer = rails L3C/L8C off).
+- Images 0016-0019 (touch bring-up iterations, photos): QUP0 votes + S4 from DFS level 0
+  (XO/1) OK; s_ahb CBCR 0x80000002 is HW-gated (skip its halt check); SE4 fw 0x303,
+  proto 3, idle; pins set (SDA/SCL qup4 cfg 0x4, both read high = external pull-up
+  powered; reset/IO-supply high). Every I2C command hung: status 0x41, M_IRQ 0, ABORT
+  ignored - TX watermark 1 and the GENI I/O init (cgc/out were already 0x7f) changed
+  nothing. Volume up works (HID 0xe9 reached iOS); power/volume down fixed to PON gen3
+  bits 7/6 (commit 9647c4b), not yet tested by pressing.
+- **Unattended cycle WORKS (commit f1b23ee + script fix, kernel CI 42056477083, image
+  0020 with ASUS_REBOOT=150):** `tools/asus-phone-cycle.sh IMG OUT` - fastboot boot at
+  19:00:29, kernel `asusreboot=150 reached: final log flush, PSCI SYSTEM_RESET`, Android
+  back at 19:04:03, log area (last 1025 blocks of iosroot) decoded: 47400 bytes, 680
+  lines, final-flush seq 0xa5a5a5a5. No photos or buttons needed. Logs in
+  ../phone-0020/ (private: Apple userland output).
+- **Touch root cause (log of 0020):** SE4 register 0x64 = GENI_IF_DISABLE_RO = 1 =
+  FIFO_IF_DISABLE: the SE firmware only allows GPI DMA (GSI). Linux i2c-qcom-geni checks
+  this bit and switches to gpi_mode (DT dmas = gpi_dma0). Next: a minimal GPI DMA driver
+  for QUP0 (qcom/gpi.c: channel alloc/start, transfer + event rings, TREs config0/go/dma,
+  doorbells) plus the i2c-qcom-geni GPI path; then rails/IRQ if 0x38 still NACKs.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
