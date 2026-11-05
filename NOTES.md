@@ -322,6 +322,14 @@
   (cpus=1, fresh root = data migration again). Bug: the report loop read n+1 points,
   the stale extra one produced phantom fingers 1/2 -> fixed (i < n; missed lifts are
   released by the "not seen" pass). Next run: asusreboot=2700.
+- (Image 0029 never ran: dispatching the SMP build cancelled its CI run 42099077746;
+  the workflow now queues instead, cancel-in-progress false.)
+- **SMP: ALL 8 CORES ON THE PHONE (image 0030, lab, kernel 42099915253 with smp=true,
+  ASUS_CPUS=8).** `SWEET CPU: requested=8 selected=8`, CPU_ON to MPIDR 0x100..0x700
+  (entry PA 0x1414a5000) rc=0 for each, every core "came alive; SGI1 OK", `8/8 CPUs
+  initialized, SGI1 verified`; UFS log, touch bring-up (FT5652) and the asusreboot PSCI
+  reset all fine; back in Android after 156 s. The A78/X1 run as equal SMP cores (no
+  AMP clusters). Next: image 0031 = iOS from iosroot with cpus=8, asusreboot=2700.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
