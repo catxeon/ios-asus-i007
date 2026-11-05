@@ -92,6 +92,22 @@
   needs the user's OK; (3) ADT for the phone with more RAM (512 MiB now) and the trust
   cache; (4) rd=ufsroot0 ufsroot=iosroot (read-only first; root-write needs ufsrw, which
   this build refuses).
+- Phone iOS prep (commit 9a4d0a7 + shim fix): UFS driver writes only when ufsroot is
+  `iosroot` and ufsrw=1 (verifier marker "writes are only allowed to iosroot"); phone RAM
+  from /proc/iomem: bank e3000000-27fffffff has reserved e3400000-e72fffff, e7400000-
+  e74fffff, e8400000-ffbfffff only, so 0x140000000..0x280000000 (5 GiB) is free;
+  mkadt-asus.py --mem-mib (default 512), shim accepts 512 MiB..5 GiB at 0x140000000.
+  Phone kernel CI 42022198290 (hfs+display+userland+input+ufs, no compositor), kernel
+  48713b6b. Image **0011** (`ASUS_PHONE_IOS=1 ASUS_UFS=1 ASUS_DISPLAY=1
+  ASUS_IOS_USERLAND=1 ASUS_IOS_GUI=../apple-20H392/devicetree/d22ap.adt
+  ASUS_TRUST_CACHE=../apple-20H392/os.trustcache.im4p ASUS_XNU_VERSION=0011
+  tools/build-asus-image.sh KERNEL ../asus-hfs-root/mac/asus-own-init.hfs`): 4 GiB RAM,
+  boot-args `rd=ufsroot0 ufsroot=iosroot ufsrw=1 rootrw=1 ufslist=1 ignition_level=1
+  interrupt-masked-debug-mode=0 sched-preemption-disable-debug-mode=0
+  unentitled_ios_sim_launch=1` (console still on the panel: serial=3), SHA256
+  288e93a8...fae347. Contains Apple data (D22AP nodes, trust cache): private.
+  Root to write into iosroot: ~/asus-roots/springboard-v12.hfs (12884901888 bytes,
+  SHA256 e26e9d4a...393f6d, re-checked). Not written yet.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

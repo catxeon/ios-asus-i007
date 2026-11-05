@@ -25,7 +25,7 @@ p = Path(sys.argv[1]).read_bytes()
 assert len(p) >= 0x2a8 and p[:8] == b'SWEETXNU' and struct.unpack_from('<I', p, 8)[0] == 1
 base, size = struct.unpack_from('<QQ', p, 0x38)
 # Phone RAM bank e3000000-27fffffff: no reserved region from 0x140000000 up to 0x280000000.
-assert base == 0x140000000 and 0x20000000 <= size <= 0x140000000 and size % 0x1000000 == 0, \n    'Not an ASUS payload (RAM 0x140000000, 512 MiB..5 GiB)'
+assert base == 0x140000000 and 0x20000000 <= size <= 0x140000000 and size % 0x1000000 == 0, 'Not an ASUS payload (RAM 0x140000000, 512 MiB..5 GiB)'
 assert len(p) < 0x8000000, 'Payload exceeds the loader bound'
 PY
 size=$(aarch64-linux-gnu-nm out/shim.elf | awk '$3=="_end" {print $1}')
