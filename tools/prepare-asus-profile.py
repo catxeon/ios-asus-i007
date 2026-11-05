@@ -22,6 +22,9 @@ parser.add_argument('--input', action='store_true',
 parser.add_argument('--ufs', action='store_true',
                     help='Include the UFS driver (sweet 0028/0030/0034/0069; writes only to the '
                          'iosroot partition with ufsrw=1; ufsprobe=1, ufslist=1, rd=ufsroot0)')
+parser.add_argument('--smp', action='store_true',
+                    help='Include sweet SMP via PSCI CPU_ON (0065 + 0078, regenerated on top of '
+                         'the ASUS patches): opt-in with boot-arg cpus=N, N <= 8')
 args = parser.parse_args()
 if args.ufs and not args.hfs:
     parser.error('--ufs requires --hfs')
@@ -71,6 +74,10 @@ if args.userland:
     # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
     # app leaves the foreground: SIGSYS (QEMU: EXC_CRASH code 0xc000000 after a swipe).
     selected.append(repo / 'xnu/patches/0070-sweet-pid-hibernate.patch')
+if args.smp:
+    # git apply goes in name order: "zsmp" sorts after every other 9999-asus-i007 patch,
+    # whose SweetCPU/SWEET.h edits it was generated against.
+    selected.append(repo / 'xnu/asus/9999-asus-i007-zsmp.patch')
 manifest = []
 for path in selected:
     data = path.read_bytes().replace(b'\r\n', b'\n')
@@ -93,7 +100,7 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
 (dxb / 'build.sh').write_text(script, newline='\n')
 (dxb / 'asus-profile.json').write_text(json.dumps({
     'device': 'ASUS_I007D', 'soc': 'SM8350', 'xnu': 'xnu-8796.141.3',
-    'cpu': 'cortex-a55', 'cpus': 1, 'page_size': 16384,
+    'cpu': 'cortex-a55', 'cpus': 8 if args.smp else 1, 'page_size': 16384,
     'root': 'HFS+ or mockfs RAM disk' if args.hfs else 'mockfs RAM disk',
     'hfs': args.hfs, 'display': args.display, 'qemu_compositor': args.compositor,
     'userland': args.userland, 'input': args.input, 'ufs_read_only': args.ufs,

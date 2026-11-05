@@ -50,8 +50,16 @@ if [ "${ASUS_PHONE_IOS:-0}" = 1 ]; then
                 --mem-mib "${ASUS_MEM_MIB:-4096}")
     python3 "$repo/tools/verify-asus-kernel.py" "$kernel" --require-hfs "${verify_flags[@]}"
 fi
+# ASUS_CPUS=N (2-8): N CPU nodes in the ADT and cpus=N; needs a kernel built with smp=true
+# (SweetCPU starts the secondaries with PSCI CPU_ON). Cores 0-3 A55, 4-6 A78, 7 X1.
+cpus=${ASUS_CPUS:-1}
+case "$cpus" in [1-8]) ;; *) echo 'ASUS_CPUS must be 1-8' >&2; exit 1 ;; esac
+if [ "$cpus" -gt 1 ]; then
+    grep -aq 'SWEET CPU: requested=' "$kernel" || { echo "ASUS_CPUS=$cpus needs an smp=true kernel" >&2; exit 1; }
+    adt_flags+=(--cpus "$cpus")
+fi
 python3 "$repo/tools/mkadt-asus.py" "$out/asus.adt" "${adt_flags[@]}"
-cmdline='debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0'
+cmdline="debug=0xc serial=3 cpus=$cpus keepsyms=1 -enable_kprintf_spam -noprogress rd=md0"
 if [ "${ASUS_UFS:-0}" = 1 ]; then
     if [ "${ASUS_PHONE_IOS:-0}" = 1 ]; then
         # Root on iosroot, writable (the kernel refuses writes to any other partition).

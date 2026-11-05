@@ -91,7 +91,7 @@ def trust_cache_prop(path):
     return ('asus-static-trust-cache', 0, data)
 
 
-def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM_SIZE):
+def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM_SIZE, ncpus=1):
     gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(mem_size)),
@@ -101,17 +101,25 @@ def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM
     chosen.props += gui_chosen
     if trust_cache:
         chosen.props.append(trust_cache_prop(trust_cache))
-    cpu = node('cpu0', [
-        ('device_type', cstr('cpu')), ('compatible', cstr('arm,cortex-a55') + cstr('ARM,v8')),
-        ('reg', u32(0)), ('cpu-id', u32(0)), ('cluster-id', u32(0)),
-        ('cluster-type', u32(0)), ('die-cluster-id', u32(0)),
-        ('cluster-core-id', u32(0)), ('l2-cache-id', u32(0)), ('l3-cache-id', u32(0)),
-        ('state', cstr('running')), ('timebase-frequency', u32(19200000)),
-        ('clock-frequency', u32(1804800000)),
-        ('peripheral-frequency', u32(19200000)),
-        ('bus-frequency', u32(100000000)), ('fixed-frequency', u32(19200000)),
-    ])
-    cpus = node('cpus', [('#address-cells', u32(1)), ('#size-cells', u32(0))], [cpu])
+    # SM8350: cores 0-3 Cortex-A55, 4-6 Cortex-A78, 7 Cortex-X1; MPIDR Aff1 = core (DynamIQ),
+    # all ARMv8.2 with the 16K granule. ncpus > 1 lists them for the SMP patch (cpus=N boot-arg
+    # starts the first N via PSCI CPU_ON); ncpus=1 keeps the single boot CPU node as before.
+    # Every node matches SweetCPU ('arm,cortex-a55'); the A78/X1 are scheduled as equals.
+    clocks = [1804800000] * 4 + [2419200000] * 3 + [2841600000]
+    cpu_nodes = []
+    for core in range(ncpus):
+        cpu_nodes.append(node(f'cpu{core}', [
+            ('device_type', cstr('cpu')), ('compatible', cstr('arm,cortex-a55') + cstr('ARM,v8')),
+            ('reg', u32(core << 8)), ('cpu-id', u32(core)), ('cluster-id', u32(0)),
+            ('cluster-type', u32(0)), ('die-cluster-id', u32(0)),
+            ('cluster-core-id', u32(core)), ('l2-cache-id', u32(0)), ('l3-cache-id', u32(0)),
+            ('state', cstr('running' if core == 0 else 'stopped')),
+            ('timebase-frequency', u32(19200000)),
+            ('clock-frequency', u32(clocks[core])),
+            ('peripheral-frequency', u32(19200000)),
+            ('bus-frequency', u32(100000000)), ('fixed-frequency', u32(19200000)),
+        ]))
+    cpus = node('cpus', [('#address-cells', u32(1)), ('#size-cells', u32(0))], cpu_nodes)
     gic = node('gic', [
         ('compatible', cstr('arm,gic-v3')), ('interrupt-controller', b''),
         ('virtual-timer-intid', u32(27)),
@@ -163,14 +171,17 @@ if __name__ == '__main__':
     parser.add_argument('--ufs', action='store_true', help='add /sweet-ufs for the read-only UFS driver')
     parser.add_argument('--mem-mib', type=int, default=MEM_SIZE >> 20,
                         help='kernel RAM from 0x140000000 (phone: up to 5120, free until 0x280000000)')
+    parser.add_argument('--cpus', type=int, default=1, help='CPU nodes (1-8; >1 needs the --smp kernel)')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
     if not 512 <= args.mem_mib <= 5120 or args.mem_mib % 16:
         parser.error('--mem-mib must be 512..5120 and a multiple of 16')
-    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs, args.mem_mib << 20)
+    if not 1 <= args.cpus <= 8:
+        parser.error('--cpus must be 1-8')
+    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs, args.mem_mib << 20, args.cpus)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:
         adt.dump(adt.parse(blob)[0])
-    print(f'ASUS ADT: {len(blob)} bytes; one CPU, {args.mem_mib} MiB at 0x{PHYS_BASE:x}; '
+    print(f'ASUS ADT: {len(blob)} bytes; {args.cpus} CPU node(s), {args.mem_mib} MiB at 0x{PHYS_BASE:x}; '
           + ('UFS at 0x1d84000' if args.ufs else 'no UFS node'))
