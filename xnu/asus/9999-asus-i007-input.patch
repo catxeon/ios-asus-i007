@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1456 @@
+@@ -0,0 +1,1561 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21716,6 +21716,9 @@
 +	void touchDiagnostics();
 +	void cpuFreq();
 +	void gpuProbe();
++	void gpuStage2(IOMemoryMap *gcc, IOMemoryMap *gpucc);
++	bool gpuBranch(IOMemoryMap *m, uint32_t off, const char *name);
++	bool gpuRcg(IOMemoryMap *m, uint32_t cmd, uint32_t src, uint32_t div2m1, const char *name);
 +	void touchBringup();
 +	void wr(IOMemoryMap *m, uint32_t off, uint32_t v);
 +	bool waitClear(IOMemoryMap *m, uint32_t off, uint32_t mask);
@@ -22913,9 +22916,111 @@
 +		amark("ASUS GPU: CX GDSC %#x GX GDSC %#x cx_gmu %#x cxo %#x ahb %#x gx_gmu %#x\n",
 +		    rd(gpucc, 0x106c), rd(gpucc, 0x100c), rd(gpucc, 0x1098), rd(gpucc, 0x109c),
 +		    rd(gpucc, 0x1078), rd(gpucc, 0x1064));
++		if (stage >= 2) {
++			gpuStage2(gcc, gpucc);
++		}
 +		gpucc->release();
 +	}
 +	gcc->release();
++}
++
++/* Branch enable as Linux clk_branch2: set bit 0, wait for CLK_OFF (bit 31) to clear. */
++bool
++AsusPhoneInput::gpuBranch(IOMemoryMap *m, uint32_t off, const char *name)
++{
++	wr(m, off, rd(m, off) | 1u);
++	for (unsigned i = 0; i < 500; i++) {
++		uint32_t v = rd(m, off);
++		if (!(v & (1u << 31)) || (v & 2u)) {
++			return true;
++		}
++		IODelay(2);
++	}
++	IOLog("ASUS GPU: branch %s %#x stays off (%#x)\n", name, off, rd(m, off));
++	return false;
++}
++
++/* RCG (clk_rcg2, hid_width 5): CFG = src << 8 | (2*div - 1), then CMD.UPDATE. */
++bool
++AsusPhoneInput::gpuRcg(IOMemoryMap *m, uint32_t cmd, uint32_t src, uint32_t div2m1, const char *name)
++{
++	uint32_t cfg = rd(m, cmd + 4);
++	wr(m, cmd + 4, (cfg & ~(0x71fu)) | (src << 8) | div2m1);
++	wr(m, cmd, rd(m, cmd) | 1u);
++	for (unsigned i = 0; i < 500; i++) {
++		if (!(rd(m, cmd) & 1u)) {
++			IOLog("ASUS GPU: rcg %s cmd %#x cfg %#x -> %#x\n", name, rd(m, cmd), cfg, rd(m, cmd + 4));
++			return true;
++		}
++		IODelay(2);
++	}
++	IOLog("ASUS GPU: rcg %s update timeout (cmd %#x cfg %#x)\n", name, rd(m, cmd), rd(m, cmd + 4));
++	return false;
++}
++
++/*
++ * Stage 2 (asusgpu>=2): what a6xx_gmu_resume does before touching the GMU, after
++ * Linux gcc/gpucc-sm8350: GCC votes for GPLL0 to the GPU (0x52000 bits 15, 16),
++ * gcc_gpu_memnoc_gfx (0x7100c) and gcc_gpu_snoc_dvm_gfx (0x71018); GPU_CC
++ * gmu_clk_src 200 MHz (GPLL0_DIV 300 MHz / 1.5, src 6) and hub_clk_src 150 MHz
++ * (GPLL0_DIV / 2), branches ahb, cxo, cx_gmu, hub_cx_int, hub_aon, cx_snoc_dvm and the
++ * HLOS SMMU clock vote; CX GDSC (0x106c) on. Then read a few GMU registers (dword
++ * offsets from the GMU block 0x3d6a000, a6xx_gmu.xml). The GX side stays off.
++ */
++void
++AsusPhoneInput::gpuStage2(IOMemoryMap *gcc, IOMemoryMap *gpucc)
++{
++	amark("ASUS GPU: stage 2: GCC votes and GPU NoC branches\n");
++	wr(gcc, 0x52000, rd(gcc, 0x52000) | (1u << 15) | (1u << 16));
++	IODelay(10);
++	if (!gpuBranch(gcc, 0x7100c, "gcc_gpu_memnoc_gfx") || !gpuBranch(gcc, 0x71018, "gcc_gpu_snoc_dvm_gfx")) {
++		return;
++	}
++	amark("ASUS GPU: stage 2: GPU_CC clock sources\n");
++	if (!gpuRcg(gpucc, 0x1120, 6, 2, "gmu_clk_src 200 MHz") || !gpuRcg(gpucc, 0x117c, 6, 3, "hub_clk_src 150 MHz")) {
++		return;
++	}
++	amark("ASUS GPU: stage 2: GPU_CC branches\n");
++	static const struct { uint32_t off; const char *name; } br[] = {
++		{ 0x1078, "ahb" }, { 0x109c, "cxo" }, { 0x1098, "cx_gmu" }, { 0x1204, "hub_cx_int" },
++		{ 0x1178, "hub_aon" }, { 0x108c, "cx_snoc_dvm" }, { 0x5000, "hlos1_vote_gpu_smmu" },
++	};
++	for (unsigned i = 0; i < sizeof(br) / sizeof(br[0]); i++) {
++		if (!gpuBranch(gpucc, br[i].off, br[i].name)) {
++			return;
++		}
++	}
++	amark("ASUS GPU: stage 2: CX GDSC (was %#x)\n", rd(gpucc, 0x106c));
++	uint32_t g = rd(gpucc, 0x106c);
++	if (!(g & (1u << 31))) {
++		wr(gpucc, 0x106c, g & ~1u);
++		bool on = false;
++		for (unsigned i = 0; i < 1000 && !on; i++) {
++			on = rd(gpucc, 0x106c) & (1u << 31);
++			if (!on) {
++				IODelay(5);
++			}
++		}
++		if (!on) {
++			amark("ASUS GPU: CX GDSC did not power on (%#x)\n", rd(gpucc, 0x106c));
++			return;
++		}
++	}
++	amark("ASUS GPU: CX GDSC %#x; stage 2: reading GMU registers\n", rd(gpucc, 0x106c));
++	IOMemoryMap *gmu = map(0x03d6a000ULL, 0x34000);
++	if (!gmu) {
++		return;
++	}
++	static const struct { uint32_t reg; const char *name; } regs[] = {
++		{ 0x5000, "CM3_SYSRESET" }, { 0x501c, "CM3_FW_INIT_RESULT" }, { 0x51cc, "GENERAL_7" },
++		{ 0x5181, "HFI_VERSION_INFO" }, { 0x5088, "ALWAYS_ON_COUNTER_L" }, { 0x50d0, "SPTPRAC_PWR_CLK_STATUS" },
++		{ 0x9305, "AO_HOST_INTERRUPT_STATUS" }, { 0x9313, "AHB_FENCE_STATUS" },
++	};
++	for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
++		amark("ASUS GPU: gmu %s (%#x) = %#x\n", regs[i].name, regs[i].reg, rd(gmu, 4 * regs[i].reg));
++	}
++	gmu->release();
++	amark("ASUS GPU: stage 2 done\n");
 +}
 +
 +void
@@ -22961,10 +23066,10 @@
 +		    d, en, state, ((state & 0xff) * 192u) / 10u, rd(m, 0x320), n, lut);
 +		/*
 +		 * Image 0034: the A78 and X1 domains read enable 0x2 (bit 0 clear, Linux would
-+		 * refuse them) with state 0. Experimental (lab first): asusepssen=1 sets bit 0
-+		 * before the request.
++		 * refuse them) with state 0. Setting bit 0 works (image 0036: A78 709 -> 2418 MHz,
++		 * X1 1074 -> 2840 MHz by the per-core check); asusepssen=0 leaves them alone.
 +		 */
-+		uint32_t epssen = 0;
++		uint32_t epssen = 1;
 +		PE_parse_boot_argn("asusepssen", &epssen, sizeof(epssen));
 +		if (!(en & 1) && epssen) {
 +			amark("ASUS CPUFREQ: domain %u: setting enable bit 0 (was %#x)\n", d, en);

@@ -398,6 +398,48 @@
     copy is cheap with write-combine; deferring it adds latency/races).
   - asuscpubench: 30 s after start a thread bound to each CPU in turn times 2^22 x 8
     dependent adds -> MHz estimate per core.
+- **Image 0035 (kernel 42122414045): no crashes, no resprings** (user: "better,
+  nothing crashes"). **Clean reboot verified**: asusreboot=2700 -> sync, processes
+  stopped, vfs_unmountall (`hfs: unmount initiated on ASUSRamRoot`), halt/restart
+  type 1 -> PSCI reset. Per-core check: cpu0-3 (A55) ~1802-1804 MHz, cpu4-6 (A78)
+  ~709 MHz (= their lowest LUT level 710), cpu7 (X1) ~1074 MHz. Remaining kills are
+  slowness: 0x8badf00d "failed to terminate gracefully after 5.0s" (MobileSMS,
+  Preferences), MobileSafari sig 9 (ns 23), MobileSlideShow abort. SpringBoard
+  privilege 1007 denied once.
+- **GPU facts (Android live DT/sysfs, private copy work/asus-gpu-fw/gpufacts.txt):**
+  Adreno660v2, qcom,chipid 0x06060001, highest-bank-bit 16, ubwc-mode 4, min access
+  32; kgsl-3d0 regs 0x3d00000 (0x40000), cx_dbgc 0x3d61000, rscc 0x3de0000,
+  isense 0x3d8b000; GMU qcom,gmu@3d69000 reg 0x3d6a000 (0x34000) + gmu_pdc 0xb290000,
+  GMU behind kgsl-smmu SID 5 (iommus <smmu 5 0x400>); GPU SMMU kgsl-smmu@3da0000
+  (qsmmu-v500, qcom,skip-init, TBUs 0x3dc5000/0x3dc9000, 3-level split tables);
+  gpucc 0x3d90000 (0x9000, lahaina-gpucc); zap region pil_gpu_region@8b51a000 (8 KiB);
+  RPMh gfx.lvl / cx.lvl / mx.lvl; GPU OPPs 315..840 MHz (10 levels, initial level 9 =
+  315 MHz). Firmware /vendor/firmware a660_gmu.bin (53672), a660_sqe.fw (40496),
+  a660_zap.{mdt,b00,b01,b02,elf} -> work/asus-gpu-fw/ (private, not in git).
+- **GPU plan.** Reuse the topaz stack (patches 0901-0947 from HackiOS/darwin-redwood:
+  RedwoodGPU.cpp = msm DRM user client for Mesa freedreno, hardware behind
+  redwood_gpu_*; userland/mesa (Mesa 25.0.7 freedreno, redwood-drm), userland/gpu
+  (eagl, injection into backboardd)). New: an Adreno 660 hardware layer (topaz's
+  TopazAdreno.cpp is A610, no GMU). A660 needs, after Linux a6xx_gmu.c/a6xx_hfi.c
+  (v6.12 sources sparse-checked out in WSL ~/linux-msm): GCC/GPU_CC clocks, CX GDSC,
+  GMU firmware into ITCM/DTCM, RSCC/PDC sequences (a6xx_gmu_rpmh_init), HFI queues in
+  memory the GMU reaches through the GPU SMMU (SID 5), GMU start, HFI init/perf table
+  (gfx.lvl/mx.lvl ARC votes from cmd-db), OOB GPU_SET (GX on), then a6xx hw_init,
+  SMMU context bank for the GPU, zap shader (PAS 13) via TrustZone, SQE + CP start.
+  Staged boot-arg asusgpu=N in AsusPhoneInput (lab images): stage 1 = read GCC GPU
+  branches + GPU_CC (enables GCC_GPU_CFG_AHB_CLK like Linux), stage 2 = GPU clocks +
+  CX GDSC + read GMU registers.
+- **Image 0036 (lab, kernel 42130406828, asusgpu=1 asusepssen=1): BIG CORES AT FULL
+  SPEED.** Setting EPSS enable bit 0 on domains 1/2 worked: domain 1 enable 0x3 state
+  710 MHz -> perf-state 15 = 2419 MHz, domain 2 2764 -> perf-state 18 = 2841 MHz;
+  per-core check: cpu0-3 1802 MHz, cpu4-6 2418 MHz (was 709), cpu7 2840 MHz (was
+  1074). Now the default (asusepssen=0 opts out). GPU stage 1: GCC_GPU_CFG_AHB_CLK
+  already on (0x1); GPU_CC readable: CX GDSC 0x106c = 0x222001 and GX GDSC 0x100c =
+  0x222001 (collapsed, PWR_ON clear), cx_gmu 0x1098 0x80004221 (off), cxo 0x109c
+  0x80000001, ahb 0x1078 0, gx_gmu off, gmu_clk_src cmd 0x1120 0x80000000 (root
+  off), hlos1 SMMU vote 0x5000 0x80000000, PLL0/PLL1 (0x0/0x100) configured but off
+  (L 0x?? at +0x4 = 0, user ctl 0x805). The lab-mode "initproc failed" panic at the
+  end is the clean reboot killing the RAM-root init (harmless, lab only).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
