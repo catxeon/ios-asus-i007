@@ -16,6 +16,7 @@ SOC_BASE = 0x01000000
 
 
 
+ASUS_ECID = 0x4153555349000001  # 'ASUSI' + 1, synthetic (not the phone's ECID)
 GUI_DISP0 = ('dot-pitch', 'display-default-color', 'max-avg-bpp', 'max-peak-bpp', 'max-scaling-ratio')
 
 
@@ -48,7 +49,18 @@ def gui_nodes(source):
     # iBoot fills the D22AP /chosen display-* templates at boot (they are empty in the
     # IPSW), so set them here: 1080x2448 at 3x = 360x816 points, portrait, as on sweet.
     chosen = [('display-scale', 0, u32(3)), ('display-rotation', 0, u32(0)),
-              ('display-boot-rotation', 0, u32(0))]
+              ('display-boot-rotation', 0, u32(0)),
+              # As tools/mkadt.py (sweet): libimg4 wants a crypto hash method; XNU derives
+              # IOPlatformUUID (CFPreferences CurrentHost) from a synthetic ECID and the A11
+              # chip-id; the dev-fused security tuple (0,0,1,1) makes mobileactivationd take
+              # its native "Hactivation" branch (Activated without an activation record).
+              ('crypto-hash-method', 0, cstr('sha2-384')),
+              ('unique-chip-id', 0, struct.pack('<Q', ASUS_ECID)),
+              ('chip-id', 0, u32(0x8015)),
+              ('certificate-production-status', 0, u32(0)),
+              ('effective-production-status-ap', 0, u32(0)),
+              ('certificate-security-mode', 0, u32(1)),
+              ('effective-security-mode-sep', 0, u32(1))]
     disp0 = clean(find('arm-io/disp0'), GUI_DISP0)
     disp0.props = [(k, f, v) for k, f, v in disp0.props if k == 'name' or v.strip(b'\0')]
     return chosen, [clean(find('product')), clean(find('buttons')), clean(find('backlight'))], disp0
