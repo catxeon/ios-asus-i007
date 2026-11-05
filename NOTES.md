@@ -227,6 +227,27 @@
     shows Dec 31 (no RTC). Snapshot kept privately in ../qemu-v12-2400.png (Apple UI,
     not committed). Next: input (touch/HID) to unlock to the home screen, RTC/time,
     and why first frames take ~30 min under TCG.
+  - **Home screen by touch (kernel 622151a9 = CI 41979354334, profile --input).**
+    xnu/asus/9999-asus-i007-input.patch: sweet 0058 HID services (SweetHIDButtons,
+    SweetHIDTouch, Apple IOHIDFamily-1915 user client) with 0071's edge bit and the
+    1080x2448 panel, plus iokit/Kernel/arm/AsusVirtioInput.cpp: virtio-mmio (modern
+    transport) tablet + keyboard on QEMU virt at 0x0a000000, eventq polled every 10 ms,
+    tablet ABS 0..32767 + BTN_LEFT -> sweet_hid_touch(0,...), KEY_POWER/VOLUMEUP/
+    VOLUMEDOWN/HOME -> sweet_hid_key. Starts only with boot-arg asus_virtio_input=1
+    (the phone has no virtio-mmio). QEMU side: ASUS_QEMU_INPUT=1 in ../run_asus_qemu.py
+    (-global virtio-mmio.force-legacy=false, virtio-tablet-device, virtio-keyboard-device,
+    boot-arg), ../qmp_touch.py (tap/swipe/key over QMP input-send-event, panel pixels),
+    ../touch_run.sh OUT T:ACTION... (snap, msgbuf, tap,X,Y, swipe,..., key,NAME).
+    Run qemu-touch1 on root v12: both devices found (slots 30/31), backboardd opens
+    SweetHIDTouch and SweetHIDButtons at 44 s; lock screen by ~2400 s; swipe
+    540,2440 -> 540,1200 (500 ms, edge) at 2435 s unlocks to the **home screen** (two
+    widgets "Waiting...", Photos, App Store, Settings; dock Phone, Safari, Messages; Search).
+    A second, faster swipe on the home screen (2631 s) is followed by a SpringBoard crash
+    at 2650 s (corpse, no report: EXC_CORPSE_NOTIFY fails) and a respring (spinner until
+    the run ended at ~3000 s). Home key and tap reached the HID services. Not yet
+    diagnosed; next: capture_crash gdb script for this kernel's addresses.
+    Red banner rdar:45025538 = no status bar visual provider for 360x816 pt (sweet 0061
+    fixed it by presenting 1125x2436).
   - C: has only ~6 GB free: the WSL ext4.vhdx grew (roots + ram.bin). Freed space inside
     WSL is reused; compacting the vhdx would return it to Windows.
   - GDB crash capture for kernel 59b0b8c1/884e0b3b symbol layout:
