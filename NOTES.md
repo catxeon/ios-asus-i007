@@ -304,6 +304,12 @@
   SweetHIDTouch.
 - So the bootloader leaves the touch rails off and the QUP SE4 is GSI-only; the working
   path is RPMh votes + bit-banged I2C (50 kHz, polled on GPIO23).
+- iosroot (sda24, start 927662080 x 512 B, 34359717888 B, not mounted) rewritten with
+  v14 after the 0023 corruption (user approved): `adb exec-in "su -c 'dd
+  of=/dev/block/sda24 bs=4194304 conv=fsync'" < //wsl.localhost/Ubuntu/...v14.hfs`,
+  579 s; first 3072 x 4 MiB = 528ab8ee... = v14 on the first check (the tail arrived
+  this time; the separate last-32-MiB push was not needed). Note: from Git Bash, `adb
+  push X /data/...` needs MSYS_NO_PATHCONV=1 (the remote path got rewritten).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
