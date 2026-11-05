@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,516 @@
+@@ -0,0 +1,528 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22044,6 +22044,18 @@
 +			    rd(tlmm, pins[i] * 0x1000), rd(tlmm, pins[i] * 0x1000 + 4));
 +		}
 +	}
++	/*
++	 * Linux geni_se_init/geni_se_io_init, which sweet's SE (pre-initialised by its
++	 * bootloader) never needed: ABL leaves SE4 untouched, and image 0018's engine
++	 * accepted a command but raised no IRQ and ignored ABORT. Enable the sequencer
++	 * clock gates, the outputs, force defaults, and the M/S interrupt lines.
++	 */
++	IOLog("ASUS TOUCH: se4 cgc=%#x out=%#x force=%#x se_irq_en=%#x\n",
++	    rd(se, 0x28), rd(se, 0x24), rd(se, 0x20), rd(se, 0xe1c));
++	wr(se, 0x28, rd(se, 0x28) | 0x7fu);     /* GENI_CGC_CTRL |= DEFAULT_CGC_EN */
++	wr(se, 0x24, 0x7fu);                    /* GENI_OUTPUT_CTRL = DEFAULT_IO_OUTPUT_CTRL_MSK */
++	wr(se, 0x20, 1u);                       /* GENI_FORCE_DEFAULT_REG */
++	wr(se, 0xe1c, rd(se, 0xe1c) | 0xfu);    /* SE_IRQ_EN: DMA RX/TX, GENI M/S */
 +	/* I2C engine as sweet: FIFO mode, SE clock /7, 100 kHz SCL, Linux 8-bit packing. */
 +	wr(se, SE_DMA, 0);
 +	wr(se, SE_CLK_SEL, 0);
