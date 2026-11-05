@@ -74,6 +74,10 @@ if args.userland:
     # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
     # app leaves the foreground: SIGSYS (QEMU: EXC_CRASH code 0xc000000 after a swipe).
     selected.append(repo / 'xnu/patches/0070-sweet-pid-hibernate.patch')
+    # Sweet 0043 + 0044 crash reports on the console (CRASH name[pid] sig, registers,
+    # frame-pointer backtrace, shared cache slide, exit reason): resprings and app
+    # crashes on the phone (image 0033) gave only "EXC_CORPSE_NOTIFY ... for pid N".
+    selected.append(repo / 'xnu/asus/9999-asus-i007-zcrash.patch')
 if args.smp:
     # git apply goes in name order: "zsmp" sorts after every other 9999-asus-i007 patch,
     # whose SweetCPU/SWEET.h edits it was generated against.
