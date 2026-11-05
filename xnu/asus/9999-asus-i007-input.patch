@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,516 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21714,6 +21714,7 @@
 +	    bool out, bool high);
 +	int i2cMsg(IOMemoryMap *se, uint8_t addr, const uint8_t *tx, unsigned nt,
 +	    uint8_t *rx, unsigned nr, bool stretch);
++	void abortCmd(IOMemoryMap *se);
 +	static void poll(OSObject *owner, IOTimerEventSource *sender);
 +	IOMemoryMap *fCore, *fCnfg, *fObs;
 +	IOWorkLoop *fLoop;
@@ -21893,6 +21894,11 @@
 +	wr(se, SE_IRQ_CLR, 0xffffffffu);
 +	wr(se, nr ? SE_RX_LEN : SE_TX_LEN, nr ? nr : nt);
 +	wr(se, SE_CMD, ((nr ? 2u : 1u) << 27) | ((uint32_t)addr << 9) | (stretch ? 4u : 0u));
++	if (nt) {
++		/* As Linux geni_i2c_tx_one_msg: TX watermark 1 raises TX_FIFO_WATERMARK
++		 * (bit 30); with 0 the engine waited for data forever (image 0017). */
++		wr(se, SE_TX_WM, 1);
++	}
 +	unsigned sent = 0, got = 0;
 +	for (unsigned i = 0; i < 20000; i++) {
 +		uint32_t irq = rd(se, SE_IRQ);
@@ -21902,7 +21908,11 @@
 +				IODelay(10);
 +				irq = rd(se, SE_IRQ);
 +			}
++			wr(se, SE_TX_WM, 0);
 +			wr(se, SE_IRQ_CLR, irq);
++			if (rd(se, SE_STATUS) & 1) {
++				abortCmd(se);
++			}
 +			return (irq & SE_NACK) ? ENXIO : EIO;
 +		}
 +		if (nt && !sent && (irq & (1u << 30))) {
@@ -21911,6 +21921,7 @@
 +				word |= (uint32_t)tx[j] << (8 * j);
 +			}
 +			wr(se, SE_TX, word);
++			wr(se, SE_TX_WM, 0);
 +			sent = nt;
 +		}
 +		while (nr && got < nr && (rd(se, SE_RX_COUNT) & 0x1ffffffu)) {
@@ -21925,8 +21936,27 @@
 +		}
 +		IODelay(10);
 +	}
-+	IOLog("ASUS TOUCH: i2c %#x timeout status=%#x irq=%#x\n", addr, rd(se, SE_STATUS), rd(se, SE_IRQ));
++	IOLog("ASUS TOUCH: i2c %#x timeout status=%#x irq=%#x tx=%#x rx=%#x\n", addr,
++	    rd(se, SE_STATUS), rd(se, SE_IRQ), rd(se, SE_TX_COUNT), rd(se, SE_RX_COUNT));
++	wr(se, SE_TX_WM, 0);
++	abortCmd(se);
 +	return ETIMEDOUT;
++}
++
++/* Linux geni_i2c_abort_xfer: M_GENI_CMD_ABORT, wait M_CMD_ABORT (irq bit 5), drain. */
++void
++AsusPhoneInput::abortCmd(IOMemoryMap *se)
++{
++	wr(se, 0x604, 2);
++	unsigned i;
++	for (i = 0; i < 5000 && !(rd(se, SE_IRQ) & (1u << 5)); i++) {
++		IODelay(10);
++	}
++	for (unsigned j = 0; j < 64 && (rd(se, SE_RX_COUNT) & 0x1ffffffu); j++) {
++		(void)rd(se, SE_RX);
++	}
++	wr(se, SE_IRQ_CLR, 0xffffffffu);
++	IOLog("ASUS TOUCH: abort %s status=%#x\n", i < 5000 ? "done" : "timed out", rd(se, SE_STATUS));
 +}
 +
 +/*
