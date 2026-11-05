@@ -19,7 +19,12 @@ parser.add_argument('--userland', action='store_true',
 parser.add_argument('--input', action='store_true',
                     help='Include HID event services (touch, buttons) and the QEMU virtio input '
                          'source (boot-arg asus_virtio_input=1)')
+parser.add_argument('--ufs', action='store_true',
+                    help='Include the read-only UFS driver (sweet 0028/0030/0034/0069, writes '
+                         'disabled; boot-args ufsprobe=1, ufslist=1, rd=ufsroot0)')
 args = parser.parse_args()
+if args.ufs and not args.hfs:
+    parser.error('--ufs requires --hfs')
 if args.input and not args.hfs:
     parser.error('--input requires --hfs')
 if args.userland and not args.hfs:
@@ -52,6 +57,8 @@ if args.compositor:
     selected.append(repo / 'xnu/asus/9999-asus-i007-qemu-compositor.patch')
 if args.input:
     selected.append(repo / 'xnu/asus/9999-asus-i007-input.patch')
+if args.ufs:
+    selected.append(repo / 'xnu/asus/9999-asus-i007-ufs.patch')
 if args.userland:
     selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
     # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
@@ -82,8 +89,9 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
     'cpu': 'cortex-a55', 'cpus': 1, 'page_size': 16384,
     'root': 'HFS+ or mockfs RAM disk' if args.hfs else 'mockfs RAM disk',
     'hfs': args.hfs, 'display': args.display, 'qemu_compositor': args.compositor,
-    'userland': args.userland, 'input': args.input,
-    'storage_driver': False, 'patches': manifest,
+    'userland': args.userland, 'input': args.input, 'ufs_read_only': args.ufs,
+    'storage_driver': args.ufs, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
-print(f'Staged {len(selected)} ASUS files; no UFS, modem, GPU or USB drivers'
+print(f'Staged {len(selected)} ASUS files; ' + ('read-only UFS, ' if args.ufs else 'no UFS, ')
+      + 'no modem, GPU or USB drivers'
       + ('' if args.input else ', no input'))

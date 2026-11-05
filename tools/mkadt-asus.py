@@ -14,6 +14,7 @@ FB_WIDTH, FB_HEIGHT, FB_STRIDE = 1080, 2448, 4320
 FB_SIZE = (FB_STRIDE * FB_HEIGHT + 0x3fff) & ~0x3fff
 CANVAS_WIDTH, CANVAS_HEIGHT = 1125, 2436   # iPhone X screen presented to iOS (375x812 pt @3x)
 SOC_BASE = 0x01000000
+UFS, UFS_SIZE = 0x01d84000, 0x3000   # ufshc@1d84000 ufs_mem (live DT)
 
 
 
@@ -84,7 +85,7 @@ def trust_cache_prop(path):
     return ('asus-static-trust-cache', 0, data)
 
 
-def build(display=False, ios_gui=None, trust_cache=None):
+def build(display=False, ios_gui=None, trust_cache=None, ufs=False):
     gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(MEM_SIZE)),
@@ -135,7 +136,11 @@ def build(display=False, ios_gui=None, trust_cache=None):
         ('compatible', cstr('asus,picasso') + cstr('qcom,lahaina') + cstr('AppleARM')),
         ('model', cstr('ASUS_I007D')), ('target-type', cstr('PICASSO')),
         ('manufacturer', cstr('ASUS')), ('#address-cells', u32(2)), ('#size-cells', u32(2)),
-    ], [chosen, node('defaults'), cpus, arm_io, fbcon, *gui_top])
+    ], [chosen, node('defaults'), cpus, arm_io, fbcon, *gui_top,
+        # xnu/asus/9999-asus-i007-ufs.patch (sweet_ufs.c): the UFS host ABL leaves running,
+        # absolute physical reg. Phone only; QEMU has no UFS.
+        *([node('sweet-ufs', [('compatible', cstr('qcom,ufshc')), ('reg', u64(UFS, UFS_SIZE))])]
+          if ufs else [])])
 
 
 if __name__ == '__main__':
@@ -146,11 +151,13 @@ if __name__ == '__main__':
                         help='add iPhone X product/buttons/backlight/display-scale nodes from a local decoded ADT')
     parser.add_argument('--trust-cache', type=Path, metavar='TRUSTCACHE',
                         help='pass the OS static trust cache (IM4P or raw v2) in /chosen')
+    parser.add_argument('--ufs', action='store_true', help='add /sweet-ufs for the read-only UFS driver')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
-    root = build(args.display, args.ios_gui, args.trust_cache)
+    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:
         adt.dump(adt.parse(blob)[0])
-    print(f'ASUS ADT: {len(blob)} bytes; one CPU, 512 MiB at 0x{PHYS_BASE:x}; no UFS node')
+    print(f'ASUS ADT: {len(blob)} bytes; one CPU, 512 MiB at 0x{PHYS_BASE:x}; '
+          + ('UFS at 0x1d84000' if args.ufs else 'no UFS node'))

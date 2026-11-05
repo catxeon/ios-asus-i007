@@ -55,7 +55,7 @@ def verify(path, require_hfs=False, require_display=False):
                    b'_sweet_early_mark\0', b'_sweet_early_relocate\0'):
         if marker not in data:
             raise ValueError(f'Missing ASUS build marker: {marker!r}')
-    for marker in (b'SWEET UFS:', b'TOPAZ GPU', b'TOPAZ MODEM'):
+    for marker in (b'TOPAZ GPU', b'TOPAZ MODEM'):
         if marker in data:
             raise ValueError(f'Unexpected board peripheral code: {marker!r}')
     virtual_timer_only(data, header)
@@ -78,6 +78,10 @@ def verify(path, require_hfs=False, require_display=False):
                             (b'ASUS Sandbox: permissive policy', b'_asus_userland_register\0',
                              b'mounting dirty non-journaled root read-write',
                              b'ASUS TRUST: static trust cache v2')),
+            'ufs_read_only': all(marker in data for marker in
+                                 (b'SWEET UFS: ufsrw ignored, this build is read-only',
+                                  b'ASUS UFS probe: %d (root stays %s)')),
+            'ufs': b'SWEET UFS:' in data,
             'input': all(marker in data for marker in
                          (b'SWEET HID: touch registered', b'IOHIDEventServiceUserClient',
                           b'ASUS VIRTIO INPUT: %d device(s)', b'asus_virtio_input'))}
@@ -93,6 +97,7 @@ if __name__ == '__main__':
     compositor.add_argument('--reject-compositor', action='store_true')
     parser.add_argument('--require-userland', action='store_true')
     parser.add_argument('--require-input', action='store_true')
+    parser.add_argument('--require-ufs-read-only', action='store_true')
     args = parser.parse_args()
     result = verify(args.kernel, args.require_hfs, args.require_display or args.require_compositor)
     if args.require_compositor and not result['qemu_compositor']:
@@ -101,6 +106,10 @@ if __name__ == '__main__':
         raise ValueError('The QEMU compositor profile cannot be packaged for the phone')
     if args.require_userland and not result['userland']:
         raise ValueError('Expected the ASUS userland services profile')
+    if result['ufs'] and not result['ufs_read_only']:
+        raise ValueError('UFS driver present without the ASUS read-only guard')
+    if args.require_ufs_read_only and not result['ufs_read_only']:
+        raise ValueError('Expected the ASUS read-only UFS profile')
     if args.require_input and not result['input']:
         raise ValueError('Expected the ASUS input profile')
     print(json.dumps(result, indent=2))
