@@ -218,7 +218,15 @@
     metadata (CA9C4F52-0508-49C8-9CDF-07B8CA0A3676; backboardd and lsd containers
     exist too). ~/asus-roots/springboard-v12.hfs SHA256
     e26e9d4a3aeae60f56f67dffcd266ecc233c9e77014e28203fc1568b95393f6d. v9/v10/v11 were
-    renamed or overwritten in place (rebuildable by the scripts). Testing.
+    renamed or overwritten in place (rebuildable by the scripts).
+  - **Lock screen reached (v12, kernel 884e0b3b, 50-min run).** mobileactivationd starts
+    once and no longer crashes (0 corpses). Frames at 600 s and 1200 s are still the logo;
+    by 2400 s SpringBoard has created its layer surfaces and backboardd swaps surfaces 2/3
+    to the panel: lock screen with date/clock, flashlight and camera buttons and the home
+    indicator, black (no wallpaper) and an internal-build red status banner. The clock
+    shows Dec 31 (no RTC). Snapshot kept privately in ../qemu-v12-2400.png (Apple UI,
+    not committed). Next: input (touch/HID) to unlock to the home screen, RTC/time,
+    and why first frames take ~30 min under TCG.
   - C: has only ~6 GB free: the WSL ext4.vhdx grew (roots + ram.bin). Freed space inside
     WSL is reused; compacting the vhdx would return it to Windows.
   - GDB crash capture for kernel 59b0b8c1/884e0b3b symbol layout:
