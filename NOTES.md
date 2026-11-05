@@ -348,6 +348,18 @@
     (reverse the display patch first; scratchpad unpatch_display.py removes leftovers).
   - Touch: read count + first point (7 bytes), the rest only for multi-touch (was 61
     bytes per report, ~11 ms); bit-bang half period 2 us (~200 kHz).
+  - Touch stuck down (user: "after a touch it still thinks the finger is on the
+    screen"): the FocalTech IRQ is a short falling-edge pulse (DT flags 0x2008); the
+    8 ms level poll missed the lift report. Now every poll reads while a finger is down.
+- 0031 log (back in Android after 1925 s, user reset): 8/8 CPUs, SpringBoard surfaces,
+  28 HID touch lines, three hfs_mark_inconsistent, no panic.
+- **Image 0032 (kernel 42106499721): panic at the first GUI swap** "Unexpected fault in
+  kernel static region", pc switch_to_serial_console+0x1c <- PE_initialize_console+0x58,
+  far = cons_ops_index (__DATA_CONST, read-only late), esr 0x9600004f. Same as sweet:
+  fix = sweet 0067's mute flag: `int sweet_console_muted` in serial_console.c (UFS
+  patch, next to the flash log hook; _cnputs returns after the log append unless a
+  panic is active), set by AppleCLCD at the first swap (weak extern). The panic tail
+  and halt/restart notes reached the flash log as designed.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

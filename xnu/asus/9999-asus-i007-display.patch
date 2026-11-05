@@ -943,7 +943,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,530 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -976,6 +976,8 @@
 + * first swap) switches the console to serial, which also hides panics.
 + */
 +#include "SweetSurface.h"
++
++extern "C" __attribute__((weak)) int sweet_console_muted;  /* osfmk/console/serial_console.c */
 +
 +#if defined(SWEET)
 +#include <IOKit/IOService.h>
@@ -1212,10 +1214,11 @@
 +	if (!consoleChecked) {
 +		int keep = 0;
 +		consoleChecked = true;
-+		if (!PE_parse_boot_argn("asusfb_console", &keep, sizeof(keep)) || keep == 0) {
-+			PE_Video video;
-+			PE_current_console(&video);
-+			PE_initialize_console(&video, kPEDisableScreen);
++		if ((!PE_parse_boot_argn("asusfb_console", &keep, sizeof(keep)) || keep == 0) &&
++		    &sweet_console_muted != NULL) {
++			/* Not PE_initialize_console(kPEDisableScreen): its switch to the serial
++			 * console writes the read-only-late cons_ops_index (panic, image 0032). */
++			sweet_console_muted = 1;
 +			IOLog("ASUS FB: screen console off (asusfb_console=1 keeps it)\n");
 +		}
 +	}
