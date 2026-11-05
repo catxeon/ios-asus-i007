@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1455 @@
+@@ -0,0 +1,1456 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22995,7 +22995,7 @@
 +	if (!IOService::start(provider)) {
 +		return false;
 +	}
-+	cpuFreq();
++	/* cpuFreq() runs from touchFired, once the flash log works (EPSS experiments). */
 +	touchDiagnostics();
 +	fCore = map(SPMI_CORE_PA, 0x2000);
 +	fCnfg = map(SPMI_CNFG_PA, 0x1000);
@@ -23064,6 +23064,7 @@
 +		return;
 +	}
 +	amark("ASUS TOUCH: flash log ready (waited %u s), starting bring-up\n", 2 * waits);
++	((AsusPhoneInput *)owner)->cpuFreq();
 +	((AsusPhoneInput *)owner)->gpuProbe();
 +	((AsusPhoneInput *)owner)->touchBringup();
 +}
