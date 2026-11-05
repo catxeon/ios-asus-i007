@@ -371,6 +371,33 @@
   under --userland; 0066 needs sweet 0051, left out) and EPSS cpufreq: AsusPhoneInput
   logs each domain (0x18591000 A55, 0x18592000 A78, 0x18593000 X1: LUT, state) and
   requests the top LUT index (asuscpufreq=0 logs only, =N caps at index N-1).
+- **Image 0034 (kernel 42116493911; the chain downloaded it into ios-topaz/ by
+  mistake, moved to work/).** EPSS: domain 0 (A55) enable 0x3, was 1497 MHz (perf
+  0xc), LUT 288..1804 MHz (16 levels) -> perf-state 15 = 1804 MHz. Domains 1 (A78,
+  LUT 710..2419) and 2 (X1, LUT 844..2841) report enable 0x2 (bit 0 clear = cpufreq
+  hardware not enabled), state 0: the big cores' clock is unknown (maybe very low).
+  Crash reports (symbolicated with scratchpad dsc_a2s.py against the SystemOS cache,
+  slide 0x2b558000):
+  - SpringBoard[24], [39] and most Preferences: sig 6, abort <- libc++abi <-
+    objc_exception_rethrow <- CFRunLoopRunSpecific <- GSEventRunModal <- UIKitCore:
+    an uncaught NSException on the main thread (reason not on the console).
+  - Preferences[44] sig 5 (Swift trap) in PodcastsUI (sweet's nil
+    URL.volumeTotalCapacity force-unwrap).
+  - Preferences[50] sig 11, pc 0 in CoreImage <- MobileIcons (null function pointer,
+    probably no GPU/Metal).
+- Patch batch (user: "add many patches preemptively"; only those that apply on the
+  ASUS tree and do not depend on Xiaomi/topaz hardware):
+  - 0048 /dev/null tee (stderr of sweetnull=backboardd,SpringBoard,Preferences to the
+    log: the NSException reasons);
+  - 0064 PRIV_WORK_INTERVAL grant + first-denial log, hand-ported into asus_userland.c
+    (the ASUS sandbox policy had no mpo_priv_grant; CoreAnimation clients need it);
+  - 0068 + 0131 IOSurface fixes (cached lookup answers base -1; no zero-client
+    surfaces) applied by make_asus_display_patch.py after the ASUS edits;
+    0136/0137 need topaz 0132-0135 first (left out), 0040 IOWatchdog not needed
+    (no watchdogd job), 0051 replaced by 0048, 0056 throttled present not taken (the
+    copy is cheap with write-combine; deferring it adds latency/races).
+  - asuscpubench: 30 s after start a thread bound to each CPU in turn times 2^22 x 8
+    dependent adds -> MHz estimate per core.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

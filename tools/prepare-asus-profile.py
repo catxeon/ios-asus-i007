@@ -78,6 +78,10 @@ if args.userland:
     # frame-pointer backtrace, shared cache slide, exit reason): resprings and app
     # crashes on the phone (image 0033) gave only "EXC_CORPSE_NOTIFY ... for pid N".
     selected.append(repo / 'xnu/asus/9999-asus-i007-zcrash.patch')
+    # Sweet 0048: what the processes in boot-arg sweetnull write to /dev/null (their
+    # stderr under launchd) reaches the console as "|name| text": the uncaught
+    # NSException reason behind SpringBoard's SIGABRT respawns (image 0034).
+    selected.append(repo / 'xnu/patches/0048-sweet-devnull-tee.patch')
 if args.smp:
     # git apply goes in name order: "zsmp" sorts after every other 9999-asus-i007 patch,
     # whose SweetCPU/SWEET.h edits it was generated against.

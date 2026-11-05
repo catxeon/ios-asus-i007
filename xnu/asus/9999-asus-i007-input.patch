@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1323 @@
+@@ -0,0 +1,1374 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22809,9 +22809,60 @@
 + * Voltage follows in firmware (CPUCP). Boot-arg asuscpufreq=0 only logs,
 + * asuscpufreq=N caps the request at LUT index N-1; default: the highest entry.
 + */
++/*
++ * Per-core speed check (image 0034: the A78/X1 EPSS domains report "not enabled",
++ * state 0, so their clock is unknown). A kernel thread binds itself to each CPU in
++ * turn and times 2^22 iterations of 8 dependent adds (8 cycles per iteration on
++ * any of these cores): MHz ~ 8 * iterations / microseconds. Boot-arg asuscpubench=0
++ * skips it; it runs 30 s after start, when every CPU is up.
++ */
++extern "C" void *asus_cpu_to_processor(int cpu) __asm__("_cpu_to_processor");
++extern "C" void *asus_thread_bind(void *processor) __asm__("_thread_bind");
++extern "C" int asus_thread_block(void *continuation) __asm__("_thread_block");
++extern "C" uint64_t mach_absolute_time(void);
++
++static void
++asus_cpu_bench(__unused void *arg, __unused wait_result_t wr)
++{
++	IOSleep(30000);
++	for (int cpu = 0; cpu < 8; cpu++) {
++		void *p = asus_cpu_to_processor(cpu);
++		if (p == NULL) {
++			continue;
++		}
++		asus_thread_bind(p);
++		asus_thread_block(NULL);          /* migrate onto that CPU */
++		uint64_t x = 1, best = ~0ULL;
++		for (int round = 0; round < 3; round++) {
++			uint64_t t0 = mach_absolute_time();
++			for (uint32_t i = 0; i < (1u << 22); i++) {
++				__asm__ volatile ("add %0, %0, #1\n\tadd %0, %0, #1\n\tadd %0, %0, #1\n\tadd %0, %0, #1\n\t"
++				                  "add %0, %0, #1\n\tadd %0, %0, #1\n\tadd %0, %0, #1\n\tadd %0, %0, #1"
++				                  : "+r"(x));
++			}
++			uint64_t dt = mach_absolute_time() - t0;
++			best = dt < best ? dt : best;
++		}
++		/* timebase 19.2 MHz: us = ticks * 10 / 192 */
++		uint64_t us = best * 10 / 192;
++		IOLog("ASUS CPUBENCH: cpu %d: %llu us for 2^22 x 8 adds = ~%llu MHz (x=%llu)\n",
++		    cpu, us, us ? (8ULL << 22) / us : 0, x & 1);
++	}
++	asus_thread_bind(NULL);
++	asus_thread_block(NULL);
++}
++
 +void
 +AsusPhoneInput::cpuFreq()
 +{
++	uint32_t bench = 1;
++	PE_parse_boot_argn("asuscpubench", &bench, sizeof(bench));
++	if (bench) {
++		thread_t th;
++		if (kernel_thread_start(asus_cpu_bench, NULL, &th) == KERN_SUCCESS) {
++			thread_deallocate(th);
++		}
++	}
 +	static const uint64_t domains[] = { 0x18591000ULL, 0x18592000ULL, 0x18593000ULL };
 +	uint32_t want = 0xff;
 +	PE_parse_boot_argn("asuscpufreq", &want, sizeof(want));

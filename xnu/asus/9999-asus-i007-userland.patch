@@ -341,7 +341,7 @@
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
 --- /dev/null
 +++ b/bsd/kern/asus_userland.c
-@@ -0,0 +1,211 @@
+@@ -0,0 +1,250 @@
 +/*
 + * ASUS I007 userland services (optional profile --userland).
 + *
@@ -370,8 +370,46 @@
 +#include <sys/mount.h>
 +#include <sys/ubc_internal.h>
 +#include <sys/vnode.h>
++#include <sys/priv.h>
 +
 +static uint64_t asus_sandbox_seen;
++
++/*
++ * Sweet 0064. Privileges for non-root processes come from MAC policies
++ * (priv_check_cred -> mac_priv_grant); on iOS Sandbox/AMFI grant them. Without a
++ * grant UIKit apps fail in CoreAnimation setup: work_interval_create(CA_CLIENT)
++ * needs PRIV_WORK_INTERVAL ("Failed to create work interval", SpringBoard).
++ * Grant that one; log the first denial of each other privilege per process.
++ */
++#define ASUS_PRIV_LOG_MAX       64
++static struct {
++	int  priv;
++	char name[20];
++} asus_priv_logged[ASUS_PRIV_LOG_MAX];
++static int asus_priv_logged_count;
++
++static int
++asus_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
++{
++	if (priv == PRIV_WORK_INTERVAL) {
++		return 0;
++	}
++	char name[20];
++	proc_selfname(name, sizeof(name));
++	for (int i = 0; i < asus_priv_logged_count; i++) {
++		if (asus_priv_logged[i].priv == priv &&
++		    strncmp(asus_priv_logged[i].name, name, sizeof(name)) == 0) {
++			return EPERM;
++		}
++	}
++	if (asus_priv_logged_count < ASUS_PRIV_LOG_MAX) {
++		asus_priv_logged[asus_priv_logged_count].priv = priv;
++		strlcpy(asus_priv_logged[asus_priv_logged_count].name, name, sizeof(name));
++		asus_priv_logged_count++;
++		printf("ASUS Sandbox: %s privilege %d denied\n", name, priv);
++	}
++	return EPERM;
++}
 +
 +static int
 +asus_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
@@ -395,6 +433,7 @@
 +
 +static const struct mac_policy_ops asus_sandbox_ops = {
 +	.mpo_policy_syscall = asus_sandbox_syscall,
++	.mpo_priv_grant = asus_sandbox_priv_grant,
 +};
 +
 +static struct mac_policy_conf asus_sandbox_conf = {
