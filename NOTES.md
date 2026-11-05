@@ -182,8 +182,18 @@
   57/15/22/29/33/79/74 -> 0x0`), xpcproxy, iconservicesagent, cfprefsd, lsd (AKS sel 0/7),
   containermanagerd, mobileactivationd spawn; then backboardd draws the Apple logo on the
   real panel (iPhone X 1125x2436 presentation over the 1080x2448 boot framebuffer, CPU
-  blits). Kernel console stopped painting over it (as in QEMU). Waiting for SpringBoard /
-  lock screen; no touch or buttons on the phone yet.
+  blits). Waiting for SpringBoard / lock screen; no touch or buttons on the phone yet.
+- **🎉 MILESTONE 2026-11-05 evening: iOS 16.7 LOCK SCREEN ON THE ASUS I007, booted from its
+  own flash** (same boot of image 0014; user photos, private). Logo for a while (user
+  waited ~20+ min), then SpringBoard: `SWEET SURF: SpringBoard create id 7..10` (LA08
+  layer surfaces), AKS sel 17/26/27/8 from SpringBoard, ContextService, FocusUIModule;
+  lock screen with date (Dec 31, no RTC), clock, flashlight/camera buttons, home
+  indicator and a real status bar (battery icon empty/red: no IOPMPowerSource). Kernel
+  console (serial=3) still paints text over the UI; the 6 panel rows above the presented
+  1125x2436 area keep console fragments (the margin is cleared only once, at the first
+  swap). Next: console off for GUI boots (serial=0 or an asusfb_noconsole switch), keep
+  the margins black, flash console log (sweet 0047 into the iosroot tail), touch +
+  buttons drivers for the phone, battery power source, SMP.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
