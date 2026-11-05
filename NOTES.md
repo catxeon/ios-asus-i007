@@ -244,8 +244,28 @@
     widgets "Waiting...", Photos, App Store, Settings; dock Phone, Safari, Messages; Search).
     A second, faster swipe on the home screen (2631 s) is followed by a SpringBoard crash
     at 2650 s (corpse, no report: EXC_CORPSE_NOTIFY fails) and a respring (spinner until
-    the run ended at ~3000 s). Home key and tap reached the HID services. Not yet
-    diagnosed; next: capture_crash gdb script for this kernel's addresses.
+    the run ended at ~3000 s). Home key and tap reached the HID services.
+  - SpringBoard crash = **SIGSYS**: ../touch_debug.sh (gdb + virtio input + timed
+    actions) with ../capture_crash_k6221.gdb (kernel 622151a9 = 884e0b3b + 0x4000 for
+    the breakpoint functions, verified byte-for-byte; abort_with_payload by symbol)
+    reproduced it 12 s after the fast swipe; the only exception was type 10 (EXC_CRASH)
+    code 0xc000000 = signal 12. Same as sweet 0070: SpringBoard calls pid_hibernate
+    (syscall 435, nosys on the macOS config) when an app (here the app switcher
+    transition) leaves the foreground. tools/prepare-asus-profile.py --userland now
+    adds xnu/patches/0070-sweet-pid-hibernate.patch. Kernel 91aa054a (CI 41993057944):
+    the fast swipe on the home screen opens the (empty, grey) app switcher and
+    SpringBoard survives; a tap dismisses the switcher back to the home screen.
+  - **First app: Settings (run qemu-touch3, kernel 91aa054a, root v12).** Unlock swipe at
+    2443 s, tap on the Settings icon (671,911) at 2515 s -> `Preferences` spawned at 2519 s;
+    the Settings list is on screen by 2860 s (title, account cell, Airplane Mode, Wi-Fi Off,
+    Notifications ... Accessibility, home indicator). The account cell says "Sign in to your
+    iPad" (device class/idiom from the ADT or MobileGestalt - not checked). A slower
+    swipe up from the bottom edge (2892 s) opens the app switcher with the Settings card;
+    Preferences then crashed at 2930 s (corpse) and relaunched at 2976 s; not diagnosed
+    (sweet saw Settings SIGTRAP in PodcastsUI on a nil URL.volumeTotalCapacity on the
+    HFS+ root). ../touch_run.sh now snapshots msgbuf several times (the ring wraps after
+    ~2700 s of boot). Gesture timing note: 500 ms edge swipe on the lock screen unlocks;
+    on the home screen a 250-400 ms edge swipe ends in the app switcher.
     Red banner rdar:45025538 = no status bar visual provider for 360x816 pt (sweet 0061
     fixed it by presenting 1125x2436).
   - C: has only ~6 GB free: the WSL ext4.vhdx grew (roots + ram.bin). Freed space inside
