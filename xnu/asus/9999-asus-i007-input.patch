@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,528 @@
+@@ -0,0 +1,777 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21675,6 +21675,7 @@
 +#include <IOKit/IOWorkLoop.h>
 +#include <IOKit/IOTimerEventSource.h>
 +#include <IOKit/IODeviceMemory.h>
++#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <pexpert/pexpert.h>
 +#include <sys/errno.h>
 +
@@ -21715,6 +21716,14 @@
 +	int i2cMsg(IOMemoryMap *se, uint8_t addr, const uint8_t *tx, unsigned nt,
 +	    uint8_t *rx, unsigned nr, bool stretch);
 +	void abortCmd(IOMemoryMap *se);
++	void touchGpi(IOMemoryMap *se);
++	bool gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want);
++	int gpiRead(IOMemoryMap *gpi, uint8_t reg, uint8_t *out, unsigned len);
++	/* GPI state for QUP0 GPII 4 (SE4 I2C) */
++	IOBufferMemoryDescriptor *fGpiMem;
++	uint8_t *fGpiVa;
++	uint64_t fGpiPa;
++	unsigned fTxWp, fRxWp, fEvRp;
 +	static void poll(OSObject *owner, IOTimerEventSource *sender);
 +	IOMemoryMap *fCore, *fCnfg, *fObs;
 +	IOWorkLoop *fLoop;
@@ -22056,6 +22065,11 @@
 +	wr(se, 0x24, 0x7fu);                    /* GENI_OUTPUT_CTRL = DEFAULT_IO_OUTPUT_CTRL_MSK */
 +	wr(se, 0x20, 1u);                       /* GENI_FORCE_DEFAULT_REG */
 +	wr(se, 0xe1c, rd(se, 0xe1c) | 0xfu);    /* SE_IRQ_EN: DMA RX/TX, GENI M/S */
++	if (rd(se, 0x64) & 1) {
++		/* GENI_IF_DISABLE_RO.FIFO_IF_DISABLE: this SE firmware only takes GPI DMA. */
++		touchGpi(se);
++		goto out;
++	}
 +	/* I2C engine as sweet: FIFO mode, SE clock /7, 100 kHz SCL, Linux 8-bit packing. */
 +	wr(se, SE_DMA, 0);
 +	wr(se, SE_CLK_SEL, 0);
@@ -22085,6 +22099,241 @@
 +	se->release();
 +	gcc->release();
 +	tlmm->release();
++}
++
++/*
++ * QUP0 GPI DMA (gpi-dma@900000, ee offset 0x10000) for SE4 I2C, polled.
++ * Register map and command/TRE encodings follow the Linux qcom GPI and
++ * i2c-qcom-geni drivers; GPII 4 is one of the HLOS GPIIs (gpii-mask 0x7e).
++ */
++#define GPI_PA          0x00900000ULL
++#define GPI_SIZE        0x60000
++#define GPI_EE          0x10000         /* register offsets below are from base - ee */
++#define GPII            4
++#define G(off)          ((uint32_t)((off) - GPI_EE + 0x4000 * GPII))
++#define CH_CTX(k)       G(0x20000 + 0x80 * (k))
++#define EV_CTX          G(0x21000)
++#define CH_DB(k)        G(0x22000 + 0x8 * (k))
++#define EV_DB           G(0x22100)
++#define CH_CMD          G(0x23008)
++#define EV_CMD          G(0x23010)
++#define CH_QOS(k)       G(0x2005c + 0x80 * (k))
++#define CH_SCRATCH(k)   G(0x20060 + 0x80 * (k))
++#define CTX_LEN         0x04
++#define CTX_BASE_LO     0x08
++#define CTX_BASE_HI     0x0c
++#define CTX_RP_LO       0x10
++#define CTX_WP_LO       0x18
++#define GPI_RING        64              /* TREs per transfer ring */
++#define GPI_EVENTS      256
++#define OFF_TX          0x0000
++#define OFF_RX          0x0400
++#define OFF_EV          0x1000
++#define OFF_TXBUF       0x2000
++#define OFF_RXBUF       0x2100
++#define TRE_DMA         0x10
++#define TRE_GO          0x20
++#define TRE_CONFIG0     0x22
++#define TRE_CHAIN       (1u << 0)
++#define TRE_IEOT        (1u << 9)
++#define TRE_LINK        (1u << 11)
++
++extern "C" void flush_dcache64(addr64_t addr, unsigned count, boolean_t phys);
++extern "C" void invalidate_dcache64(addr64_t addr, unsigned count, boolean_t phys);
++
++bool
++AsusPhoneInput::gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want)
++{
++	wr(gpi, cmdReg, value);
++	for (unsigned i = 0; i < 25000; i++) {
++		if (((rd(gpi, stateReg) >> 20) & 0xf) == want) {
++			return true;
++		}
++		IODelay(10);
++	}
++	IOLog("ASUS GPI: command %#x to %#x: state %#x, wanted %u (err log %#x glob %#x)\n",
++	    value, cmdReg, rd(gpi, stateReg), want, rd(gpi, G(0x23200)), rd(gpi, G(0x23100)));
++	return false;
++}
++
++/* FocalTech register read: write [reg] (repeated start), read len bytes, at 0x38. */
++int
++AsusPhoneInput::gpiRead(IOMemoryMap *gpi, uint8_t reg, uint8_t *out, unsigned len)
++{
++	uint32_t *tx = (uint32_t *)(fGpiVa + OFF_TX), *rx = (uint32_t *)(fGpiVa + OFF_RX);
++	fGpiVa[OFF_TXBUF] = reg;
++	bzero(fGpiVa + OFF_RXBUF, 64);
++	uint32_t tres[4][4] = {
++		/* CONFIG0: TLOW 12, THIGH 10, TCYL 26 (100 kHz from 19.2 MHz), TX/RX packing; CLK_DIV 7 */
++		{ 12u | (10u << 8) | (26u << 16) | (1u << 24) | (1u << 25), 0, 7, (TRE_CONFIG0 << 16) | TRE_CHAIN },
++		/* GO write to 0x38 with stretch (no stop) */
++		{ 1u | (0x38u << 8) | (1u << 26), 0, 1, (TRE_GO << 16) | TRE_CHAIN },
++		/* DMA: the register byte */
++		{ (uint32_t)(fGpiPa + OFF_TXBUF), (uint32_t)((fGpiPa + OFF_TXBUF) >> 32), 1, (TRE_DMA << 16) | TRE_IEOT },
++		/* GO read len bytes, linked to the RX channel's DMA TRE */
++		{ 2u | (0x38u << 8), 0, len, (TRE_GO << 16) | TRE_LINK },
++	};
++	for (unsigned t = 0; t < 4; t++) {
++		uint32_t *e = tx + 4 * (fTxWp % GPI_RING);
++		for (unsigned d = 0; d < 4; d++) {
++			e[d] = tres[t][d];
++		}
++		fTxWp++;
++	}
++	uint32_t *r = rx + 4 * (fRxWp % GPI_RING);
++	r[0] = (uint32_t)(fGpiPa + OFF_RXBUF);
++	r[1] = (uint32_t)((fGpiPa + OFF_RXBUF) >> 32);
++	r[2] = len;
++	r[3] = (TRE_DMA << 16) | TRE_IEOT;
++	fRxWp++;
++	flush_dcache64((addr64_t)(uintptr_t)fGpiVa, 0x2200, FALSE);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	wr(gpi, CH_DB(1), (uint32_t)(fGpiPa + OFF_RX + 16 * (fRxWp % GPI_RING)));
++	wr(gpi, CH_DB(0), (uint32_t)(fGpiPa + OFF_TX + 16 * (fTxWp % GPI_RING)));
++
++	bool txDone = false, rxDone = false;
++	int err = 0;
++	for (unsigned i = 0; i < 50000 && !(txDone && rxDone) && !err; i++) {
++		uint32_t hwrp = rd(gpi, EV_CTX + CTX_RP_LO);
++		unsigned hwIdx = (unsigned)((hwrp - (uint32_t)(fGpiPa + OFF_EV)) / 16) % GPI_EVENTS;
++		while (fEvRp % GPI_EVENTS != hwIdx) {
++			uint32_t *ev = (uint32_t *)(fGpiVa + OFF_EV + 16 * (fEvRp % GPI_EVENTS));
++			invalidate_dcache64((addr64_t)(uintptr_t)ev, 16, FALSE);
++			unsigned type = (ev[3] >> 16) & 0xff, chid = ev[3] >> 24, code = ev[2] >> 24;
++			IOLog("ASUS GPI: event type %#x chid %u code %u len %u status %#x\n",
++			    type, chid, code, ev[2] & 0xffffff, ev[3] & 0xffff);
++			if (type == 0x22) {
++				if (code == 16) {
++					err = EIO;
++				} else if (chid == 0) {
++					txDone = true;
++				} else {
++					rxDone = true;
++				}
++			}
++			fEvRp++;
++			/* hand the slot back: event ring WP trails RP by one element */
++			wr(gpi, EV_DB, (uint32_t)(fGpiPa + OFF_EV + 16 * ((fEvRp + GPI_EVENTS - 1) % GPI_EVENTS)));
++		}
++		IODelay(10);
++	}
++	if (!(txDone && rxDone) && !err) {
++		IOLog("ASUS GPI: no completion: ch0 %#x rp %#x wp %#x ch1 %#x rp %#x wp %#x ev %#x rp %#x err %#x glob %#x\n",
++		    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(0) + CTX_RP_LO), rd(gpi, CH_CTX(0) + CTX_WP_LO),
++		    rd(gpi, CH_CTX(1)), rd(gpi, CH_CTX(1) + CTX_RP_LO), rd(gpi, CH_CTX(1) + CTX_WP_LO),
++		    rd(gpi, EV_CTX), rd(gpi, EV_CTX + CTX_RP_LO), rd(gpi, G(0x23200)), rd(gpi, G(0x23100)));
++		return ETIMEDOUT;
++	}
++	invalidate_dcache64((addr64_t)(uintptr_t)(fGpiVa + OFF_RXBUF), 64, FALSE);
++	for (unsigned j = 0; j < len; j++) {
++		out[j] = fGpiVa[OFF_RXBUF + j];
++	}
++	return err;
++}
++
++void
++AsusPhoneInput::touchGpi(IOMemoryMap *se)
++{
++	/* Linux geni_se_select_gpi_mode: SE IRQs off, DMA mode, GSI events on. */
++	wr(se, 0xe1c, 0);
++	wr(se, 0x614, 0);
++	wr(se, 0x644, 0);
++	wr(se, 0x258, rd(se, 0x258) | 1u);
++	wr(se, 0xe18, 0xfu);
++	IOMemoryMap *gpi = map(GPI_PA, GPI_SIZE);
++	fGpiMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
++	    kIODirectionInOut | kIOMemoryPhysicallyContiguous, 0x4000, 0x0000fffffffff000ULL);
++	if (!gpi || !fGpiMem) {
++		IOLog("ASUS GPI: mapping/memory failed\n");
++		OSSafeReleaseNULL(gpi);
++		return;
++	}
++	fGpiVa = (uint8_t *)fGpiMem->getBytesNoCopy();
++	fGpiPa = fGpiMem->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
++	bzero(fGpiVa, 0x4000);
++	flush_dcache64((addr64_t)(uintptr_t)fGpiVa, 0x4000, FALSE);
++	IOLog("ASUS GPI: gpii %u before: ch0 %#x ch1 %#x ev %#x err %#x mem %#llx\n", GPII,
++	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX), rd(gpi, G(0x23200)), fGpiPa);
++	/* Leftover allocations (another EE before us): reset and free them first. */
++	for (unsigned k = 0; k < 2; k++) {
++		unsigned st = (rd(gpi, CH_CTX(k)) >> 20) & 0xf;
++		if (st == 2) {
++			(void)gpiCmd(gpi, CH_CMD, (2u << 24) | k, CH_CTX(k), 3);     /* STOP */
++		}
++		if (st != 0) {
++			(void)gpiCmd(gpi, CH_CMD, (9u << 24) | k, CH_CTX(k), 1);     /* RESET */
++			(void)gpiCmd(gpi, CH_CMD, (10u << 24) | k, CH_CTX(k), 0);    /* DE_ALLOC */
++		}
++	}
++	if ((rd(gpi, EV_CTX) >> 20) & 0xf) {
++		(void)gpiCmd(gpi, EV_CMD, 9u << 24, EV_CTX, 1);
++		(void)gpiCmd(gpi, EV_CMD, 10u << 24, EV_CTX, 0);
++	}
++	/* Polled: all GPII interrupt sources masked; INTSET 1 (IRQ, not MSI); clear logs. */
++	wr(gpi, G(0x23088), 0);
++	wr(gpi, G(0x23098), 0);
++	wr(gpi, G(0x2309c), 0);
++	wr(gpi, G(0x230b8), 0);
++	wr(gpi, G(0x23108), 0);
++	wr(gpi, G(0x23120), 0);
++	wr(gpi, G(0x23180), 1);
++	wr(gpi, G(0x23188), 0);
++	wr(gpi, G(0x2318c), 0);
++	wr(gpi, G(0x23400), 0);
++	wr(gpi, G(0x23404), 0);
++	wr(gpi, G(0x23200), 0);
++	/* Event ring: 256 x 16 bytes, element size 16, IRQ type, GPI event channel. */
++	if (!gpiCmd(gpi, EV_CMD, 0, EV_CTX, 1)) {
++		goto done;
++	}
++	wr(gpi, EV_CTX, (16u << 24) | (1u << 16) | 2u);
++	wr(gpi, EV_CTX + CTX_LEN, 16 * GPI_EVENTS);
++	wr(gpi, EV_CTX + CTX_BASE_LO, (uint32_t)(fGpiPa + OFF_EV));
++	wr(gpi, EV_CTX + CTX_BASE_HI, (uint32_t)((fGpiPa + OFF_EV) >> 32));
++	wr(gpi, EV_DB + 4, (uint32_t)((fGpiPa + OFF_EV) >> 32));
++	wr(gpi, EV_CTX + 0x20, 0);
++	wr(gpi, EV_CTX + 0x28, 0);
++	wr(gpi, EV_CTX + 0x2c, 0);
++	wr(gpi, EV_CTX + 0x30, 0);
++	wr(gpi, EV_CTX + 0x34, 0);
++	fEvRp = 0;
++	wr(gpi, EV_DB, (uint32_t)(fGpiPa + OFF_EV + 16 * (GPI_EVENTS - 1)));
++	/* TX (chid 0, out) and RX (chid 1, in) channels on event ring 0, GPI protocol;
++	 * scratch: pair channel, protocol 3 (I2C), serial engine 4. */
++	for (unsigned k = 0; k < 2; k++) {
++		uint64_t ring = fGpiPa + (k ? OFF_RX : OFF_TX);
++		if (!gpiCmd(gpi, CH_CMD, k, CH_CTX(k), 1)) {
++			goto done;
++		}
++		wr(gpi, CH_CTX(k), (16u << 24) | (k << 3) | 2u);
++		wr(gpi, CH_CTX(k) + CTX_LEN, 16 * GPI_RING);
++		wr(gpi, CH_CTX(k) + CTX_BASE_LO, (uint32_t)ring);
++		wr(gpi, CH_CTX(k) + CTX_BASE_HI, (uint32_t)(ring >> 32));
++		wr(gpi, CH_DB(k) + 4, (uint32_t)(ring >> 32));
++		wr(gpi, CH_SCRATCH(k), ((k ? 0u : 1u) << 16) | (3u << 4) | 4u);
++		wr(gpi, CH_SCRATCH(k) + 4, 0);
++		wr(gpi, CH_SCRATCH(k) + 8, 0);
++		wr(gpi, CH_SCRATCH(k) + 12, 0);
++		wr(gpi, CH_QOS(k), 1);
++	}
++	fTxWp = fRxWp = 0;
++	for (unsigned k = 0; k < 2; k++) {
++		if (!gpiCmd(gpi, CH_CMD, (1u << 24) | k, CH_CTX(k), 2)) {
++			goto done;
++		}
++	}
++	IOLog("ASUS GPI: gpii %u started: ch0 %#x ch1 %#x ev %#x\n", GPII,
++	    rd(gpi, CH_CTX(0)), rd(gpi, CH_CTX(1)), rd(gpi, EV_CTX));
++	{
++		static const uint8_t regs[] = { 0xa3, 0xa6, 0x9f };
++		for (unsigned i = 0; i < sizeof(regs); i++) {
++			uint8_t v = 0;
++			int e = gpiRead(gpi, regs[i], &v, 1);
++			IOLog("ASUS TOUCH: fts 0x38 reg %#x -> %#x (err %d, gpi)\n", regs[i], v, e);
++		}
++	}
++done:
++	gpi->release();
 +}
 +
 +bool
