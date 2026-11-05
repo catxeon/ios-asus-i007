@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,927 @@
+@@ -0,0 +1,936 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -850,12 +850,14 @@
 + * reboot path: never blocks on the UFS lock, polled commands only).
 + */
 +static void
-+asus_log_flush_now(void)
++asus_log_flush(bool wait)
 +{
 +	if (!su.ready || !su.writable || su.nblocks < 2 * SWEET_LOG_BLOCKS) {
 +		return;
 +	}
-+	if (!lck_mtx_try_lock(&sweet_ufs_lock)) {
++	if (wait) {
++		lck_mtx_lock(&sweet_ufs_lock);
++	} else if (!lck_mtx_try_lock(&sweet_ufs_lock)) {
 +		printf("ASUS: log flush skipped (UFS busy)\n");
 +		return;
 +	}
@@ -887,6 +889,13 @@
 +	}
 +}
 +
++/* Panic and reset paths: never wait for the UFS lock. */
++static void
++asus_log_flush_now(void)
++{
++	asus_log_flush(false);
++}
++
 +/* For drivers stepping through risky hardware bring-up (AsusPhoneInput): put the log
 + * on flash before each step, so a fatal (EDL) crash still shows the last step. */
 +void asus_log_sync(void);
@@ -894,7 +903,7 @@
 +void
 +asus_log_sync(void)
 +{
-+	asus_log_flush_now();
++	asus_log_flush(true);         /* thread context: wait for the log thread's write */
 +}
 +
 +static void

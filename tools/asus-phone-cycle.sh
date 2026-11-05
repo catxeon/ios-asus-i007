@@ -25,6 +25,13 @@ if wfastboot devices | grep -q fastboot; then
     log 'phone already in fastboot (attached to WSL)'
 else
     timeout 600 adb wait-for-device || { log 'no adb device'; exit 1; }
+    # Qualcomm crash download mode is on in this Android (download_mode=1, mini dumps):
+    # a fatal secure-side error under our kernel then parks the SoC in EDL (05c6:9008)
+    # until a manual power-key reset. Turn it off for this boot only (runtime module
+    # parameters, set again by the next Android boot), so such an error just resets
+    # the phone back into Android and this script can read the log.
+    adb shell "su -c 'for f in /sys/module/msm_poweroff/parameters/download_mode /sys/module/qcom_dload_mode/parameters/download_mode; do [ -e \$f ] && echo 0 > \$f; done; cat /sys/module/msm_poweroff/parameters/download_mode /sys/module/qcom_dload_mode/parameters/download_mode 2>/dev/null'" \
+        | tr -d '\r' | tr '\n' ' ' | sed 's/^/download_mode now: /' | tee -a "$out/cycle.txt"; echo | tee -a "$out/cycle.txt"
     adb reboot bootloader
     busid=
     for i in $(seq 60); do

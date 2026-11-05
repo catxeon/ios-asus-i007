@@ -240,6 +240,21 @@
   the log is up, flush the log synchronously before each risky step, and step through
   (registers read-only -> SE GPI mode -> EV/CH allocate -> start -> doorbell) with a
   boot-arg limit. Each fatal step costs a manual hard reset (EDL).
+- **Image 0022 (staged GPI, commit b800d6a, CI 42067369726): EDL again.** Log flushed 7
+  times; it ends in the normal iOS boot (backboardd, HID services opened, lsd,
+  containermanagerd) and has `ASUS TOUCH: bring-up in 45 s` but NO `ASUS GPI: stage 1`
+  although that stage flushes the log first. So either the crash happened in
+  touchBringup's pre-GPI steps (GCC votes, SE4 read, pins, GENI I/O init: unflushed) or
+  the stage flush was skipped (it used try_lock). Fixes: asus_log_sync now waits for the
+  UFS lock (reset/panic paths still try-lock); markers + sync before every pre-GPI step.
+- EDL recovery: tools/edl-reset.ps1 (Sahara over the QDLoader COM port: HELLO ->
+  HELLO_RESP command mode -> CMD_READY -> RESET_REQ -> RESET_RESP) got a full reply, but
+  the phone stayed in 9008 and then stopped answering; the user power-reset it.
+  Prevention: Android has download_mode=1 (msm_poweroff and qcom_dload_mode params,
+  /sys/kernel/dload "mini", persist.asus.ramdump=1). tools/asus-phone-cycle.sh now
+  writes 0 to both runtime params right before `adb reboot bootloader` (not
+  persistent; the next Android boot sets them again), so a fatal secure-side error
+  should reset into Android instead of EDL. Untested yet.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
