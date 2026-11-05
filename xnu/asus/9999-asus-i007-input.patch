@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1374 @@
+@@ -0,0 +1,1455 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21715,6 +21715,7 @@
 +	bool spmiRead(uint16_t apid, uint16_t addr, uint8_t *out);
 +	void touchDiagnostics();
 +	void cpuFreq();
++	void gpuProbe();
 +	void touchBringup();
 +	void wr(IOMemoryMap *m, uint32_t off, uint32_t v);
 +	bool waitClear(IOMemoryMap *m, uint32_t off, uint32_t mask);
@@ -22852,6 +22853,71 @@
 +	asus_thread_block(NULL);
 +}
 +
++/*
++ * GPU bring-up, stage 1 (boot-arg asusgpu=1): read-only look at the Adreno 660 clock
++ * controller. Linux gcc-sm8350 keeps GCC_GPU_CFG_AHB_CLK (0x71004) on, which clocks
++ * the GPU_CC register interface; enable it the same way first, then dump GPU_CC
++ * (0x3d90000, gpucc-sm8350: CX GDSC 0x106c, GX GDSC 0x100c, branches 0x1004-0x117c,
++ * SMMU vote 0x5000, gfx3d MND 0x802c/0x8030, PLL0 0x0, PLL1 0x100) and the GCC GPU
++ * branches (0x71000 page). Nothing is powered or clocked on the GPU side yet.
++ */
++void
++AsusPhoneInput::gpuProbe()
++{
++	uint32_t stage = 0;
++	PE_parse_boot_argn("asusgpu", &stage, sizeof(stage));
++	if (stage == 0) {
++		return;
++	}
++	amark("ASUS GPU: stage 1: GCC GPU branches\n");
++	IOMemoryMap *gcc = map(GCC_PA, 0x80000);        /* GPU branches are at 0x71000 */
++	if (!gcc) {
++		return;
++	}
++	for (uint32_t o = 0x71000; o < 0x71040; o += 0x10) {
++		IOLog("ASUS GPU: gcc %#x: %#x %#x %#x %#x\n", o, rd(gcc, o), rd(gcc, o + 4),
++		    rd(gcc, o + 8), rd(gcc, o + 12));
++	}
++	uint32_t ahb = rd(gcc, 0x71004);
++	if (!(ahb & 1)) {
++		amark("ASUS GPU: enabling GCC_GPU_CFG_AHB_CLK (was %#x)\n", ahb);
++		wr(gcc, 0x71004, ahb | 1);
++	}
++	bool on = false;
++	for (unsigned i = 0; i < 1000 && !on; i++) {
++		on = !(rd(gcc, 0x71004) & (1u << 31)) || (rd(gcc, 0x71004) & 2u);
++		if (!on) {
++			IODelay(10);
++		}
++	}
++	amark("ASUS GPU: GCC_GPU_CFG_AHB_CLK %#x (%s)\n", rd(gcc, 0x71004), on ? "running" : "still off");
++	if (!on) {
++		gcc->release();
++		return;
++	}
++	amark("ASUS GPU: stage 1: GPU_CC register dump (read only)\n");
++	IOMemoryMap *gpucc = map(0x03d90000ULL, 0xa000);
++	if (gpucc) {
++		static const uint32_t windows[][2] = {
++			{ 0x0000, 0x40 }, { 0x0100, 0x40 }, { 0x1000, 0x180 }, { 0x1500, 0x60 },
++			{ 0x170c, 0x4 }, { 0x5000, 0x4 }, { 0x8020, 0x20 },
++		};
++		for (unsigned w = 0; w < sizeof(windows) / sizeof(windows[0]); w++) {
++			for (uint32_t o = windows[w][0]; o < windows[w][0] + windows[w][1]; o += 0x10) {
++				uint32_t v0 = rd(gpucc, o), v1 = rd(gpucc, o + 4), v2 = rd(gpucc, o + 8), v3 = rd(gpucc, o + 12);
++				if (v0 | v1 | v2 | v3) {
++					IOLog("ASUS GPU: gpucc %#06x: %#010x %#010x %#010x %#010x\n", o, v0, v1, v2, v3);
++				}
++			}
++		}
++		amark("ASUS GPU: CX GDSC %#x GX GDSC %#x cx_gmu %#x cxo %#x ahb %#x gx_gmu %#x\n",
++		    rd(gpucc, 0x106c), rd(gpucc, 0x100c), rd(gpucc, 0x1098), rd(gpucc, 0x109c),
++		    rd(gpucc, 0x1078), rd(gpucc, 0x1064));
++		gpucc->release();
++	}
++	gcc->release();
++}
++
 +void
 +AsusPhoneInput::cpuFreq()
 +{
@@ -22893,6 +22959,20 @@
 +		}
 +		IOLog("ASUS CPUFREQ: domain %u enable %#x state %#x (%u MHz) perf %#x, %u levels (MHz):%s\n",
 +		    d, en, state, ((state & 0xff) * 192u) / 10u, rd(m, 0x320), n, lut);
++		/*
++		 * Image 0034: the A78 and X1 domains read enable 0x2 (bit 0 clear, Linux would
++		 * refuse them) with state 0. Experimental (lab first): asusepssen=1 sets bit 0
++		 * before the request.
++		 */
++		uint32_t epssen = 0;
++		PE_parse_boot_argn("asusepssen", &epssen, sizeof(epssen));
++		if (!(en & 1) && epssen) {
++			amark("ASUS CPUFREQ: domain %u: setting enable bit 0 (was %#x)\n", d, en);
++			wr(m, 0x0, en | 1);
++			IODelay(1000);
++			en = rd(m, 0x0);
++			amark("ASUS CPUFREQ: domain %u: enable now %#x state %#x\n", d, en, rd(m, 0x20));
++		}
 +		if ((en & 1) && want != 0 && n > 0) {
 +			unsigned idx = want == 0xff ? top : (want - 1 < top ? want - 1 : top);
 +			wr(m, 0x320, idx);
@@ -22984,6 +23064,7 @@
 +		return;
 +	}
 +	amark("ASUS TOUCH: flash log ready (waited %u s), starting bring-up\n", 2 * waits);
++	((AsusPhoneInput *)owner)->gpuProbe();
 +	((AsusPhoneInput *)owner)->touchBringup();
 +}
 +
