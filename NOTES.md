@@ -225,6 +225,21 @@
   this bit and switches to gpi_mode (DT dmas = gpi_dma0). Next: a minimal GPI DMA driver
   for QUP0 (qcom/gpi.c: channel alloc/start, transfer + event rings, TREs config0/go/dma,
   doorbells) plus the i2c-qcom-geni GPI path; then rails/IRQ if 0x38 still NACKs.
+- **Image 0021 (GPI DMA, commits 964a640/f19494c/dbf9c9f, CI 42063848974; first CI
+  attempt failed to LINK: no invalidate_dcache64 in this kernel, only flush/clean):
+  FATAL.** fastboot boot 19:30:35, no Android; the phone sat in Qualcomm EDL
+  (USB 05c6:9008 "QDLoader 9008") = a fatal secure-side error forced emergency download.
+  User hard-reset it (power ~15 s) -> Android 19:38:41, nothing flashed. The iosroot log
+  area still held 0020's log (same 47400 bytes, seq 0xa5a5a5a5): AsusPhoneInput runs at
+  IOKit matching, BEFORE the UFS root/log exists, so the crash point was not logged.
+  Suspects: GPI DMA through the apps SMMU (gpi node iommus stream 0x5b6; UFS DMA works,
+  probably because ABL set up its stream) -> unidentified-stream/context fault treated as
+  fatal; or GPII-4 register access owned by another EE (touch DT is "trusted touch"
+  vm_mode, its io-bases include 0x910000 = GPII 0 region, gpi static-gpii-mask 0x1).
+  Rule: never run GPI code at IOKit start; run touch bring-up from a delayed thread after
+  the log is up, flush the log synchronously before each risky step, and step through
+  (registers read-only -> SE GPI mode -> EV/CH allocate -> start -> doorbell) with a
+  boot-arg limit. Each fatal step costs a manual hard reset (EDL).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
