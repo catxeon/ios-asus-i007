@@ -192,6 +192,35 @@
     Screenshot ../qemu-v9-peek.png. SpringBoard AKS calls: 17, 35, 7, 26/27
     (assert hold/drop), 8 and 32 -> kIOReturnUnsupported (0xe00002c7).
     This is the same first-GUI point sweet reached on its phone (image v12).
+  - Root v10 (../make_springboard_v10.py): sweet v14 Setup-skip prefs (purplebuddy
+    SetupDone/SetupFinishedAllSteps/SetupVersion 11, mini-buddy off, migration
+    DMUserDataDisposition, springboard BKNoWatchdogs + purplebuddy watchdog exception,
+    managedconfiguration). libdmg `rm` fails on files: old files are `mv`d to
+    /private/root-old-prefs. Result: hello screen gone, but the panel keeps the boot
+    logo for 33+ min (three identical snapshots); no crashes. Thread sample of
+    SpringBoard: main runloop idle; workers busy/blocked in LaunchServices (Spotlight),
+    ControlCenter bundle dlopen, Biome lock, CallKit dispatch_sync (no callservicesd),
+    ATX home-screen prediction. Setup still runs (looks up com.apple.dmd).
+  - QEMU knobs (../run_asus_qemu.py env): ASUS_SERIAL=0 keeps kernel/launchd console
+    text off the panel (it painted over the UI; msgbuf via QMP still works),
+    ASUS_QEMU_FAST=1 drops `-d int` logging, KEEP_RAM=1 keeps ram.bin; msgbuf_run.sh
+    QEMU_SECS (wall-clock limit, default 2000) and fb-T.png per checkpoint.
+  - ADT --ios-gui now also has crypto-hash-method, synthetic ECID 0x4153555349000001 +
+    chip-id 0x8015 (IOPlatformUUID) and the dev-fused tuple 0,0,1,1 (commit 884ea68).
+    Root v11 (../make_springboard_v11.py) adds the stock mobileactivationd job.
+    mobileactivationd then crash-loops (107x/40 min): main asserts "Migration failed."
+    (_os_crash, brk at its 0x1001bf3bc) after 0x10001ab98 fails; registers show
+    "UCRTHealingRequired" and its container /private/var/containers/Data/System/<uuid>.
+  - Root v12 (../make_springboard_v12.py): boot v11 once with KEEP_RAM=1 (share=on),
+    copy the RAM disk back from ram.bin offset 0x104000000 over the v11 file, fsck -y,
+    then seed Library/internal/data_ark.plist (-ActivationState Activated,
+    -DataMigrationCompleted, as sweet) in the mobileactivationd container found by MCM
+    metadata (CA9C4F52-0508-49C8-9CDF-07B8CA0A3676; backboardd and lsd containers
+    exist too). ~/asus-roots/springboard-v12.hfs SHA256
+    e26e9d4a3aeae60f56f67dffcd266ecc233c9e77014e28203fc1568b95393f6d. v9/v10/v11 were
+    renamed or overwritten in place (rebuildable by the scripts). Testing.
+  - C: has only ~6 GB free: the WSL ext4.vhdx grew (roots + ram.bin). Freed space inside
+    WSL is reused; compacting the vhdx would return it to Windows.
   - GDB crash capture for kernel 59b0b8c1/884e0b3b symbol layout:
     ../capture_crash_k59b0.gdb (exception_triage +0x2c at 0xfffffe00073282dc);
     saves frames per exception under OUT/crash-NN-<proc>.
