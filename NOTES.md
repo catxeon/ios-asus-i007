@@ -74,8 +74,8 @@
   fastboot flash iosroot).
 - build-asus-image.sh ASUS_UFS=1 now passes ufsroot=${ASUS_UFS_ROOT:-iosroot}. Image
   **0010** = 0009 + ufsroot=iosroot, SHA256 7fe1a47a...cca5bf (supersedes 0009, not
-  booted). Expected: partition list incl. `iosroot 0x6e96400 32767 MiB`, then
-  `"iosroot" on LUN 0: first block 0x6e96400, 32767 MiB, read-only`, probe 0, heartbeat.
+  booted). Expected: partition list incl. `iosroot 0x6e96000 32767 MiB`, then
+  `"iosroot" on LUN 0: first block 0x6e96000, 32767 MiB, read-only`, probe 0, heartbeat.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
