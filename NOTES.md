@@ -292,6 +292,18 @@
 - Next (image 0027): cmd-db lookup of ldoc3/ldoc8 and an active-TCS vote (L8 1800 mV
   HPM on, L3 3008 mV HPM on) before the pins/reset step (asustouchpower=0 skips it);
   bit-bang self-test (driven-low readback).
+- **MILESTONE: TOUCH WORKS ON THE PHONE (image 0027, lab, kernel 42090383636; no EDL,
+  self-reset into Android after 214 s).** cmd-db v1 (magic db30030c): ldoc3 0x41000,
+  ldoc8 0x42700. Active TCS 1 (control 0, status idle): 6 votes (L8 1800 mV / HPM 7 /
+  on, L3 3008 mV / HPM / on), every cmd status 0x10101, completed. Bit-bang self-test OK
+  (driven low reads 0, released 1). FocalTech 0x38: reg 0xa3 = 0x56, 0x9f = 0x52
+  (FT5652), 0xa6 = 0x40 (FW), 0xa8 = 0x8d (vendor). With the user's finger on the
+  screen: 60 reports in ~5 s from reg 0x02 (n=1, event 2 = contact, id 0, smooth x/y
+  tracks). Panel coordinates are native 1080x2448 (DT focaltech,display-coords 0 0
+  1080 2448, max-touch-number 10); iOS canvas is 1125x2436 -> scale when feeding
+  SweetHIDTouch.
+- So the bootloader leaves the touch rails off and the QUP SE4 is GSI-only; the working
+  path is RPMh votes + bit-banged I2C (50 kHz, polled on GPIO23).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
