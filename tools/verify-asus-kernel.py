@@ -77,7 +77,10 @@ def verify(path, require_hfs=False, require_display=False):
             'userland': all(marker in data for marker in
                             (b'ASUS Sandbox: permissive policy', b'_asus_userland_register\0',
                              b'mounting dirty non-journaled root read-write',
-                             b'ASUS TRUST: static trust cache v2'))}
+                             b'ASUS TRUST: static trust cache v2')),
+            'input': all(marker in data for marker in
+                         (b'SWEET HID: touch registered', b'IOHIDEventServiceUserClient',
+                          b'ASUS VIRTIO INPUT: %d device(s)', b'asus_virtio_input'))}
 
 
 if __name__ == '__main__':
@@ -89,6 +92,7 @@ if __name__ == '__main__':
     compositor.add_argument('--require-compositor', action='store_true')
     compositor.add_argument('--reject-compositor', action='store_true')
     parser.add_argument('--require-userland', action='store_true')
+    parser.add_argument('--require-input', action='store_true')
     args = parser.parse_args()
     result = verify(args.kernel, args.require_hfs, args.require_display or args.require_compositor)
     if args.require_compositor and not result['qemu_compositor']:
@@ -97,4 +101,6 @@ if __name__ == '__main__':
         raise ValueError('The QEMU compositor profile cannot be packaged for the phone')
     if args.require_userland and not result['userland']:
         raise ValueError('Expected the ASUS userland services profile')
+    if args.require_input and not result['input']:
+        raise ValueError('Expected the ASUS input profile')
     print(json.dumps(result, indent=2))

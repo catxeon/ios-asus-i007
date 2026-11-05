@@ -19,6 +19,10 @@ on:
         description: Include iOS daemon support (Sandbox stand-in, rootrw, rename swap; requires HFS+)
         type: boolean
         default: false
+      input:
+        description: Include HID touch/button services and the QEMU virtio input source (requires HFS+)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -48,6 +52,7 @@ jobs:
           if [ '${{ inputs.display }}' = true ]; then args+=(--display); fi
           if [ '${{ inputs.compositor }}' = true ]; then args+=(--compositor); fi
           if [ '${{ inputs.userland }}' = true ]; then args+=(--userland); fi
+          if [ '${{ inputs.input }}' = true ]; then args+=(--input); fi
           python3 tools/prepare-asus-profile.py dxb "${args[@]}"
       - name: Select matching Xcode and dependencies
         run: |
@@ -74,6 +79,7 @@ jobs:
           if [ '${{ inputs.display }}' = true ]; then args+=(--require-display); fi
           if [ '${{ inputs.compositor }}' = true ]; then args+=(--require-compositor); fi
           if [ '${{ inputs.userland }}' = true ]; then args+=(--require-userland); fi
+          if [ '${{ inputs.input }}' = true ]; then args+=(--require-input); fi
           python3 tools/verify-asus-kernel.py out/kernel.development.sweet "${args[@]}" > out/asus-kernel.json
           (cd out && shasum -a 256 kernel.development.sweet > SHA256SUMS)
       - uses: actions/upload-artifact@v4

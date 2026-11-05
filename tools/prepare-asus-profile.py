@@ -16,7 +16,12 @@ parser.add_argument('--compositor', action='store_true', help='Include the QEMU 
 parser.add_argument('--userland', action='store_true',
                     help='Include iOS daemon support: permissive Sandbox policy, rootrw=1, '
                          'HFS rename swap, no external ACL resolver')
+parser.add_argument('--input', action='store_true',
+                    help='Include HID event services (touch, buttons) and the QEMU virtio input '
+                         'source (boot-arg asus_virtio_input=1)')
 args = parser.parse_args()
+if args.input and not args.hfs:
+    parser.error('--input requires --hfs')
 if args.userland and not args.hfs:
     parser.error('--userland requires --hfs')
 if args.display and not args.hfs:
@@ -45,6 +50,8 @@ if args.display:
     selected.append(repo / 'xnu/asus/9999-asus-i007-display.patch')
 if args.compositor:
     selected.append(repo / 'xnu/asus/9999-asus-i007-qemu-compositor.patch')
+if args.input:
+    selected.append(repo / 'xnu/asus/9999-asus-i007-input.patch')
 if args.userland:
     selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
 manifest = []
@@ -72,7 +79,8 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
     'cpu': 'cortex-a55', 'cpus': 1, 'page_size': 16384,
     'root': 'HFS+ or mockfs RAM disk' if args.hfs else 'mockfs RAM disk',
     'hfs': args.hfs, 'display': args.display, 'qemu_compositor': args.compositor,
-    'userland': args.userland,
+    'userland': args.userland, 'input': args.input,
     'storage_driver': False, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
-print(f'Staged {len(selected)} ASUS files; no UFS, input, modem, GPU or USB drivers')
+print(f'Staged {len(selected)} ASUS files; no UFS, modem, GPU or USB drivers'
+      + ('' if args.input else ', no input'))
