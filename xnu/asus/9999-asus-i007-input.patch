@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,777 @@
+@@ -0,0 +1,776 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22139,7 +22139,6 @@
 +#define TRE_LINK        (1u << 11)
 +
 +extern "C" void flush_dcache64(addr64_t addr, unsigned count, boolean_t phys);
-+extern "C" void invalidate_dcache64(addr64_t addr, unsigned count, boolean_t phys);
 +
 +bool
 +AsusPhoneInput::gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want)
@@ -22198,7 +22197,7 @@
 +		unsigned hwIdx = (unsigned)((hwrp - (uint32_t)(fGpiPa + OFF_EV)) / 16) % GPI_EVENTS;
 +		while (fEvRp % GPI_EVENTS != hwIdx) {
 +			uint32_t *ev = (uint32_t *)(fGpiVa + OFF_EV + 16 * (fEvRp % GPI_EVENTS));
-+			invalidate_dcache64((addr64_t)(uintptr_t)ev, 16, FALSE);
++			flush_dcache64((addr64_t)(uintptr_t)ev, 16, FALSE);
 +			unsigned type = (ev[3] >> 16) & 0xff, chid = ev[3] >> 24, code = ev[2] >> 24;
 +			IOLog("ASUS GPI: event type %#x chid %u code %u len %u status %#x\n",
 +			    type, chid, code, ev[2] & 0xffffff, ev[3] & 0xffff);
@@ -22224,7 +22223,7 @@
 +		    rd(gpi, EV_CTX), rd(gpi, EV_CTX + CTX_RP_LO), rd(gpi, G(0x23200)), rd(gpi, G(0x23100)));
 +		return ETIMEDOUT;
 +	}
-+	invalidate_dcache64((addr64_t)(uintptr_t)(fGpiVa + OFF_RXBUF), 64, FALSE);
++	flush_dcache64((addr64_t)(uintptr_t)(fGpiVa + OFF_RXBUF), 64, FALSE);
 +	for (unsigned j = 0; j < len; j++) {
 +		out[j] = fGpiVa[OFF_RXBUF + j];
 +	}
