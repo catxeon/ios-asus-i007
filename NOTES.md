@@ -76,6 +76,22 @@
   **0010** = 0009 + ufsroot=iosroot, SHA256 7fe1a47a...cca5bf (supersedes 0009, not
   booted). Expected: partition list incl. `iosroot 0x6e96000 32767 MiB`, then
   `"iosroot" on LUN 0: first block 0x6e96000, 32767 MiB, read-only`, probe 0, heartbeat.
+- **MILESTONE: XNU READS THE PHONE'S UFS (image 0010, 2026-11-05, user photo, kept
+  private).** fastboot boot over usbipd/WSL (`usbipd attach --wsl --busid 2-1`,
+  `wsl -u root fastboot boot`): send 0.45 s, boot OKAY. Screen: `SWEET UFS: host ver 0x300
+  cap 0x1587031f hce 0x1 hcs 0x10f utrlba 0x09ea5b000` (UFSHCI 3.0, 64-bit addressing,
+  ABL left the host enabled with its own list at 0x9ea5b000); all 24 LUN 0 entries listed
+  exactly as Android sees them (#22 userdata 0x23e628 443769 MiB, #23 iosroot 0x6e96000
+  32767 MiB); `"iosroot" on LUN 0: first block 0x6e96000, 32767 MiB, read-only, DMA at
+  0x143428000` -> DMA above 4 GiB works, the SMMU stream does not block UFS after ABL;
+  `ASUS UFS probe: 0 (root stays md0)`, `BSD root: md0`, HFS ASUSRamRoot mounted, our init
+  as PID 1 with the 5 s heartbeat. Nothing written.
+- NEXT (phone path): (1) a phone kernel profile without QEMU parts (hfs + ufs + display +
+  userland; no compositor table, no virtio; touch/buttons need real drivers later);
+  (2) an iOS root image for iosroot (from v12, sized <= 32 GiB) - writing it to iosroot
+  needs the user's OK; (3) ADT for the phone with more RAM (512 MiB now) and the trust
+  cache; (4) rd=ufsroot0 ufsroot=iosroot (read-only first; root-write needs ufsrw, which
+  this build refuses).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
