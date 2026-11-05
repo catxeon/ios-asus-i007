@@ -61,6 +61,9 @@ if [ "${ASUS_UFS:-0}" = 1 ]; then
         cmdline+=' launchd_unsecure_cache=1'
         # AsusPhoneInput: PMIC buttons (vol up + down = Home) and touch diagnostics.
         cmdline+=' asusinput=1 asustouch=1'
+        # Console log to the iosroot tail every 2 s; ASUS_REBOOT=N resets after N s (PSCI).
+        cmdline+=' ufslogsecs=2'
+        [ -n "${ASUS_REBOOT:-}" ] && cmdline+=" asusreboot=${ASUS_REBOOT}"
     else
         cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
     fi
