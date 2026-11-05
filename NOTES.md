@@ -172,6 +172,18 @@
   mobileactivationd, mobilegestalt, notifyd, runningboardd); AppExtensions,
   AppRemovalServices, SystemLibraryTreeState, Symlinks, VersionNumber 7 from the 20H392
   OS cache. fsck OK, SHA256 528ab8ee7774f0c39cc70cac95bdc271c7a24994cbdbe2885666decf2b8bc828.
+- iosroot rewritten with v14 (613 s + last 32 MiB from file), hash = v14 on the first check.
+- **MILESTONE 2026-11-05 ~16:30 local: iOS 16.7 BOOTS FROM THE ASUS'S OWN FLASH TO THE
+  APPLE LOGO** (image 0014, kernel 42028226278, iosroot = v14; user photos, private).
+  All disk-root boot tasks pass (xpcroleaccountd, init_featureflags, auearlyboot, tzinit,
+  finish-restore, finish-demo-restore, sysstatuscheck, prng_seedctl, launchd_cache_loader
+  with the v14 cache), `launchd UUID 5C15DB07-...`, `Early boot complete. Continuing system
+  boot.`; MobileGestaltHelper and backboardd talk to AppleCLCD (`ASUS FB: backboardd sel
+  57/15/22/29/33/79/74 -> 0x0`), xpcproxy, iconservicesagent, cfprefsd, lsd (AKS sel 0/7),
+  containermanagerd, mobileactivationd spawn; then backboardd draws the Apple logo on the
+  real panel (iPhone X 1125x2436 presentation over the 1080x2448 boot framebuffer, CPU
+  blits). Kernel console stopped painting over it (as in QEMU). Waiting for SpringBoard /
+  lock screen; no touch or buttons on the phone yet.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
