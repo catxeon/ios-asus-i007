@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minimal ASUS I007 Apple DT for a single A55 + RAM-only XNU bring-up."""
 import argparse
+import hashlib
 import os
 import struct
 from pathlib import Path
@@ -18,6 +19,10 @@ UFS, UFS_SIZE = 0x01d84000, 0x3000   # ufshc@1d84000 ufs_mem (live DT)
 
 
 
+# /sbin/mount (launchd mount-phase-1 on a disk root) exits 66 without /chosen
+# boot-manifest-hash; it bind-mounts /private/preboot/<hex>/usr/standalone/firmware and
+# tolerates a missing directory. Fixed stand-in value, as tools/mkadt.py (sweet).
+BOOT_MANIFEST_HASH = hashlib.sha384(b'asus i007 boot manifest').digest()
 ASUS_ECID = 0x4153555349000001  # 'ASUSI' + 1, synthetic (not the phone's ECID)
 GUI_DISP0 = ('dot-pitch', 'display-default-color', 'max-avg-bpp', 'max-peak-bpp', 'max-scaling-ratio')
 
@@ -57,6 +62,7 @@ def gui_nodes(source):
               # chip-id; the dev-fused security tuple (0,0,1,1) makes mobileactivationd take
               # its native "Hactivation" branch (Activated without an activation record).
               ('crypto-hash-method', 0, cstr('sha2-384')),
+              ('boot-manifest-hash', 0, BOOT_MANIFEST_HASH),
               ('unique-chip-id', 0, struct.pack('<Q', ASUS_ECID)),
               ('chip-id', 0, u32(0x8015)),
               ('certificate-production-status', 0, u32(0)),
