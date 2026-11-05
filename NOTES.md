@@ -266,6 +266,15 @@
     HFS+ root). ../touch_run.sh now snapshots msgbuf several times (the ring wraps after
     ~2700 s of boot). Gesture timing note: 500 ms edge swipe on the lock screen unlocks;
     on the home screen a 250-400 ms edge swipe ends in the app switcher.
+  - **Status bar fixed (kernel a335b04f = CI 42009368500, commit 94dc661).** AppleCLCD
+    presents the iPhone X screen 1125x2436 (as sweet 0061; ../asus_canvas.py edits
+    SweetFramebuffer.cpp in the display patch and is called by
+    ../make_asus_display_patch.py): swaps blitted at logical offset (22,-6), 6 black rows
+    above/below, dot pitch 458; touch maps panel pixels with the same offset; ADT
+    asus,display canvas 1125x2436 (tools/mkadt-asus.py). Boot-arg asusfb_native=1 keeps
+    1080x2448. Run qemu-sbar1: backboardd surfaces are 1125x2436 and the home screen has
+    a real status bar (time, battery) instead of the red rdar:45025538 bar. The battery
+    icon is empty/red: no IOPMPowerSource (sweet 0062 had a static 100% SweetBattery).
     Red banner rdar:45025538 = no status bar visual provider for 360x816 pt (sweet 0061
     fixed it by presenting 1125x2436).
   - C: has only ~6 GB free: the WSL ext4.vhdx grew (roots + ram.bin). Freed space inside
