@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1255 @@
+@@ -0,0 +1,1266 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22437,7 +22437,18 @@
 +void
 +AsusPhoneInput::touchRead()
 +{
-+	if (*gTouchIrq & 1u) {
++	/*
++	 * The FocalTech IRQ is a short falling-edge pulse per report (Android DT flags
++	 * 0x2008), not a level: polling it every 8 ms misses some pulses, and a missed
++	 * last report (the lift) left the finger down in iOS (image 0031). So while any
++	 * finger is down, read every poll; the IRQ line only gates the idle case (a missed
++	 * first pulse is followed by more while the finger stays on the glass).
++	 */
++	bool anyDown = false;
++	for (unsigned id = 0; id < TOUCH_FINGERS; id++) {
++		anyDown |= fTouchDown[id];
++	}
++	if ((*gTouchIrq & 1u) && !anyDown) {
 +		return;
 +	}
 +	/*
