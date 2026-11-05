@@ -116,6 +116,14 @@
   (dd seek=3071 conv=notrunc,fsync); after flushbufs + drop_caches the first 12884901888
   bytes of sda24 hash to e26e9d4a3aeae60f56f67dffcd266ecc233c9e77014e28203fc1568b95393f6d
   = the image. Lesson: verify piped dd writes; rewrite the tail from a file.
+- **Image 0011 on the phone (user photo, private):** UFS list as in 0010, `"iosroot" on
+  LUN 0: first block 0x6e96000, 32767 MiB, read-write, DMA at 0x144740000`, `BSD root:
+  ufsroot0, major 2, minor 0`, `hfs: Removed 1 orphaned / unlinked files and 1 directories`,
+  `hfs: mounted ASUSRamRoot on device b(2, 0)` (v12's volume name), LowDisk set, then
+  `panic(... caller 0xfffffe0007b4c4e4): rootvp not authenticated after mounting
+  @bsd_init.c:937`. On a non-RAM-disk root bsd_init sends FSIOC_KERNEL_ROOTAUTH (sealed
+  APFS); HFS cannot pass. Fix: --ufs now also takes sweet 0029 (print and continue).
+  Note: the writable mount already removed 1 orphaned file + dir on iosroot.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

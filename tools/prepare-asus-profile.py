@@ -59,6 +59,10 @@ if args.input:
     selected.append(repo / 'xnu/asus/9999-asus-i007-input.patch')
 if args.ufs:
     selected.append(repo / 'xnu/asus/9999-asus-i007-ufs.patch')
+    # A root on UFS is not a RAM disk, so bsd_init demands a sealed (authenticated)
+    # root and panicked on the phone ("rootvp not authenticated after mounting",
+    # image 0011); an HFS root cannot be sealed. As sweet: report and continue.
+    selected.append(repo / 'xnu/patches/0029-sweet-unsealed-root-volume.patch')
 if args.userland:
     selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
     # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
