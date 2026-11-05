@@ -20,7 +20,28 @@
   sector numbers stay valid) and add an `iosroot` partition (~32 GiB) after it; root it
   with ufsroot=iosroot. Risks: online f2fs shrink is rarely used on phones; live GPT edit.
   Alternatives: raw HFS image in userdata (Android lost), or disable encryption via
-  vendor fstab + format (wipe once). User prefers keeping Android.
+  vendor fstab + format (wipe once). User prefers keeping Android and said "let's try"
+  the no-wipe path (2026-11-05); every write step still needs a separate OK.
+- No-wipe path, preparation done (read-only):
+  - GPT backup on the PC: ../asus-phone-backup/lun0-gpt-primary.bin (LBA 0-5, SHA256
+    d070a07a...adcef) and lun0-gpt-backup.bin (last 6 LBAs, d5f59e3c...681d8f), sysfs map
+    lun0-sysfs.txt. tools/asus_gpt.py show: both copies valid (header + entry CRCs), equal;
+    32 entry slots, 23 used; usable LBAs 6..124346362; userdata #22 2352680..124346362.
+  - /data: dm-11 (dm-default-key over sda23, 975949464 sectors), f2fs 1.13, block_count
+    121993683 (= the whole partition), 512-block sections, 237679 main segments,
+    225757 free; mount has no checkpoint=disable; no fs_mgr `resize` flag (Android will
+    not grow it back).
+  - Targets: iosroot = LBA 115957504..124346362 (32.0 GiB, 1 MiB aligned); userdata =
+    2352680..115957503 (113604824 blocks); f2fs block_count 113604608 (section aligned,
+    216 blocks slack) = 433.37 GiB, shrink by 32 GiB.
+  - tools/asus-f2fs-shrink.c (NDK r27c static, ../asus-phone-backup/asus-f2fs-shrink
+    SHA256 383bed34...081717): checks magic, exact old block_count, section alignment
+    and the mount, dry run without --go; then F2FS_IOC_RESIZE_FS and a superblock re-read.
+    Dry run on the phone: checks ok; a misaligned size is refused.
+  - Order (each needs the user's OK): (1) user backs up phone data; (2) shrink f2fs:
+    `asus-f2fs-shrink /dev/block/dm-11 /data 121993683 113604608 --go`; reboot, check
+    Android + /data size; (3) write the new GPT (userdata end -> 115957503, new entry
+    `iosroot` 115957504..124346362) built by asus_gpt.py, primary + backup, then reboot.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
