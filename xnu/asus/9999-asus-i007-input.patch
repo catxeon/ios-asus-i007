@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,479 @@
+@@ -0,0 +1,486 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21967,6 +21967,13 @@
 +	}
 +	static const uint32_t branches[] = { 0x17004, 0x17008, 0x23000, 0x23008, 0x174cc };
 +	for (unsigned i = 0; clocks && i < sizeof(branches) / sizeof(branches[0]); i++) {
++		uint32_t cbcr = rd(gcc, branches[i]);
++		IOLog("ASUS TOUCH: GCC branch %#x = %#x\n", branches[i], cbcr);
++		/* HW_CTL (bit 1): hardware clock gating reports CLK_OFF while idle; Linux
++		 * skips the halt check for such branches (image 0016: s_ahb 0x80000002). */
++		if (cbcr & 2u) {
++			continue;
++		}
 +		if (!waitClear(gcc, branches[i], 1u << 31)) {
 +			IOLog("ASUS TOUCH: GCC branch %#x halted (%#x)\n", branches[i], rd(gcc, branches[i]));
 +			clocks = false;
