@@ -37,7 +37,7 @@ permissions:
 
 concurrency:
   group: asus-xnu-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false   # queue: a new dispatch must not kill a build a phone test waits for
 
 env:
   MACOS_VERSION: '13.5'
