@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1561 @@
+@@ -0,0 +1,1614 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21717,6 +21717,7 @@
 +	void cpuFreq();
 +	void gpuProbe();
 +	void gpuStage2(IOMemoryMap *gcc, IOMemoryMap *gpucc);
++	void gpuSmmuDump();
 +	bool gpuBranch(IOMemoryMap *m, uint32_t off, const char *name);
 +	bool gpuRcg(IOMemoryMap *m, uint32_t cmd, uint32_t src, uint32_t div2m1, const char *name);
 +	void touchBringup();
@@ -23021,6 +23022,58 @@
 +	}
 +	gmu->release();
 +	amark("ASUS GPU: stage 2 done\n");
++	uint32_t stage = 0;
++	PE_parse_boot_argn("asusgpu", &stage, sizeof(stage));
++	if (stage >= 3) {
++		gpuSmmuDump();
++	}
++}
++
++/*
++ * Stage 3 (asusgpu>=3), read only: the GPU SMMU (kgsl-smmu@3da0000, qsmmu-v500,
++ * "qcom,skip-init": the bootloader/hypervisor configured it). ARM SMMUv2 layout: GR0
++ * sCR0 0x0, IDR0-2 0x20-0x28, SMR 0x800+4n, S2CR 0xc00+4n; GR1 one page up: CBAR
++ * 0x0+4n, CBA2R 0x800+4n; context banks from base + 2^(NUMPAGENDXB+1) pages, one page
++ * each (SCTLR 0x0, TTBR0 0x20, TCR 0x30, FSR 0x58). Which stream (GMU = SID 5,
++ * kgsl-3d0 = SID 0/1?) is bypass, fault or translated decides how the GMU and the GPU
++ * may reach memory.
++ */
++void
++AsusPhoneInput::gpuSmmuDump()
++{
++	amark("ASUS GPU: stage 3: GPU SMMU registers (read only)\n");
++	IOMemoryMap *s = map(0x03da0000ULL, 0x20000);
++	if (!s) {
++		return;
++	}
++	uint32_t idr0 = rd(s, 0x20), idr1 = rd(s, 0x24), idr2 = rd(s, 0x28);
++	uint32_t pgshift = (idr1 & (1u << 31)) ? 16 : 12;
++	uint32_t npage = 1u << (((idr1 >> 28) & 7) + 1);
++	uint32_t nsmr = idr0 & 0xff, ncb = idr1 & 0xff;
++	amark("ASUS GPU: smmu sCR0 %#x sCR1 %#x IDR0 %#x IDR1 %#x IDR2 %#x: %u SMRs, %u CBs, page %u, CB base %#x\n",
++	    rd(s, 0x0), rd(s, 0x4), idr0, idr1, idr2, nsmr, ncb, 1u << pgshift, npage << pgshift);
++	for (uint32_t n = 0; n < nsmr && n < 128; n++) {
++		uint32_t smr = rd(s, 0x800 + 4 * n), s2cr = rd(s, 0xc00 + 4 * n);
++		if (smr || s2cr) {
++			IOLog("ASUS GPU: smmu SMR%u %#x (valid %u id %#x mask %#x) S2CR %#x (type %u cb %u)\n",
++			    n, smr, smr >> 31, smr & 0xffff, (smr >> 16) & 0x7fff, s2cr, (s2cr >> 16) & 3, s2cr & 0xff);
++		}
++	}
++	uint32_t gr1 = 1u << pgshift;
++	for (uint32_t n = 0; n < ncb && n < 64; n++) {
++		uint32_t cbar = rd(s, gr1 + 4 * n), cba2r = rd(s, gr1 + 0x800 + 4 * n);
++		uint32_t cb = (npage + n) << pgshift;
++		if (cb + 0x60 > 0x20000) {
++			break;
++		}
++		uint32_t sctlr = rd(s, cb), tcr = rd(s, cb + 0x30), fsr = rd(s, cb + 0x58);
++		if (cbar || cba2r || sctlr) {
++			IOLog("ASUS GPU: smmu CB%u CBAR %#x CBA2R %#x SCTLR %#x TTBR0 %#x%08x TCR %#x FSR %#x\n",
++			    n, cbar, cba2r, sctlr, rd(s, cb + 0x24), rd(s, cb + 0x20), tcr, fsr);
++		}
++	}
++	s->release();
++	amark("ASUS GPU: stage 3 done\n");
 +}
 +
 +void
