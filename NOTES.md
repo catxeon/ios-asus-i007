@@ -42,6 +42,25 @@
     `asus-f2fs-shrink /dev/block/dm-11 /data 121993683 113604608 --go`; reboot, check
     Android + /data size; (3) write the new GPT (userdata end -> 115957503, new entry
     `iosroot` 115957504..124346362) built by asus_gpt.py, primary + backup, then reboot.
+- **Step 2 DONE (user OK "Да, уменьшай", 2026-11-05 14:35 local): /data shrunk online.**
+  F2FS_IOC_RESIZE_FS returned in seconds. The kernel removes whole sections only
+  (16384 = 32 GiB) and keeps the unaligned 467-block tail, so the superblock now says
+  block_count 113605075 (not 113604608): segment_count 221883, segment_count_main 221295,
+  main area ends at block 113604608; free segments 225756 -> 209371; df /data 433 GiB,
+  27.9 GB used (unchanged). No f2fs errors in dmesg (only a permissive Magisk avc for
+  ioctl 0xf510). adb reboot: Android boot_completed, /data mounted; boot fsck.f2fs
+  (/dev/fscklogs/f2fs_log): total sectors 121993683, FS sectors 113605075, "No error was
+  reported". Superblocks before/after: ../asus-phone-backup/f2fs-sb*.bin.
+- **Corrected GPT targets** (userdata must hold 113605075 blocks): userdata
+  2352680..115957759 (113605080 blocks, 5 spare); iosroot 115957760..124346362
+  (8388603 blocks = 32 GiB - 20 KiB, 1 MiB aligned), Apple HFS+ type, entry #23.
+  Built with `tools/asus_gpt.py build ... userdata 115957759 iosroot 115957760 124346362`:
+  ../asus-phone-backup/new-gpt-primary.bin (SHA256 14b85bd3...86f9fe) and
+  new-gpt-backup.bin (10791baf...ce665d7); `show` validates both (CRCs ok, identical);
+  only the header block and entry block 2 differ in each copy. NOT written yet.
+  Write plan (needs the user's OK): re-dump and compare the on-disk GPT with the backup
+  first; dd primary LBAs 1..5 (LBA 0 untouched) and the last 6 LBAs of sda, fsync, read
+  back and compare; reboot; expect by-name/iosroot = sda24 and a normal Android boot.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
