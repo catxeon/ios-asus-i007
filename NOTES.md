@@ -360,6 +360,17 @@
   patch, next to the flash log hook; _cnputs returns after the log append unless a
   panic is active), set by AppleCLCD at the first swap (weak extern). The panic tail
   and halt/restart notes reached the flash log as designed.
+- Image 0033 (kernel 42111381928): console mute works ("ASUS FB: screen console off"),
+  user: "much better", touches release properly (299 HID touch lines), but Settings
+  crashes while scrolling and SpringBoard resprings (SpringBoard spawned 4x,
+  Preferences 4x; the log only has "Failed to send exception EXC_CORPSE_NOTIFY ... for
+  pid N"). Settings: probably sweet's PodcastsUI force-unwrap of a nil
+  URL.volumeTotalCapacity on the HFS+ root (not verified on ASUS). The user ended the
+  run with a hard reset (vol down + power), so the clean reboot is still untested.
+- Next kernel: 9999-asus-i007-zcrash.patch (sweet 0043 + 0044 console crash reports,
+  under --userland; 0066 needs sweet 0051, left out) and EPSS cpufreq: AsusPhoneInput
+  logs each domain (0x18591000 A55, 0x18592000 A78, 0x18593000 X1: LUT, state) and
+  requests the top LUT index (asuscpufreq=0 logs only, =N caps at index N-1).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
