@@ -57,6 +57,8 @@ if [ "${ASUS_UFS:-0}" = 1 ]; then
         # Root on iosroot, writable (the kernel refuses writes to any other partition).
         cmdline="${cmdline/rd=md0/rd=ufsroot0} ufsroot=iosroot ufsrw=1 rootrw=1 ufslist=1"
         cmdline+=' ignition_level=1 interrupt-masked-debug-mode=0 sched-preemption-disable-debug-mode=0'
+        # launchd_cache_loader needs an AMFI IOService to trust launchd.plist (sweet 0039u).
+        cmdline+=' launchd_unsecure_cache=1'
     else
         cmdline+=" ufsprobe=1 ufslist=1 ufsroot=${ASUS_UFS_ROOT:-iosroot}"
     fi

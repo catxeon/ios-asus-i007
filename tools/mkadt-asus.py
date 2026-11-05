@@ -138,11 +138,14 @@ def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM
         ('reg', u64(FB, FB_SIZE)), ('width', u32(FB_WIDTH)),
         ('height', u32(FB_HEIGHT)), ('stride', u32(FB_STRIDE)),
     ])
+    # Phone (disk root): keybagd's boot task reads /private/var/keybags/systembag.kb as a
+    # plain plist only with /defaults/no-effaceable-storage (as tools/mkadt.py, sweet).
+    defaults = node('defaults', [('no-effaceable-storage', u32(1))] if ufs else [])
     return node('device-tree', [
         ('compatible', cstr('asus,picasso') + cstr('qcom,lahaina') + cstr('AppleARM')),
         ('model', cstr('ASUS_I007D')), ('target-type', cstr('PICASSO')),
         ('manufacturer', cstr('ASUS')), ('#address-cells', u32(2)), ('#size-cells', u32(2)),
-    ], [chosen, node('defaults'), cpus, arm_io, fbcon, *gui_top,
+    ], [chosen, defaults, cpus, arm_io, fbcon, *gui_top,
         # xnu/asus/9999-asus-i007-ufs.patch (sweet_ufs.c): the UFS host ABL leaves running,
         # absolute physical reg. Phone only; QEMU has no UFS.
         *([node('sweet-ufs', [('compatible', cstr('qcom,ufshc')), ('reg', u64(UFS, UFS_SIZE))])]

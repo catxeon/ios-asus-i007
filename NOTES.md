@@ -136,6 +136,21 @@
   it); --ufs takes sweet 0039 (core dumps off unless sysctl kern.coredump=1).
   Root free space: HFS LowDisk said freeblks 228291 (~0.9 GB free of the 12 GiB volume);
   the 32 GiB partition is bigger than the volume - growing the HFS volume is a later step.
+- **Image 0013** (kernel CI 42028226278, SHA256 f6ec1d7d...d3783a; user photo): mount task
+  passes (bindfs + boot-manifest-hash work), cc_fips_test boot task: corecrypto FIPS POST
+  all PASSED; keybag boot task: `SWEET AKS: keybagd sel 0 / sel 14 -> 0x0`, `MKB_INIT:
+  mount is with NO CPROTECT`, `System Keybag loaded`, then `Could not open
+  /private/var/keybags/systembag.kb: No such file or directory` -> `FATAL KEYBAG ERROR:
+  kb_load` -> REBOOTING INTO RECOVERY MODE -> panic `Halt/Restart Timed Out
+  @IOPlatformExpert.cpp:884` (no restart path). Same as sweet 0038w. (QEMU never ran
+  these disk-root boot tasks: its root was a RAM disk.)
+- Fixes: mkadt-asus.py --ufs adds /defaults/no-effaceable-storage = 1; root **v13**
+  (../make_springboard_v13.py) = v12 + /private/var/keybags (0700 root) /systembag.kb
+  (0600 root, plist {KeyBagKeys: data "SWEET"}), fsck OK, ~0.93 GB free, SHA256
+  b7c0a839d25f142c57c6d1519eede1297c09cc189ba7b0cda9345f4af66b7871 (v12 unchanged);
+  phone boot-args add launchd_unsecure_cache=1 (sweet's next wall: launchd_cache_loader
+  "Unable to find AMFI"). Image **0014** = kernel 42028226278 + new ADT/boot-args,
+  SHA256 c128a630...dbd16. iosroot being rewritten with v13 (full: rw boots changed it).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
