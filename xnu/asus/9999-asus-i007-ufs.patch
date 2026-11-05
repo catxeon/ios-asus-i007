@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,936 @@
+@@ -0,0 +1,978 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -906,6 +906,47 @@
 +	asus_log_flush(true);         /* thread context: wait for the log thread's write */
 +}
 +
++/* printf/IOLog only queue text for the console thread: a marker printed right before a
++ * fatal step is not in the ring yet when the step kills the SoC. Put it there directly. */
++void asus_log_mark(const char *line);
++
++void
++asus_log_mark(const char *line)
++{
++	sweet_log_append(line, (int)strlen(line));
++	asus_log_flush(true);
++}
++
++/* Reset paths: what printf would only queue, straight into the ring; on a panic also
++ * the tail of the panic log buffer (debug_buf), which the console may not have shown. */
++extern char *debug_buf_base;
++extern char *debug_buf_ptr;
++
++static void
++asus_log_reset_note(unsigned int type)
++{
++	char line[96];
++	snprintf(line, sizeof(line), "\nASUS: halt/restart type %u: log flush%s\n", type,
++	    type == 10 ? "" : ", PSCI SYSTEM_RESET");
++	sweet_log_append(line, (int)strlen(line));
++	static bool dumped;
++	if ((type == 4 || type == 9 || type == 10) && !dumped && debug_buf_base && debug_buf_ptr > debug_buf_base) {
++		dumped = true;
++		size_t n = MIN((size_t)(debug_buf_ptr - debug_buf_base), (size_t)16384);
++		const char *p = debug_buf_ptr - n;
++		static const char head[] = "ASUS: --- panic log tail ---\n", tail[] = "\nASUS: --- end of panic log ---\n";
++		sweet_log_append(head, sizeof(head) - 1);
++		for (size_t i = 0; i < n; i++) {
++			char c = p[i];
++			if (c != '\n' && c != '\t' && (c < 0x20 || c > 0x7e)) {
++				c = '.';
++			}
++			sweet_log_append(&c, 1);
++		}
++		sweet_log_append(tail, sizeof(tail) - 1);
++	}
++}
++
 +static void
 +asus_psci_reset(void)
 +{
@@ -921,10 +962,11 @@
 +{
 +	switch (type) {
 +	case 10:
++		asus_log_reset_note(type);
 +		asus_log_flush_now();
 +		return 0;
 +	case 0: case 1: case 3: case 4: case 9:
-+		printf("ASUS: halt/restart type %u: final log flush, PSCI SYSTEM_RESET\n", type);
++		asus_log_reset_note(type);
 +		asus_log_flush_now();
 +		asus_psci_reset();
 +		return -1;

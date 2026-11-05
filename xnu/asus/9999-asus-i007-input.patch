@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,839 @@
+@@ -0,0 +1,854 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21680,7 +21680,8 @@
 +#include <sys/errno.h>
 +
 +extern "C" void sweet_hid_key(int key, int down);
-+extern "C" void asus_log_sync(void);   /* bsd/dev/sweet_ufs.c; weak no-op below */
++extern "C" void asus_log_mark(const char *line);   /* bsd/dev/sweet_ufs.c; weak fallback below */
++static void amark(const char *fmt, ...) __printflike(1, 2);
 +
 +#define SPMI_CORE_PA    0x0c440000ULL
 +#define SPMI_CNFG_PA    0x0c40a000ULL
@@ -21979,16 +21980,14 @@
 +void
 +AsusPhoneInput::touchBringup()
 +{
-+	IOLog("ASUS TOUCH: step: timer fired, mapping GCC/TLMM\n");
-+	asus_log_sync();
++	amark("ASUS TOUCH: step: timer fired, mapping GCC/TLMM\n");
 +	IOMemoryMap *gcc = map(GCC_PA, GCC_SIZE), *tlmm = map(TLMM_PA, TLMM_SIZE);
 +	if (!gcc || !tlmm) {
 +		OSSafeReleaseNULL(gcc);
 +		OSSafeReleaseNULL(tlmm);
 +		return;
 +	}
-+	IOLog("ASUS TOUCH: step: GCC votes + S4 clock\n");
-+	asus_log_sync();
++	amark("ASUS TOUCH: step: GCC votes + S4 clock\n");
 +	/* Vote QUP0 m/s AHB (6, 7), core/core2x (8, 9) and S4 (14); keep other voters. */
 +	wr(gcc, 0x52008, rd(gcc, 0x52008) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) | (1u << 14));
 +	const uint32_t rcg = 0x174d0;
@@ -22030,8 +22029,7 @@
 +		tlmm->release();
 +		return;
 +	}
-+	IOLog("ASUS TOUCH: step: read SE4 firmware\n");
-+	asus_log_sync();
++	amark("ASUS TOUCH: step: read SE4 firmware\n");
 +	IOMemoryMap *se = map(SE4_PA, 0x4000);
 +	if (!se) {
 +		gcc->release();
@@ -22045,8 +22043,7 @@
 +		IOLog("ASUS TOUCH: SE4 not an idle I2C engine; stopping\n");
 +		goto out;
 +	}
-+	IOLog("ASUS TOUCH: step: TLMM pins + reset pulse\n");
-+	asus_log_sync();
++	amark("ASUS TOUCH: step: TLMM pins + reset pulse\n");
 +	/* Pins as the Android DT: SDA/SCL qup4 (function 1), 2 mA, no pull; IRQ input
 +	 * pull-up; IO supply enable high; reset low 5 ms, then high. */
 +	pin(tlmm, 20, 1, 0, 0, false, false);
@@ -22064,8 +22061,7 @@
 +			    rd(tlmm, pins[i] * 0x1000), rd(tlmm, pins[i] * 0x1000 + 4));
 +		}
 +	}
-+	IOLog("ASUS TOUCH: step: GENI SE I/O init\n");
-+	asus_log_sync();
++	amark("ASUS TOUCH: step: GENI SE I/O init\n");
 +	/*
 +	 * Linux geni_se_init/geni_se_io_init, which sweet's SE (pre-initialised by its
 +	 * bootloader) never needed: ABL leaves SE4 untouched, and image 0018's engine
@@ -22153,7 +22149,28 @@
 +
 +extern "C" void flush_dcache64(addr64_t addr, unsigned count, boolean_t phys);
 +/* Strong definition in bsd/dev/sweet_ufs.c (--ufs); kernels without UFS get this no-op. */
-+extern "C" __attribute__((weak)) void asus_log_sync(void) {}
++extern "C" __attribute__((weak)) void
++asus_log_mark(const char *line)
++{
++	IOLog("%s", line);
++}
++
++/*
++ * Progress marker for risky steps: IOLog/printf only queue text for the console thread,
++ * so a marker printed right before a fatal (EDL) step never reached the flash log
++ * (images 0022/0023). asus_log_mark puts the line straight into the log ring and
++ * writes the ring to flash before returning.
++ */
++static void
++amark(const char *fmt, ...)
++{
++	char line[256];
++	va_list ap;
++	va_start(ap, fmt);
++	vsnprintf(line, sizeof(line), fmt, ap);
++	va_end(ap);
++	asus_log_mark(line);
++}
 +
 +bool
 +AsusPhoneInput::gpiCmd(IOMemoryMap *gpi, uint32_t cmdReg, uint32_t value, uint32_t stateReg, unsigned want)
@@ -22251,15 +22268,14 @@
 +	/*
 +	 * Staged (image 0021 put the phone into Qualcomm EDL somewhere in here before the
 +	 * log existed): boot-arg asusgpi=N runs stages 1..N; the log goes to flash
-+	 * (asus_log_sync) right before each stage, so the last stage logged is the one
++	 * (amark) right before each stage, so the last stage logged is the one
 +	 * that crashed.
 +	 */
 +	uint32_t limit = 7;
 +	PE_parse_boot_argn("asusgpi", &limit, sizeof(limit));
 +#define STAGE(n, what) do { \
 +	if (limit < (n)) { IOLog("ASUS GPI: stopping before stage %u (asusgpi=%u)\n", (n), limit); goto done; } \
-+	IOLog("ASUS GPI: stage %u: %s\n", (n), (what)); \
-+	asus_log_sync(); \
++	amark("ASUS GPI: stage %u: %s\n", (n), (what)); \
 +} while (0)
 +	IOMemoryMap *gpi = map(GPI_PA, GPI_SIZE);
 +	fGpiMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
@@ -22376,8 +22392,7 @@
 +		for (unsigned i = 0; i < sizeof(regs); i++) {
 +			uint8_t v = 0;
 +			int e = gpiRead(gpi, regs[i], &v, 1);
-+			IOLog("ASUS TOUCH: fts 0x38 reg %#x -> %#x (err %d, gpi)\n", regs[i], v, e);
-+			asus_log_sync();
++			amark("ASUS TOUCH: fts 0x38 reg %#x -> %#x (err %d, gpi)\n", regs[i], v, e);
 +		}
 +	}
 +#undef STAGE
