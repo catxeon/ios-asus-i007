@@ -270,6 +270,13 @@
     fixed it by presenting 1125x2436).
   - C: has only ~6 GB free: the WSL ext4.vhdx grew (roots + ram.bin). Freed space inside
     WSL is reused; compacting the vhdx would return it to Windows.
+  - Cleanup 2026-11-05 (user approved): deleted ../apple-20H392/20H392-Restore.ipsw
+    (re-download from ../apple-20H392/URL.txt; the OS/SystemOS dmgs, devicetree and
+    os.trustcache.im4p it provided are kept), ../asus-compositor-root/backboardd-v7.hfs
+    (v8..v12 roots can no longer be rebuilt from it; v12 is kept in ~/asus-roots), old
+    ../qemu-* run dirs, all ../asus-ci-* kernels except 41979354334, 41993057944,
+    42009368500, and WSL ~/asus-roots/qemu-v8*/v9/v10*. The WSL ext4.vhdx is not
+    compacted yet (needs wsl --shutdown).
   - GDB crash capture for kernel 59b0b8c1/884e0b3b symbol layout:
     ../capture_crash_k59b0.gdb (exception_triage +0x2c at 0xfffffe00073282dc);
     saves frames per exception under OUT/crash-NN-<proc>.
