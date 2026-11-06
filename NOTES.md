@@ -489,6 +489,15 @@
   CP_ALWAYS_ON counter 0xc1a3e4 ticking, CP_HW_FAULT 0, INT0 0. Next: stage 7 (hw_init,
   SQE + ring behind an SMMU context for stream 0, CP_ME_INIT), 8 (zap via TrustZone
   PIL), 9 (CP_MEM_WRITE test).
+- **Image 0042 (lab, kernel 42141514624, asusgpu=7): EDL** (no reset within 1200 s,
+  USB 05c6:9008 at 04:40; tools/edl-reset.ps1 got RESET_RESP again but the phone stayed
+  in 9008). Needs the user's power-key reset; the flash log (stage-7 markers: "hw_init
+  registers" / "SQE and ringbuffer, CP start" / CP_ME_INIT result) must then be read
+  by hand: adb exec-out "su -c 'dd if=/dev/block/by-name/iosroot bs=4096
+  skip=8387578 count=1025'" > log.bin; python3 tools/sweet-log.py log.bin log.txt.
+  Suspects: the RBBM_SECVID_TSB_* writes (0xf800-0xf810, secure-side registers that
+  Linux writes only before the zap shader's CP_SET_SECURE_MODE on its targets),
+  GBIF halt clears, or the CP's first fetches through the stream-0 context.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

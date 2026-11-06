@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2634 @@
+@@ -0,0 +1,2649 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23840,19 +23840,34 @@
 +	}
 +	uint32_t cb = (uint32_t)(((1u << ((((*(volatile uint32_t *)(s->getVirtualAddress() + 0x24)) >> 28) & 7) + 1)) + (uint32_t)cbn) << 12);
 +
-+	amark("ASUS GPU: stage 7: hw_init registers\n");
++	/*
++	 * Image 0042 went to EDL somewhere in stage 7 (log unread yet): markers before each
++	 * group, and the RBBM_SECVID_TSB_* registers (0xf800-0xf810, the secure side's
++	 * trusted-buffer window) only with boot-arg asusgpusecvid=1.
++	 */
++	uint32_t secvid = 0;
++	PE_parse_boot_argn("asusgpusecvid", &secvid, sizeof(secvid));
++	amark("ASUS GPU: stage 7: GBIF halt release\n");
 +	gpuW(gpu, 0x3c45, 0);                           /* GBIF_HALT */
 +	(void)gpuR(gpu, 0x3c45);
 +	gpuW(gpu, 0x16, 0);                             /* RBBM_GBIF_HALT */
 +	(void)gpuR(gpu, 0x16);
-+	gpuW(gpu, 0xf803, 0);                           /* RBBM_SECVID_TSB_CNTL */
-+	gpuW64(gpu, 0xf800, 0);                         /* TSB trusted base */
-+	gpuW(gpu, 0xf802, 0);                           /* TSB trusted size */
++	if (secvid) {
++		amark("ASUS GPU: stage 7: SECVID TSB registers\n");
++		gpuW(gpu, 0xf803, 0);                   /* RBBM_SECVID_TSB_CNTL */
++		gpuW64(gpu, 0xf800, 0);                 /* TSB trusted base */
++		gpuW(gpu, 0xf802, 0);                   /* TSB trusted size */
++	}
++	amark("ASUS GPU: stage 7: 64-bit addressing\n");
 +	static const uint32_t addrMode[] = { 0x842, 0xc01, 0x8601, 0x8e05, 0x9e01, 0xbe05, 0xa601, 0x9601,
-+		                             0xe00, 0xae01, 0xb601, 0xf810 };
++		                             0xe00, 0xae01, 0xb601 };
 +	for (unsigned i = 0; i < sizeof(addrMode) / sizeof(addrMode[0]); i++) {
 +		gpuW(gpu, addrMode[i], 1);
 +	}
++	if (secvid) {
++		gpuW(gpu, 0xf810, 1);                   /* RBBM_SECVID_TSB_ADDR_MODE_CNTL */
++	}
++	amark("ASUS GPU: stage 7: GBIF, UCHE, CP and UBWC settings\n");
 +	for (unsigned i = 0; i < 4; i++) {
 +		gpuW(gpu, 0x3c03 + i, 0x00071620);      /* GBIF_QSB_SIDE0-3 */
 +	}
