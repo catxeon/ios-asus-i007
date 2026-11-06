@@ -440,6 +440,42 @@
   off), hlos1 SMMU vote 0x5000 0x80000000, PLL0/PLL1 (0x0/0x100) configured but off
   (L 0x?? at +0x4 = 0, user ctl 0x805). The lab-mode "initproc failed" panic at the
   end is the clean reboot killing the RAM-root init (harmless, lab only).
+- Image 0037 (lab, asusgpu=2, first version): gcc_gpu_memnoc_gfx stayed off
+  (0x80000221) when enabled before the GPU power domain. Fixed order as Linux:
+  GPLL0 votes, CX GDSC, clocks.
+- **Image 0038 (lab, kernel 42134929628, asusgpu=3): GPU CX side alive.** CX GDSC
+  0x106c 0x222001 -> 0xf8222800 with gds_hw_ctrl 0x1540 0x5ff4 -> 0x80001fe0 (VOTABLE
+  status bit 31 there); gmu_clk_src CFG 0x602 (GPLL0_DIV/1.5 = 200 MHz), hub_clk_src
+  0x603 (150 MHz); all GPU_CC branches on; memnoc_gfx 0x221 / snoc_dvm_gfx 0x1 on. GMU
+  registers readable: CM3_SYSRESET 1 (held), FW_INIT_RESULT 0, ALWAYS_ON_COUNTER
+  running, SPTPRAC status 0xc0. GPU SMMU (0x3da0000): sCR0 0x290406 (enabled, GFRE/
+  GFIE, USFCFG = unmatched streams fault), IDR0 0x4c017e06 (6 SMRs), IDR1 0x30000007
+  (7 CBs, 4 KiB pages, CBs from 0x10000), IDR2 0x5511; all SMRs invalid, all S2CR
+  type 2 (fault), all CBAR 0 with power-up garbage in SCTLR/TTBR/TCR: completely
+  unconfigured, the HLOS (kgsl) programs it. Stage 4 now takes a CB with CBAR 0.
+- Driver firmware area: tools/asus-fw-pack.py -> work/asus-gpu-fw/asusfw-area.bin
+  (a660_gmu.bin, a660_sqe.fw, a660_zap.{mdt,b00,b01,b02}; 113792 of 262144 bytes,
+  SHA256 f8617c2f...) written 2026-11-06 ~03:15 to iosroot blocks 8387514..8387577
+  (right before the log at 8387578), readback hash equal, log header intact. Read by
+  asus_fw_load() (sweet_ufs.c). Android's mksh arithmetic is 32-bit: compute block
+  numbers on the PC (a first try computed a negative seek; dd refused, nothing
+  written).
+- kgsl GPU contexts (Android DT qcom,kgsl-iommu@3da0000, qcom,kgsl-smmu-v2):
+  gfx3d_user = SMMU stream 0, gfx3d_lpac = 1, gfx3d_secure = 2 (all mask 0x400);
+  the GMU is stream 5 (qcom,gmu iommus). Next after GX on: a6xx hw_init (a660 values:
+  GBIF QSB sides 0x71620, ROQ thresholds 0x02000140/0x8040362c, LPAC FIFO 0x20, mem pool
+  128, UCHE CMDQ 0x66906, CP_CHICKEN_DBG 1, ...), an SMMU context for stream 0, SQE
+  (a660_sqe.fw) + ringbuffer, CP init, zap shader (PAS 13, pil_gpu_region@8b51a000),
+  CP_SET_SECURE_MODE 0.
+- **Image 0039 (lab, kernel 42136794697, asusgpu=6): the GMU runs its firmware.**
+  asus_fw_load a660_gmu.bin from the iosroot area (53672 bytes); GMU memory icache pa
+  0x144398000, dummy/log/hfi/debug, tables 0x1444a0000; SMMU SMR5 -> CB6 (CB page
+  0x16000): SCTLR 0x67, TTBR0 0x1444a0000, SMR 0x84000005, S2CR 6; RSCC stop ok
+  (status 0x1010006), rpmh_start ok; 4 firmware blocks into ITCM/DTCM/icache; CM3 out
+  of reset -> FW_INIT_RESULT stayed 0 and the GMU's SMMU CB reported FSR 0x402
+  (translation fault) at FAR 0x104000 = just past the 1 MiB icache window: the
+  firmware uses more of the icache range (headers list sections at 0x100000 and
+  0x200000). Now icache = 16 MiB - 16 KiB at GMU VA 0x4000 as Linux.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

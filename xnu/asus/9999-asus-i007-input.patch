@@ -23191,8 +23191,8 @@
 +		amark("ASUS GPU: no a660_gmu.bin, stopping\n");
 +		return;
 +	}
-+	amark("ASUS GPU: stage 4: GMU memory (icache 1 MiB, dummy, log, hfi, debug)\n");
-+	if (!gbufAlloc(&gIcache, 1 << 20, 0x4000) || !gbufAlloc(&gDummy, 0x2000, 0x60000000) ||
++	amark("ASUS GPU: stage 4: GMU memory (icache 16 MiB - 16 KiB as Linux; 1 MiB faulted at 0x104000 in 0039)\n");
++	if (!gbufAlloc(&gIcache, (16u << 20) - 0x4000, 0x4000) || !gbufAlloc(&gDummy, 0x2000, 0x60000000) ||
 +	    !gbufAlloc(&gLog, 0x4000, 0x60002000) || !gbufAlloc(&gHfi, 0x4000, 0x60006000) ||
 +	    !gbufAlloc(&gDebug, 0x7000, 0x60400000) || !gbufAlloc(&gGmuPt.chunk, 64 * 4096, 0)) {
 +		amark("ASUS GPU: GMU memory allocation failed\n");
