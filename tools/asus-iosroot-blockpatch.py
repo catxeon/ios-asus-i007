@@ -82,7 +82,8 @@ def write_runs(src_local, runs):
         sys.exit('pushed data does not match (sha256)')
     off, cmds = 0, []
     for start, n in runs:
-        cmds.append(f'dd if={TMP}/data.bin of={PART} bs={BS} skip={off} seek={start} count={n} conv=notrunc 2>&1 | tail -1')
+        # No pipe after dd: set -e must see dd's own exit status.
+        cmds.append(f'dd if={TMP}/data.bin of={PART} bs={BS} skip={off} seek={start} count={n} conv=notrunc 2>/dev/null')
         off += n
     script = '\n'.join(['set -e', *cmds, 'sync', 'echo WRITE-DONE']) + '\n'
     open(src_local + '.sh', 'w', newline='\n').write(script)
