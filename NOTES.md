@@ -527,6 +527,27 @@
   (inject.c + kernel exec_inject, topaz 0919/0947), the kernel RedwoodGPU msm client
   (topaz 0901, SweetSurface `drawn` field) on an Adreno 660 hardware layer
   (redwood_gpu_* from the asusgpu stages), and the files in the iosroot HFS image.
+- **iosroot damaged since 0045 (found 2026-11-06 from a read-only pull, 12 GB in 700 s):**
+  0045 panicked (cpubench assert) with the root mounted read-write. The volume is
+  non-journaled, so the bitmap and header counts on flash stayed stale; 0046-0050 mounted
+  it dirty ("mounting dirty non-journaled root read-write"), allocated blocks that were in
+  use (fsck: 8 overlapped extents: MCM containers.sqlite3-wal, FrontBoard
+  applicationState.db, proactive aggr_state, 5 Safari files) and twice hit
+  `BlockMarkFreeInternal ... unallocated` -> hfs_mark_inconsistent, which also makes
+  hfs_unmount leave the volume dirty (phone header attr 0x80004000 after a clean 0050
+  reboot). Setup's com.apple.purplebuddy.plist was rewritten without SetupDone, so
+  0046-0050 ran Setup/datamigrator and never left the logo: those FPS runs are void.
+  Fix prepared on the pulled image (work/asus-rootfix-0050, not written yet): v14
+  purplebuddy.plist back (old one in /private/root-old-prefs/), `fsck.hfsplus -y`
+  (overlaps cloned, counts, bitmap), the garbage Safari/aggr_state files moved to
+  /private/root-old-prefs/damaged-0050 (FrontBoard and MCM databases pass sqlite
+  integrity_check); fsck clean. Diff: 142 4K blocks in 24 runs (568 KiB).
+  tools/asus-iosroot-blockpatch.py checks the phone blocks against the pulled image
+  (passed), keeps backup.bin, writes with --write, verifies; --restore undoes it.
+  tools/asus-phone-cycle.sh now prints the root header state before and after a run and
+  refuses to boot on a dirty root (ASUS_ALLOW_DIRTY_ROOT=1 for lab images).
+  Lesson: any panic or forced reset with the root mounted needs an fsck before the next
+  iOS boot; a journal on the root (HFS supports it) would remove that need.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,

@@ -20,11 +20,37 @@ img_wsl=$(wsl_path "$img")
 log() { echo "$(date +%T) $*" | tee -a "$out/cycle.txt"; }
 wfastboot() { MSYS_NO_PATHCONV=1 wsl.exe -u root -e fastboot "$@" 2>&1 | tr -d '\r'; }
 
+# Root volume state (read-only): the HFS+ header at byte 1024 of iosroot. Run 0045 panicked
+# with the root mounted read-write; the non-journaled volume kept a stale bitmap, later
+# boots allocated blocks twice (8 files overlapped, Setup flags lost) and HFS marked the
+# volume inconsistent, which also keeps hfs_unmount from marking it clean. An iOS boot on
+# a dirty root makes it worse: fsck it first (pull, fsck.hfsplus, asus-iosroot-blockpatch.py).
+root_state() {
+    adb exec-out "su -c 'dd if=/dev/block/by-name/iosroot bs=4096 count=1 2>/dev/null'" > "$out/root-header-$1.bin"
+    python -I -c '
+import struct, sys
+b = open(sys.argv[1], "rb").read()[1024:1024 + 0x34]
+sig, ver, attr = struct.unpack(">2sHI", b[:8])
+files, dirs, bsize, total, free = struct.unpack(">IIIII", b[0x20:0x34])
+clean = attr & (1 << 8) and not attr & (1 << 14)
+print("root volume (%s) %s v%d attr 0x%x: %s%s, %d files, %d dirs, %d of %d blocks free" % (
+    sys.argv[2], sig.decode("latin-1"), ver, attr, "clean" if clean else "DIRTY",
+    ", journaled" if attr & (1 << 13) else "", files, dirs, free, total))
+sys.exit(0 if clean else 3)
+' "$(cygpath -w "$out/root-header-$1.bin" 2>/dev/null || echo "$out/root-header-$1.bin")" "$1" 2>&1 | tee -a "$out/cycle.txt"
+}
+
 log "image $img ($(sha256sum "$img" | cut -c1-16)) -> $img_wsl"
 if wfastboot devices | grep -q fastboot; then
     log 'phone already in fastboot (attached to WSL)'
 else
     timeout 600 adb wait-for-device || { log 'no adb device'; exit 1; }
+    # Images that mount iosroot read-write (all but ASUS_TOUCH_LAB ones) must not start on
+    # a dirty root; ASUS_ALLOW_DIRTY_ROOT=1 skips the check (lab images, deliberate tests).
+    if ! root_state before && [ "${ASUS_ALLOW_DIRTY_ROOT:-0}" != 1 ]; then
+        log 'iosroot is dirty: fsck it before booting iOS (or ASUS_ALLOW_DIRTY_ROOT=1 for lab images)'
+        exit 2
+    fi
     # Qualcomm crash download mode is on in this Android (download_mode=1, mini dumps):
     # a fatal secure-side error under our kernel then parks the SoC in EDL (05c6:9008)
     # until a manual power-key reset. Turn it off for this boot only (runtime module
@@ -67,3 +93,4 @@ log "log area: $(stat -c %s "$out/log.bin") bytes from block $skip"
 MSYS_NO_PATHCONV=1 wsl.exe python3 "$(wsl_path "$repo/tools/sweet-log.py")" "$(wsl_path "$out/log.bin")" \
     "$(wsl_path "$out")/log.txt" 2>&1 | tee -a "$out/cycle.txt"
 log "decoded: $out/log.txt ($(wc -l < "$out/log.txt" 2>/dev/null || echo 0) lines)"
+root_state after
