@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2019 @@
+@@ -0,0 +1,2029 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22972,11 +22972,33 @@
 +void
 +AsusPhoneInput::gpuStage2(IOMemoryMap *gcc, IOMemoryMap *gpucc)
 +{
-+	amark("ASUS GPU: stage 2: GCC votes and GPU NoC branches\n");
++	/*
++	 * Order as Linux (image 0037: gcc_gpu_memnoc_gfx stayed off before the GPU power
++	 * domain was up): GPLL0 votes, CX GDSC (pm_runtime of the GMU), then the clocks.
++	 * gpu_cx_gdsc is VOTABLE | RETAIN_FF_ENABLE with gds_hw_ctrl 0x1540: the power-on
++	 * status is bit 31 there, not in the GDSCR.
++	 */
++	amark("ASUS GPU: stage 2: GCC GPLL0 votes for the GPU\n");
 +	wr(gcc, 0x52000, rd(gcc, 0x52000) | (1u << 15) | (1u << 16));
 +	IODelay(10);
-+	if (!gpuBranch(gcc, 0x7100c, "gcc_gpu_memnoc_gfx") || !gpuBranch(gcc, 0x71018, "gcc_gpu_snoc_dvm_gfx")) {
-+		return;
++	{
++		uint32_t g = rd(gpucc, 0x106c);
++		amark("ASUS GPU: stage 2: CX GDSC (gdscr %#x hw_ctrl %#x)\n", g, rd(gpucc, 0x1540));
++		if (!(rd(gpucc, 0x1540) & (1u << 31))) {
++			wr(gpucc, 0x106c, (g | (1u << 11)) & ~1u);     /* RETAIN_FF_ENABLE, SW_COLLAPSE off */
++			bool on = false;
++			for (unsigned i = 0; i < 2000 && !on; i++) {
++				on = (rd(gpucc, 0x1540) & (1u << 31)) || (rd(gpucc, 0x106c) & (1u << 31));
++				if (!on) {
++					IODelay(5);
++				}
++			}
++			amark("ASUS GPU: CX GDSC %s (gdscr %#x hw_ctrl %#x)\n", on ? "on" : "DID NOT power on",
++			    rd(gpucc, 0x106c), rd(gpucc, 0x1540));
++			if (!on) {
++				return;
++			}
++		}
 +	}
 +	amark("ASUS GPU: stage 2: GPU_CC clock sources\n");
 +	if (!gpuRcg(gpucc, 0x1120, 6, 2, "gmu_clk_src 200 MHz") || !gpuRcg(gpucc, 0x117c, 6, 3, "hub_clk_src 150 MHz")) {
@@ -22992,23 +23014,11 @@
 +			return;
 +		}
 +	}
-+	amark("ASUS GPU: stage 2: CX GDSC (was %#x)\n", rd(gpucc, 0x106c));
-+	uint32_t g = rd(gpucc, 0x106c);
-+	if (!(g & (1u << 31))) {
-+		wr(gpucc, 0x106c, g & ~1u);
-+		bool on = false;
-+		for (unsigned i = 0; i < 1000 && !on; i++) {
-+			on = rd(gpucc, 0x106c) & (1u << 31);
-+			if (!on) {
-+				IODelay(5);
-+			}
-+		}
-+		if (!on) {
-+			amark("ASUS GPU: CX GDSC did not power on (%#x)\n", rd(gpucc, 0x106c));
-+			return;
-+		}
-+	}
-+	amark("ASUS GPU: CX GDSC %#x; stage 2: reading GMU registers\n", rd(gpucc, 0x106c));
++	amark("ASUS GPU: stage 2: GCC GPU NoC branches\n");
++	bool memnoc = gpuBranch(gcc, 0x7100c, "gcc_gpu_memnoc_gfx");
++	bool snoc = gpuBranch(gcc, 0x71018, "gcc_gpu_snoc_dvm_gfx");
++	amark("ASUS GPU: memnoc_gfx %s %#x, snoc_dvm_gfx %s %#x; stage 2: reading GMU registers\n",
++	    memnoc ? "on" : "off", rd(gcc, 0x7100c), snoc ? "on" : "off", rd(gcc, 0x71018));
 +	IOMemoryMap *gmu = map(0x03d6a000ULL, 0x34000);
 +	if (!gmu) {
 +		return;

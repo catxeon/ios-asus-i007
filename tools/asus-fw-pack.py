@@ -8,9 +8,10 @@ iosroot partition: "ASUSFW01", u32 count, count x { char name[32]; u32 offset;
 u32 size } (offsets from the area start), then the files. The firmware comes from
 the phone's own /vendor/firmware and never goes into git or the public CI build.
 
-Write it from Android as root (iosroot = sda24 on LUN 0, 4 KiB blocks):
-  blocks=$(( $(blockdev --getsize64 /dev/block/sda24) / 4096 ))
-  dd if=OUT.bin of=/dev/block/sda24 bs=4096 seek=$((blocks - 1025 - 64)) conv=notrunc,fsync
+Write it from Android as root (iosroot = sda24 on LUN 0, 4 KiB blocks). Android's
+mksh arithmetic is 32-bit: compute the block on the PC. iosroot is 34359717888
+bytes = 8388603 blocks, the log starts at 8387578, so the area is at 8387514:
+  dd if=OUT.bin of=/dev/block/sda24 bs=4096 seek=8387514 count=64 conv=notrunc,fsync
 """
 import struct
 import sys
