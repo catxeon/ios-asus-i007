@@ -498,6 +498,22 @@
   Suspects: the RBBM_SECVID_TSB_* writes (0xf800-0xf810, secure-side registers that
   Linux writes only before the zap shader's CP_SET_SECURE_MODE on its targets),
   GBIF halt clears, or the CP's first fetches through the stream-0 context.
+  Next kernel (42145829535): a marker before each stage-7 group; SECVID TSB writes only
+  with asusgpusecvid=1. Images ready for the morning: 0043 (lab, asusgpu=7) and 0044
+  (iOS from iosroot, cpus=8, big cores at full speed, GPU stages off).
+- **Userland GPU, first piece: Mesa for iOS built in CI** (.github/workflows/asus-mesa.yml,
+  macos-15, run 42145703219): Mesa 25.0.7 + userland/mesa patches + redwood-drm,
+  gallium softpipe+freedreno, OSMesa: libOSMesa.8.dylib 14.8 MB (deps: libz, libSystem,
+  IOKit, libc++; install name /asus/lib/libOSMesa.8.dylib), 1296 exported gl* symbols,
+  gl.xml; artifact asus-mesa (copy in work/asus-mesa-42145703219). Still missing for
+  CoreAnimation on the GPU: the EAGL layer (userland/gpu/eagl.c + gl_osmesa.c ->
+  libasus-gl.dylib; needs eagl_gen.h from HakiOS mkeagl.py + eagl_slots.txt, which live in
+  oosexgang/hackios-xnu-kernel userland/ (MIT); work/hakios-os has a read-only sparse
+  checkout; running that generator locally was refused by the session's safety rules
+  -> needs the user's OK or our own generator), the injector into backboardd
+  (inject.c + kernel exec_inject, topaz 0919/0947), the kernel RedwoodGPU msm client
+  (topaz 0901, SweetSurface `drawn` field) on an Adreno 660 hardware layer
+  (redwood_gpu_* from the asusgpu stages), and the files in the iosroot HFS image.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
