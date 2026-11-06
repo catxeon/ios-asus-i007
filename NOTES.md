@@ -573,6 +573,18 @@
   measurable: SpringBoard's first lines come around autoswipe round 25 (the unlock swipe
   at 420 s was too early), 0.2-6.4 fps lines. Images 0051 (SMP8), 0052 (cores 0,4-7),
   0053 (AMP) = same kernels with asusautoswipe=900 asusreboot=1500.
+- **FPS benchmark (2026-11-06, journaled root, same workload: unlock at 900 s, 30 rounds of
+  home-screen page swipes left/right, 1.5 s apart; mean of the 5 s "ASUS FPS" intervals
+  during the rounds, so idle gaps included):**
+  - 0051 SMP, 8 equal cores (kernel 42176394818): 8.7 fps (8.2-9.8, one 12.8)
+  - 0052 SMP, cores 0,4,5,6,7 (1 A55 + 3 A78 + X1): 9.3 fps (8.6-10.4, one 16.4)
+  - 0053 AMP, E = A55 0-3, P = A78/X1 4-7 (kernel 42176437062): 2.8 fps (2.4-3.6)
+  All three: no CRASH lines, clean reboot after 1569-1570 s, root clean + journaled after.
+  AMP is 3x slower: the render path evidently runs on the A55 E cluster (no CLPC /
+  perfcontrol to recommend P cores) -> do not use the AMP kernel as is. 5 cores vs 8 is
+  within ~7 % (noise level); the 5-core layout is the slightly better default. The limit
+  is the CPU renderer, not the core count: next step for frame rate is GPU or a cheaper
+  render path, not scheduling.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
