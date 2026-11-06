@@ -788,7 +788,7 @@
  
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetKeyStore.cpp
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,268 @@
 +/*
 + * Built-in AppleKeyStore for SWEET: a device without a passcode whose
 + * system keybag is always loaded and unlocked.
@@ -1023,10 +1023,37 @@
 +		break;
 +	}
 +
++	/*
++	 * Image 0044: Spotlight asked for the device state (17) ~26 times a second, 69850
++	 * log lines in 45 minutes. Log the first 8 calls per process and selector, then
++	 * every 1000th.
++	 */
 +	char name[32];
 +	proc_selfname(name, sizeof(name));
-+	IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
-+	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
++	static struct {
++		char name[20];
++		uint32_t selector, count;
++	} seen[64];
++	static uint32_t nseen;
++	uint32_t count = 0;
++	unsigned i;
++	for (i = 0; i < nseen; i++) {
++		if (seen[i].selector == selector && strncmp(seen[i].name, name, sizeof(seen[i].name)) == 0) {
++			break;
++		}
++	}
++	if (i == nseen && nseen < 64) {
++		strlcpy(seen[i].name, name, sizeof(seen[i].name));
++		seen[i].selector = selector;
++		nseen++;
++	}
++	if (i < 64) {
++		count = ++seen[i].count;
++	}
++	if (count <= 8 || count % 1000 == 0) {
++		IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x (call %u)\n", name, selector,
++		    arg0, in_scalars, in_struct, out_scalars, out_struct, ret, count);
++	}
 +	return ret;
 +}
 +#endif /* SWEET */
