@@ -23235,7 +23235,7 @@
 +	}
 +	for (int n = (int)ncb - 1; n >= 0; n--) {
 +		uint32_t cb = (npage + n) << pgshift;
-+		if (cb + 0x800 <= 0x20000 && rd(s, gr1 + 4 * n) == 0 && rd(s, cb) == 0) {
++		if (cb + 0x800 <= 0x20000 && rd(s, gr1 + 4 * n) == 0) {     /* CBAR 0: unused (SCTLR holds power-up garbage, image 0038) */
 +			cbn = n;
 +			break;
 +		}
