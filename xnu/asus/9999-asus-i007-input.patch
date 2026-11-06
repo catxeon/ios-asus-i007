@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2029 @@
+@@ -0,0 +1,2254 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21718,7 +21718,8 @@
 +	void gpuProbe();
 +	void gpuStage2(IOMemoryMap *gcc, IOMemoryMap *gpucc);
 +	void gpuSmmuDump();
-+	void gpuStage4();
++	void gpuStage4(IOMemoryMap *gpucc);
++	void gpuStage5(IOMemoryMap *g, IOMemoryMap *gpucc);
 +	bool gpuBranch(IOMemoryMap *m, uint32_t off, const char *name);
 +	bool gpuRcg(IOMemoryMap *m, uint32_t cmd, uint32_t src, uint32_t div2m1, const char *name);
 +	void touchBringup();
@@ -23039,7 +23040,7 @@
 +		gpuSmmuDump();
 +	}
 +	if (stage >= 4) {
-+		gpuStage4();
++		gpuStage4(gpucc);
 +	}
 +}
 +
@@ -23181,7 +23182,7 @@
 +}
 +
 +void
-+AsusPhoneInput::gpuStage4()
++AsusPhoneInput::gpuStage4(IOMemoryMap *gpucc)
 +{
 +	amark("ASUS GPU: stage 4: GMU firmware from the iosroot firmware area\n");
 +	void *fw = NULL;
@@ -23435,6 +23436,13 @@
 +	ok = gmuPoll(g, 0x5180, 1, 1, 20000);
 +	amark("ASUS GPU: HFI start %s (status %#x, version %#x)\n", ok ? "OK" : "TIMEOUT",
 +	    gmuR(g, 0x5180), gmuR(g, 0x5181));
++	if (ok) {
++		uint32_t stage = 0;
++		PE_parse_boot_argn("asusgpu", &stage, sizeof(stage));
++		if (stage >= 5) {
++			gpuStage5(g, gpucc);
++		}
++	}
 +out:
 +	g->release();
 +	rscc->release();
@@ -23442,6 +23450,223 @@
 +	s->release();
 +	asus_fw_free(fw, fwsize);
 +	amark("ASUS GPU: stage 4 done\n");
++}
++
++/* cmd-db aux data (u16 ARC level tables of "gfx.lvl", "mx.lvl", "cx.lvl"). */
++static unsigned
++cmdDbAux(const uint8_t *p, const char *name, uint16_t *out, unsigned max)
++{
++	char id[9] = { 0 };
++	strlcpy(id, name, sizeof(id));
++	for (unsigned h = 0; h < 8; h++) {
++		const uint8_t *rh = p + 8 + 16 * h;
++		unsigned hoff = rh[2] | (rh[3] << 8), doff = rh[4] | (rh[5] << 8), cnt = rh[6] | (rh[7] << 8);
++		for (unsigned j = 0; j < cnt; j++) {
++			const uint8_t *e = p + 144 + hoff + 24 * j;
++			if (e + 24 > p + CMD_DB_SIZE) {
++				break;
++			}
++			if (memcmp(e, id, 8) == 0) {
++				unsigned len = e[20] | (e[21] << 8), off = e[22] | (e[23] << 8);
++				const uint8_t *a = p + 144 + doff + off;
++				unsigned n = 0;
++				for (; n < len / 2 && n < max && a + 2 * n + 2 <= p + CMD_DB_SIZE; n++) {
++					out[n] = (uint16_t)(a[2 * n] | (a[2 * n + 1] << 8));
++				}
++				return n;
++			}
++		}
++	}
++	return 0;
++}
++
++static uint32_t
++arcVote(const uint16_t *pri, unsigned npri, const uint16_t *sec, unsigned nsec, unsigned level)
++{
++	unsigned pindex = 0, sindex = 0, j;
++	for (j = 0; j < npri; j++) {
++		if (pri[j] >= level) {
++			pindex = j;
++			break;
++		}
++	}
++	for (j = 0; j < nsec; j++) {
++		if (sec[j] >= level) {
++			sindex = j;
++			break;
++		} else if (sec[j]) {
++			sindex = j;
++		}
++	}
++	return ((uint32_t)pri[pindex] << 16) | (sindex << 8) | pindex;
++}
++
++static uint32_t gHfiSeq;
++
++/* a6xx_hfi_send_msg + a6xx_hfi_wait_for_ack on our queues (command 0, response 1). */
++static int
++hfiSend(IOMemoryMap *g, uint32_t id, uint32_t *msg, uint32_t dwords)
++{
++	uint32_t *t = (uint32_t *)gHfi.va;
++	uint32_t *h0 = t + 6, *h1 = t + 6 + 12;
++	uint32_t *q0 = (uint32_t *)(gHfi.va + 4096), *q1 = (uint32_t *)(gHfi.va + 8192);
++	uint32_t seq = ++gHfiSeq % 0xfff;
++	msg[0] = (seq << 20) | (0u << 16) | (dwords << 8) | id;
++	flush_dcache64((addr64_t)(uintptr_t)gHfi.va, 3 * 4096, FALSE);
++	uint32_t idx = h0[11];
++	for (uint32_t i = 0; i < dwords; i++) {
++		q0[idx] = msg[i];
++		idx = (idx + 1) % 1024;
++	}
++	for (; idx % 4; idx = (idx + 1) % 1024) {
++		q0[idx] = 0xfafafafa;
++	}
++	h0[11] = idx;
++	flush_dcache64((addr64_t)(uintptr_t)gHfi.va, 3 * 4096, FALSE);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	gmuW(g, 0x5194, 1);                             /* HOST2GMU_INTR_SET */
++	if (!gmuPoll(g, 0x5192, 1, 1, 50000)) {         /* GMU2HOST_INTR_INFO.MSGQ */
++		IOLog("ASUS GPU: HFI msg %u seq %u: no response (info %#x)\n", id, seq, gmuR(g, 0x5192));
++		return ETIMEDOUT;
++	}
++	gmuW(g, 0x5191, 1);                             /* GMU2HOST_INTR_CLR */
++	for (unsigned tries = 0; tries < 16; tries++) {
++		flush_dcache64((addr64_t)(uintptr_t)gHfi.va, 3 * 4096, FALSE);
++		uint32_t r = h1[10];
++		if (r == h1[11]) {
++			IOLog("ASUS GPU: HFI msg %u seq %u: response queue empty\n", id, seq);
++			return ENOENT;
++		}
++		uint32_t hdr = q1[r], n = (hdr >> 8) & 0xff, resp[20] = { 0 };
++		for (uint32_t i = 0; i < n; i++) {
++			if (i < 20) {
++				resp[i] = q1[r];
++			}
++			r = (r + 1) % 1024;
++		}
++		r = ((r + 3) & ~3u) % 1024;
++		h1[10] = r;
++		flush_dcache64((addr64_t)(uintptr_t)gHfi.va, 3 * 4096, FALSE);
++		if ((hdr & 0xff) == 100) {
++			IOLog("ASUS GPU: HFI firmware error %u (msg %u)\n", resp[1], id);
++			continue;
++		}
++		if (((resp[1] >> 20) & 0xfff) != seq) {
++			IOLog("ASUS GPU: HFI unexpected seq %u (want %u)\n", (resp[1] >> 20) & 0xfff, seq);
++			continue;
++		}
++		if (resp[2]) {
++			IOLog("ASUS GPU: HFI msg %u returned error %u\n", id, resp[2]);
++			return EIO;
++		}
++		return 0;
++	}
++	return EIO;
++}
++
++/*
++ * Stage 5 (asusgpu>=5): HFI v2 start (a6xx_hfi_start): perf table (GX levels of the
++ * Android DT OPPs with ARC votes from cmd-db gfx.lvl / mx.lvl, GMU levels 0 and 200 MHz
++ * with cx.lvl), the a660 bus table, CORE_FW_START, START, then a GX perf vote.
++ * Stage 6 (asusgpu>=6): OOB GPU_SET (bit 30, ack 31): the GMU powers GX; read GPU
++ * registers (RBBM_STATUS, CP always-on counter) as the first sign of a live GPU.
++ */
++void
++AsusPhoneInput::gpuStage5(IOMemoryMap *g, IOMemoryMap *gpucc)
++{
++	amark("ASUS GPU: stage 5: ARC votes from cmd-db\n");
++	IOMemoryMap *db = map(CMD_DB_PA, CMD_DB_SIZE);
++	if (!db) {
++		return;
++	}
++	const uint8_t *p = (const uint8_t *)db->getVirtualAddress();
++	uint16_t gfx[16], mx[16], cx[16];
++	unsigned ngfx = cmdDbAux(p, "gfx.lvl", gfx, 16), nmx = cmdDbAux(p, "mx.lvl", mx, 16);
++	unsigned ncx = cmdDbAux(p, "cx.lvl", cx, 16);
++	db->release();
++	IOLog("ASUS GPU: cmd-db gfx.lvl %u, mx.lvl %u, cx.lvl %u levels; gfx:", ngfx, nmx, ncx);
++	for (unsigned i = 0; i < ngfx; i++) {
++		IOLog(" %u", gfx[i]);
++	}
++	IOLog("\n");
++	if (!ngfx || !nmx || !ncx) {
++		amark("ASUS GPU: ARC level tables missing\n");
++		return;
++	}
++	/* Android DT qcom,gpu-pwrlevels-0, ascending, with frequency 0 first (Linux freq table). */
++	static const uint32_t khz[] = { 0, 315000, 379000, 443000, 491000, 540000, 608000, 676000, 738000, 778000, 840000 };
++	static const uint32_t lvl[] = { 0, 0x40, 0x50, 0x80, 0x90, 0xc0, 0xe0, 0x100, 0x140, 0x180, 0x1a0 };
++	uint32_t m[200] = { 0 };
++	m[1] = 11;                                      /* num_gpu_levels */
++	m[2] = 2;                                       /* num_gmu_levels */
++	for (unsigned i = 0; i < 11; i++) {
++		m[3 + 3 * i] = arcVote(gfx, ngfx, mx, nmx, lvl[i]);     /* level 0 too, as Linux */
++		m[3 + 3 * i + 1] = 0xffffffff;          /* acd */
++		m[3 + 3 * i + 2] = khz[i];
++	}
++	m[3 + 48] = arcVote(cx, ncx, mx, nmx, 0);
++	m[3 + 48 + 1] = 0;
++	m[3 + 48 + 2] = arcVote(cx, ncx, mx, nmx, 48);  /* GMU 200 MHz at MIN_SVS */
++	m[3 + 48 + 3] = 200000;
++	amark("ASUS GPU: stage 5: HFI PERF_TABLE (gx vote[1] %#x, [10] %#x, cx %#x)\n", m[6], m[3 + 30], m[3 + 50]);
++	if (hfiSend(g, 4, m, 3 + 48 + 8) != 0) {
++		return;
++	}
++	bzero(m, sizeof(m));
++	m[1] = 1;                                       /* bw_level_num */
++	m[2] = 1;                                       /* cnoc_cmds_num */
++	m[3] = 3;                                       /* ddr_cmds_num */
++	m[4] = 1;                                       /* cnoc_wait_bitmask */
++	m[5] = 1;                                       /* ddr_wait_bitmask */
++	m[6] = 0x50070;                                 /* cnoc_cmds_addrs[0] */
++	m[12] = 0x40000000;                             /* cnoc_cmds_data[0][0] */
++	m[18] = 0x60000001;                             /* cnoc_cmds_data[1][0] */
++	m[24] = 0x50004;                                /* ddr_cmds_addrs */
++	m[25] = 0x500a0;
++	m[26] = 0x50000;
++	m[32] = 0x40000000;                             /* ddr_cmds_data[0][0..2] */
++	m[33] = 0x40000000;
++	m[34] = 0x40000000;
++	amark("ASUS GPU: stage 5: HFI BW_TABLE\n");
++	if (hfiSend(g, 3, m, 160) != 0) {
++		return;
++	}
++	bzero(m, sizeof(m));
++	amark("ASUS GPU: stage 5: HFI CORE_FW_START\n");
++	if (hfiSend(g, 14, m, 2) != 0) {
++		return;
++	}
++	amark("ASUS GPU: stage 5: HFI START\n");
++	if (hfiSend(g, 10, m, 2) != 0) {
++		return;
++	}
++	m[1] = 1;                                       /* ack_type blocking */
++	m[2] = 1;                                       /* freq index 1 = 315 MHz */
++	m[3] = 0;
++	amark("ASUS GPU: stage 5: HFI GX_BW_PERF_VOTE 315 MHz\n");
++	int e = hfiSend(g, 30, m, 4);
++	amark("ASUS GPU: stage 5 done (perf vote %d)\n", e);
++	uint32_t stage = 0;
++	PE_parse_boot_argn("asusgpu", &stage, sizeof(stage));
++	if (stage < 6) {
++		return;
++	}
++	amark("ASUS GPU: stage 6: OOB GPU_SET (GX on through the GMU)\n");
++	gmuW(g, 0x5194, 1u << 30);
++	bool ack = gmuPoll(g, 0x5192, 1u << 31, 1u << 31, 20000);
++	gmuW(g, 0x5191, 1u << 31);
++	amark("ASUS GPU: OOB GPU_SET %s (info %#x) GX GDSC %#x\n", ack ? "acked" : "TIMEOUT", gmuR(g, 0x5192),
++	    rd(gpucc, 0x100c));
++	if (!ack) {
++		return;
++	}
++	IOMemoryMap *gpu = map(0x03d00000ULL, 0x40000);
++	if (gpu) {
++		amark("ASUS GPU: RBBM_STATUS %#x CP_ALWAYS_ON %#x%08x CP_HW_FAULT %#x INT0 %#x\n",
++		    rd(gpu, 4 * 0x210), rd(gpu, 4 * 0x981), rd(gpu, 4 * 0x980), rd(gpu, 4 * 0x821), rd(gpu, 4 * 0x201));
++		gpu->release();
++	}
++	amark("ASUS GPU: stage 6 done\n");
 +}
 +
 +/*
