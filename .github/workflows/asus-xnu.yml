@@ -31,6 +31,10 @@ on:
         description: Include SMP via PSCI CPU_ON (boot-arg cpus=N, N <= 8)
         type: boolean
         default: false
+      amp:
+        description: With smp, A55 E cluster + A78/X1 P cluster (images built with ASUS_AMP=1)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -64,6 +68,7 @@ jobs:
           if [ '${{ inputs.input }}' = true ]; then args+=(--input); fi
           if [ '${{ inputs.ufs }}' = true ]; then args+=(--ufs); fi
           if [ '${{ inputs.smp }}' = true ]; then args+=(--smp); fi
+          if [ '${{ inputs.amp }}' = true ]; then args+=(--amp); fi
           python3 tools/prepare-asus-profile.py dxb "${args[@]}"
       - name: Select matching Xcode and dependencies
         run: |

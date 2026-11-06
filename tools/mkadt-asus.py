@@ -91,7 +91,8 @@ def trust_cache_prop(path):
     return ('asus-static-trust-cache', 0, data)
 
 
-def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM_SIZE, ncpus=1):
+def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM_SIZE, ncpus=1,
+          cores=None, amp=False):
     gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(mem_size)),
@@ -105,15 +106,23 @@ def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM
     # all ARMv8.2 with the 16K granule. ncpus > 1 lists them for the SMP patch (cpus=N boot-arg
     # starts the first N via PSCI CPU_ON); ncpus=1 keeps the single boot CPU node as before.
     # Every node matches SweetCPU ('arm,cortex-a55'); the A78/X1 are scheduled as equals.
+    # cores: physical cores to list, in logical order (default the first ncpus; core 0, the
+    # boot A55, first). amp: cluster-type 'E' for the A55s and 'P' for the A78/X1 (XNU without
+    # HAS_CLUSTER makes E cluster 0 and P cluster 1; needs the --amp kernel).
     clocks = [1804800000] * 4 + [2419200000] * 3 + [2841600000]
+    cores = list(cores) if cores else list(range(ncpus))
+    assert cores[0] == 0 and len(set(cores)) == len(cores) and all(0 <= c < 8 for c in cores)
     cpu_nodes = []
-    for core in range(ncpus):
-        cpu_nodes.append(node(f'cpu{core}', [
+    for index, core in enumerate(cores):
+        big = core >= 4
+        ctype = (ord('P') if big else ord('E')) if amp else 0
+        cpu_nodes.append(node(f'cpu{index}', [
             ('device_type', cstr('cpu')), ('compatible', cstr('arm,cortex-a55') + cstr('ARM,v8')),
-            ('reg', u32(core << 8)), ('cpu-id', u32(core)), ('cluster-id', u32(0)),
-            ('cluster-type', u32(0)), ('die-cluster-id', u32(0)),
-            ('cluster-core-id', u32(core)), ('l2-cache-id', u32(0)), ('l3-cache-id', u32(0)),
-            ('state', cstr('running' if core == 0 else 'stopped')),
+            ('reg', u32(core << 8)), ('cpu-id', u32(index)), ('cluster-id', u32(int(big) if amp else 0)),
+            ('cluster-type', u32(ctype)), ('die-cluster-id', u32(0)),
+            ('cluster-core-id', u32(core - 4 if amp and big else core)), ('l2-cache-id', u32(0)),
+            ('l3-cache-id', u32(0)),
+            ('state', cstr('running' if index == 0 else 'stopped')),
             ('timebase-frequency', u32(19200000)),
             ('clock-frequency', u32(clocks[core])),
             ('peripheral-frequency', u32(19200000)),
@@ -172,13 +181,21 @@ if __name__ == '__main__':
     parser.add_argument('--mem-mib', type=int, default=MEM_SIZE >> 20,
                         help='kernel RAM from 0x140000000 (phone: up to 5120, free until 0x280000000)')
     parser.add_argument('--cpus', type=int, default=1, help='CPU nodes (1-8; >1 needs the --smp kernel)')
+    parser.add_argument('--cpu-list', help='physical cores in logical order, e.g. 0,4,5,6,7 (overrides --cpus)')
+    parser.add_argument('--amp', action='store_true', help="cluster-type 'E' (A55) / 'P' (A78, X1); --amp kernel")
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
     if not 512 <= args.mem_mib <= 5120 or args.mem_mib % 16:
         parser.error('--mem-mib must be 512..5120 and a multiple of 16')
+    cores = [int(c) for c in args.cpu_list.split(',')] if args.cpu_list else None
+    if cores:
+        args.cpus = len(cores)
+        if cores[0] != 0 or len(set(cores)) != len(cores) or not all(0 <= c < 8 for c in cores):
+            parser.error('--cpu-list: distinct cores 0-7, the boot core 0 first')
     if not 1 <= args.cpus <= 8:
         parser.error('--cpus must be 1-8')
-    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs, args.mem_mib << 20, args.cpus)
+    root = build(args.display, args.ios_gui, args.trust_cache, args.ufs, args.mem_mib << 20, args.cpus,
+                 cores, args.amp)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:

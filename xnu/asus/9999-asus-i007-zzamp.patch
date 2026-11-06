@@ -1,0 +1,33 @@
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -35,6 +35,15 @@
+ #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
+ #define __ARM_PAN_AVAILABLE__     1
+ #define __ARM_16K_PG__            1
++#if defined(ASUS_I007)
++/*
++ * ASUS I007 (SM8350): asymmetric clusters as Apple SoCs, booting on the E cluster:
++ * Cortex-A55 cpu0-3 = E (cluster 0), A78 cpu4-6 + X1 cpu7 = P (cluster 1), from the
++ * ADT cluster-type (tools/mkadt-asus.py --amp). The Edge scheduler then prefers P for
++ * demanding threads (topaz 0141 did the same with gold/silver).
++ */
++#define __ARM_AMP__               1
++#endif
+ 
+ #define HAS_GIC_V3                1
+ 
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -102,7 +102,12 @@
+ 
+ #define MAX_L2_CLINE                   6
+ #define MAX_CPUS                       8
++#if defined(ASUS_I007)
++/* SM8350: Cortex-A55 E cluster (boot, cpu0-3) and A78/X1 P cluster (cpu4-7); see SWEET.h. */
++#define MAX_CPU_CLUSTERS               2
++#else
+ #define MAX_CPU_CLUSTERS               1
++#endif
+ 
+ #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
+ 

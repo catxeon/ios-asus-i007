@@ -53,10 +53,19 @@ fi
 # ASUS_CPUS=N (2-8): N CPU nodes in the ADT and cpus=N; needs a kernel built with smp=true
 # (SweetCPU starts the secondaries with PSCI CPU_ON). Cores 0-3 A55, 4-6 A78, 7 X1.
 cpus=${ASUS_CPUS:-1}
+# ASUS_CPU_LIST=0,4,5,6,7: exactly these physical cores (boot core 0 first); sets cpus=N.
+# ASUS_AMP=1: A55 = E cluster, A78/X1 = P cluster (needs an amp=true kernel).
+if [ -n "${ASUS_CPU_LIST:-}" ]; then
+    cpus=$(echo "$ASUS_CPU_LIST" | tr ',' '\n' | grep -c .)
+    adt_flags+=(--cpu-list "$ASUS_CPU_LIST")
+fi
 case "$cpus" in [1-8]) ;; *) echo 'ASUS_CPUS must be 1-8' >&2; exit 1 ;; esac
 if [ "$cpus" -gt 1 ]; then
     grep -aq 'SWEET CPU: requested=' "$kernel" || { echo "ASUS_CPUS=$cpus needs an smp=true kernel" >&2; exit 1; }
-    adt_flags+=(--cpus "$cpus")
+    [ -n "${ASUS_CPU_LIST:-}" ] || adt_flags+=(--cpus "$cpus")
+fi
+if [ "${ASUS_AMP:-0}" = 1 ]; then
+    adt_flags+=(--amp)
 fi
 python3 "$repo/tools/mkadt-asus.py" "$out/asus.adt" "${adt_flags[@]}"
 cmdline="debug=0xc serial=3 cpus=$cpus keepsyms=1 -enable_kprintf_spam -noprogress rd=md0"
