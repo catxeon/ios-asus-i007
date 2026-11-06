@@ -547,7 +547,20 @@
   tools/asus-phone-cycle.sh now prints the root header state before and after a run and
   refuses to boot on a dirty root (ASUS_ALLOW_DIRTY_ROOT=1 for lab images).
   Lesson: any panic or forced reset with the root mounted needs an fsck before the next
-  iOS boot; a journal on the root (HFS supports it) would remove that need.
+  iOS boot; a journal on the root removes that need.
+- **Journal for the root (tools/hfs-add-journal.py, offline):** adds /.journal_info_block
+  (flags InFS|NeedInit) and a contiguous /.journal in a free run (the libdmg-hfsplus
+  allocator is steered with nextAllocation; landing place verified with a marker
+  pattern), sets kHFSVolumeJournaledBit + journalInfoBlock. lastMountedVersion stays
+  non-'HFSJ', so XNU's hfs_late_journal_init finds the files by name, fixes up offsets and
+  calls journal_create. QEMU (kernel 42176394818, own-init root + 1 MiB journal,
+  rootrw=1): "hfs: Initializing the journal (joffset 0x17b000 sz 0x100000)", root mounted,
+  init ran. Linux fsck.hfsplus reports "Volume header needs minor repair (1, 0)" on any
+  journaled image, also one from `mkfs.hfsplus -J` (harmless). Variant
+  work/asus-rootfix-0050-journal = the fix + an 8 MiB journal at blocks 4330..6377: 143
+  blocks (the journal area is already zero on the phone); read-only phone check passed.
+  Not tested on the phone yet: journal I/O through the UFS driver (512-byte sectors ->
+  read-merge-write of 4K blocks) and its speed.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
