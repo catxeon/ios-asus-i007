@@ -476,6 +476,19 @@
   (translation fault) at FAR 0x104000 = just past the 1 MiB icache window: the
   firmware uses more of the icache range (headers list sections at 0x100000 and
   0x200000). Now icache = 16 MiB - 16 KiB at GMU VA 0x4000 as Linux.
+- Image 0040: with 16 MiB the first code fetch at 0x4000 took a permission fault (FSR
+  0x408): EL0-writable stage-1 pages are privileged-execute-never. Fixed: icache/
+  dummy/debug mapped RW EL1-only (Linux IOMMU_PRIV), log/HFI plain.
+- **MILESTONE: ADRENO 660 POWERED BY ITS OWN GMU UNDER XNU (image 0041, lab, kernel
+  42141145854, asusgpu=6, 2026-11-06 ~04:12).** `GMU firmware init OK: result 0x100`;
+  `HFI start OK (status 0x1, version 0x20000001)`; cmd-db gfx.lvl levels 0 64 80 128 144
+  192 224 256 320 384 416 432 (mx/cx 16 entries); ARC votes gx[1] (315 MHz) 0x400201,
+  gx[10] (840 MHz) 0x1a0080a, GMU cx 0x400202; HFI PERF_TABLE, a660 BW_TABLE,
+  CORE_FW_START, START and GX_BW_PERF_VOTE (315 MHz) all acked; OOB GPU_SET acked ->
+  GX GDSC 0x100c = 0xf8222800 (on); GPU registers answer: RBBM_STATUS 0x1,
+  CP_ALWAYS_ON counter 0xc1a3e4 ticking, CP_HW_FAULT 0, INT0 0. Next: stage 7 (hw_init,
+  SQE + ring behind an SMMU context for stream 0, CP_ME_INIT), 8 (zap via TrustZone
+  PIL), 9 (CP_MEM_WRITE test).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
