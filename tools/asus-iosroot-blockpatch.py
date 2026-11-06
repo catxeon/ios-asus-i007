@@ -86,8 +86,10 @@ def write_runs(src_local, runs):
         cmds.append(f'dd if={TMP}/data.bin of={PART} bs={BS} skip={off} seek={start} count={n} conv=notrunc 2>/dev/null')
         off += n
     script = '\n'.join(['set -e', *cmds, 'sync', 'echo WRITE-DONE']) + '\n'
-    open(src_local + '.sh', 'w', newline='\n').write(script)
-    adb('push', src_local + '.sh', f'{TMP}/write.sh')
+    # Straight to the phone (no local file: the PC disk may be full), then check it arrived.
+    adb('exec-in', f"su -c 'cat > {TMP}/write.sh'", data=script.encode())
+    if su(f'sha256sum {TMP}/write.sh').split()[0] != hashlib.sha256(script.encode()).hexdigest():
+        sys.exit('write script did not arrive intact (sha256)')
     out = su(f'sh {TMP}/write.sh')
     print(out.strip().splitlines()[-1])
     if 'WRITE-DONE' not in out:
@@ -132,8 +134,10 @@ def main():
         return
     if verify(cur, blocks, new, 'phone vs new.hash (already fixed?)'):
         return
-    with open(os.path.join(d, 'backup.bin'), 'wb') as f:
-        f.write(cur)
+    bpath = os.path.join(d, 'backup.bin')
+    if not (os.path.exists(bpath) and open(bpath, 'rb').read() == cur):
+        with open(bpath, 'wb') as f:
+            f.write(cur)
     if not verify(cur, blocks, old, 'phone vs old.hash'):
         sys.exit('the phone root differs from the pulled image here; not writing')
     if not a.write:
