@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2259 @@
+@@ -0,0 +1,2634 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21720,6 +21720,8 @@
 +	void gpuSmmuDump();
 +	void gpuStage4(IOMemoryMap *gpucc);
 +	void gpuStage5(IOMemoryMap *g, IOMemoryMap *gpucc);
++	void gpuStage7(IOMemoryMap *gpu);
++	bool gpuZap();
 +	bool gpuBranch(IOMemoryMap *m, uint32_t off, const char *name);
 +	bool gpuRcg(IOMemoryMap *m, uint32_t cmd, uint32_t src, uint32_t div2m1, const char *name);
 +	void touchBringup();
@@ -23669,9 +23671,382 @@
 +	if (gpu) {
 +		amark("ASUS GPU: RBBM_STATUS %#x CP_ALWAYS_ON %#x%08x CP_HW_FAULT %#x INT0 %#x\n",
 +		    rd(gpu, 4 * 0x210), rd(gpu, 4 * 0x981), rd(gpu, 4 * 0x980), rd(gpu, 4 * 0x821), rd(gpu, 4 * 0x201));
++		amark("ASUS GPU: stage 6 done\n");
++		if (stage >= 7) {
++			gpuStage7(gpu);
++		}
 +		gpu->release();
 +	}
-+	amark("ASUS GPU: stage 6 done\n");
++}
++
++/* ---------------------------------------------------------------- stages 7-9: the GPU itself */
++namespace {
++GBuf gSqe, gRing, gScratch;
++Pt gGpuPt;
++uint32_t gWptr;
++const uint32_t kRingDwords = 32768 / 4;
++
++uint32_t
++pm4Par(uint32_t v)
++{
++	return (0x9669 >> (0xf & (v ^ (v >> 4) ^ (v >> 8) ^ (v >> 12) ^ (v >> 16) ^ (v >> 20) ^ (v >> 24) ^ (v >> 28)))) & 1;
++}
++
++uint32_t
++pkt7(uint32_t op, uint32_t cnt)
++{
++	return 0x70000000u | cnt | (pm4Par(cnt) << 15) | ((op & 0x7f) << 16) | (pm4Par(op) << 23);
++}
++}
++
++static inline void gpuW(IOMemoryMap *gpu, uint32_t reg, uint32_t v)
++{
++	*(volatile uint32_t *)(gpu->getVirtualAddress() + 4 * reg) = v;
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++static inline uint32_t gpuR(IOMemoryMap *gpu, uint32_t reg)
++{
++	return *(volatile uint32_t *)(gpu->getVirtualAddress() + 4 * reg);
++}
++static inline void gpuW64(IOMemoryMap *gpu, uint32_t reg, uint64_t v)
++{
++	gpuW(gpu, reg, (uint32_t)v);
++	gpuW(gpu, reg + 1, (uint32_t)(v >> 32));
++}
++static void ringEmit(uint32_t v)
++{
++	((volatile uint32_t *)gRing.va)[gWptr % kRingDwords] = v;
++	gWptr++;
++}
++static bool ringKickIdle(IOMemoryMap *gpu, const char *what)
++{
++	flush_dcache64((addr64_t)(uintptr_t)gRing.va, (unsigned)gRing.size, FALSE);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	gpuW(gpu, 0x807, gWptr % kRingDwords);          /* CP_RB_WPTR */
++	for (unsigned i = 0; i < 20000; i++) {
++		if (gpuR(gpu, 0x806) == gWptr % kRingDwords) {  /* CP_RB_RPTR */
++			return true;
++		}
++		IODelay(10);
++	}
++	IOLog("ASUS GPU: %s: ring stuck rptr %u wptr %u RBBM_STATUS %#x CP_HW_FAULT %#x INT0 %#x\n", what,
++	    gpuR(gpu, 0x806), gWptr % kRingDwords, gpuR(gpu, 0x210), gpuR(gpu, 0x821), gpuR(gpu, 0x201));
++	return false;
++}
++
++/* Our own context bank for one SMMU stream (S1 translate, S2 bypass, 4 KiB, 4 GiB VA). */
++static bool
++smmuBind(IOMemoryMap *s, uint32_t sid, uint64_t ttbr, int *smrOut, int *cbOut)
++{
++	uint32_t idr0 = *(volatile uint32_t *)(s->getVirtualAddress() + 0x20);
++	uint32_t idr1 = *(volatile uint32_t *)(s->getVirtualAddress() + 0x24);
++	uint32_t pgshift = (idr1 & (1u << 31)) ? 16 : 12, npage = 1u << (((idr1 >> 28) & 7) + 1);
++	uint32_t nsmr = idr0 & 0xff, ncb = idr1 & 0xff, gr1 = 1u << pgshift;
++	volatile uint8_t *b = (volatile uint8_t *)s->getVirtualAddress();
++#define SR(o) (*(volatile uint32_t *)(b + (o)))
++	int smr = -1, cbn = -1;
++	for (int n = (int)nsmr - 1; n >= 0; n--) {
++		uint32_t v = SR(0x800 + 4 * n);
++		if ((v >> 31) && (v & 0x7fff) == sid) {
++			smr = n;
++			break;
++		}
++		if (!(v >> 31) && smr < 0) {
++			smr = n;
++		}
++	}
++	for (int n = (int)ncb - 1; n >= 0; n--) {
++		if (((npage + n) << pgshift) + 0x800 <= 0x20000 && SR(gr1 + 4 * n) == 0) {
++			cbn = n;
++			break;
++		}
++	}
++	if (smr < 0 || cbn < 0) {
++		return false;
++	}
++	uint32_t cb = (npage + (uint32_t)cbn) << pgshift;
++	SR(cb + 0x000) = 0;
++	SR(cb + 0x058) = 0xffffffffu;
++	SR(gr1 + 0x800 + 4 * cbn) = 1;
++	SR(gr1 + 4 * cbn) = 0x0001f000;
++	SR(cb + 0x020) = (uint32_t)ttbr;
++	SR(cb + 0x024) = (uint32_t)(ttbr >> 32);
++	SR(cb + 0x030) = 32u | (1u << 23);
++	SR(cb + 0x010) = 1;
++	SR(cb + 0x038) = 0x44;
++	SR(cb + 0x03c) = 0;
++	SR(cb + 0x000) = 0x67;
++	SR(0xc00 + 4 * smr) = (uint32_t)cbn;
++	SR(0x800 + 4 * smr) = (1u << 31) | (0x400u << 16) | sid;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	SR(cb + 0x618) = 0;
++	SR(cb + 0x7f0) = 0;
++	IODelay(100);
++#undef SR
++	*smrOut = smr;
++	*cbOut = cbn;
++	return true;
++}
++
++/*
++ * Stage 7 (asusgpu>=7): Linux a6xx hw_init for the A660 without clock gating, CP
++ * protection or APRIV (as topaz's A610 path): GBIF, 64-bit addressing, UCHE, ROQ,
++ * UBWC (hbb 16, amsbc, rgb565 predicator, uavflagprd 2, macrotile 1), then the SQE
++ * microcode (a660_sqe.fw minus its 4-byte header) and a 32 KiB ringbuffer behind an
++ * SMMU context for stream 0 (gfx3d_user), CP_SQE_CNTL, CP_ME_INIT.
++ * Stage 8 (asusgpu>=8): the zap shader through TrustZone (PAS 13, region 0x8b51a000)
++ * and CP_SET_SECURE_MODE 0. Stage 9 (asusgpu>=9): CP_MEM_WRITE of a marker into a
++ * scratch page: the GPU executes our commands.
++ */
++void
++AsusPhoneInput::gpuStage7(IOMemoryMap *gpu)
++{
++	uint32_t stage = 0;
++	PE_parse_boot_argn("asusgpu", &stage, sizeof(stage));
++	amark("ASUS GPU: stage 7: SQE firmware, GPU buffers, SMMU stream 0\n");
++	void *fw = NULL;
++	size_t fwsize = 0;
++	if (asus_fw_load("a660_sqe.fw", &fw, &fwsize) != 0 || fwsize <= 4) {
++		amark("ASUS GPU: no a660_sqe.fw\n");
++		return;
++	}
++	if (!gbufAlloc(&gSqe, (fwsize - 4 + 4095) & ~4095ull, 0x10000000) || !gbufAlloc(&gRing, 32768, 0x10100000) ||
++	    !gbufAlloc(&gScratch, 4096, 0x10200000) || !gbufAlloc(&gGpuPt.chunk, 64 * 4096, 0)) {
++		amark("ASUS GPU: GPU buffer allocation failed\n");
++		asus_fw_free(fw, fwsize);
++		return;
++	}
++	memcpy(gSqe.va, (const uint8_t *)fw + 4, fwsize - 4);
++	flush_dcache64((addr64_t)(uintptr_t)gSqe.va, (unsigned)gSqe.size, FALSE);
++	asus_fw_free(fw, fwsize);
++	uint64_t l1pa = 0;
++	gGpuPt.l1 = ptTable(&gGpuPt, &l1pa);
++	if (!ptMapBuf(&gGpuPt, &gSqe, false) || !ptMapBuf(&gGpuPt, &gRing, false) || !ptMapBuf(&gGpuPt, &gScratch, false)) {
++		amark("ASUS GPU: GPU page tables failed\n");
++		return;
++	}
++	flush_dcache64((addr64_t)(uintptr_t)gGpuPt.chunk.va, 64 * 4096, FALSE);
++	IOMemoryMap *s = map(0x03da0000ULL, 0x20000);
++	if (!s) {
++		return;
++	}
++	int smr = -1, cbn = -1;
++	bool bound = smmuBind(s, 0, l1pa, &smr, &cbn);
++	amark("ASUS GPU: SMMU stream 0 %s: SMR%d -> CB%d, tables %#llx, sqe %#llx ring %#llx scratch %#llx\n",
++	    bound ? "bound" : "NOT bound", smr, cbn, l1pa, gSqe.pa, gRing.pa, gScratch.pa);
++	if (!bound) {
++		s->release();
++		return;
++	}
++	uint32_t cb = (uint32_t)(((1u << ((((*(volatile uint32_t *)(s->getVirtualAddress() + 0x24)) >> 28) & 7) + 1)) + (uint32_t)cbn) << 12);
++
++	amark("ASUS GPU: stage 7: hw_init registers\n");
++	gpuW(gpu, 0x3c45, 0);                           /* GBIF_HALT */
++	(void)gpuR(gpu, 0x3c45);
++	gpuW(gpu, 0x16, 0);                             /* RBBM_GBIF_HALT */
++	(void)gpuR(gpu, 0x16);
++	gpuW(gpu, 0xf803, 0);                           /* RBBM_SECVID_TSB_CNTL */
++	gpuW64(gpu, 0xf800, 0);                         /* TSB trusted base */
++	gpuW(gpu, 0xf802, 0);                           /* TSB trusted size */
++	static const uint32_t addrMode[] = { 0x842, 0xc01, 0x8601, 0x8e05, 0x9e01, 0xbe05, 0xa601, 0x9601,
++		                             0xe00, 0xae01, 0xb601, 0xf810 };
++	for (unsigned i = 0; i < sizeof(addrMode) / sizeof(addrMode[0]); i++) {
++		gpuW(gpu, addrMode[i], 1);
++	}
++	for (unsigned i = 0; i < 4; i++) {
++		gpuW(gpu, 0x3c03 + i, 0x00071620);      /* GBIF_QSB_SIDE0-3 */
++	}
++	gpuW(gpu, 0x50b, 0xffffffffu);                  /* RBBM_PERFCTR_GPU_BUSY_MASKED */
++	gpuW64(gpu, 0xe05, 0x0001ffffffffffc0ull);      /* UCHE_WRITE_RANGE_MAX */
++	gpuW64(gpu, 0xe09, 0x0001fffffffff000ull);      /* UCHE_TRAP_BASE */
++	gpuW64(gpu, 0xe07, 0x0001fffffffff000ull);      /* UCHE_WRITE_THRU_BASE */
++	gpuW(gpu, 0xe18, 0x804);                        /* UCHE_FILTER_CNTL */
++	gpuW(gpu, 0xe17, 0x4);                          /* UCHE_CACHE_WAYS */
++	gpuW(gpu, 0x8c2, 0x02000140);                   /* CP_ROQ_THRESHOLDS_2 */
++	gpuW(gpu, 0x8c1, 0x8040362c);                   /* CP_ROQ_THRESHOLDS_1 */
++	gpuW(gpu, 0xb34, 0x20);                         /* CP_LPAC_PROG_FIFO_SIZE */
++	gpuW(gpu, 0x8c3, 128);                          /* CP_MEM_POOL_SIZE */
++	gpuW(gpu, 0x9e00, 0x00300200);                  /* PC_DBG_ECO_CNTL (prim fifo) */
++	gpuW(gpu, 0x98d, 0x1);                          /* CP_AHB_CNTL */
++	gpuW(gpu, 0x500, 0x1);                          /* RBBM_PERFCTR_CNTL */
++	gpuW(gpu, 0x8d0, 0);                            /* CP_PERFCTR_CP_SEL0 = always count */
++	gpuW(gpu, 0x8e08, 0x816);                       /* RB_NC_MODE_CNTL */
++	gpuW(gpu, 0xb604, 0x6);                         /* TPL1_NC_MODE_CNTL */
++	gpuW(gpu, 0xae02, 0x26);                        /* SP_NC_MODE_CNTL */
++	gpuW(gpu, 0xe01, 0x600000);                     /* UCHE_MODE_CNTL */
++	gpuW(gpu, 0x534, 1);                            /* RBBM_NC_MODE_CNTL (macrotile) */
++	gpuW(gpu, 0x1f, (1u << 30) | 0x1fffff);         /* RBBM_INTERFACE_HANG_INT_CNTL */
++	gpuW(gpu, 0xe19, (1u << 7) | 1);                /* UCHE_CLIENT_PF */
++	gpuW(gpu, 0xb608, 0);                           /* TPL1 bicubic weights */
++	gpuW(gpu, 0xb609, 0x3fe05ff4);
++	gpuW(gpu, 0xb60a, 0x3fa0ebee);
++	gpuW(gpu, 0xb60b, 0x3f5193ed);
++	gpuW(gpu, 0xb60c, 0x3f0243f0);
++	gpuW(gpu, 0x841, 0x1);                          /* CP_CHICKEN_DBG */
++	gpuW(gpu, 0x11, 0x0);                           /* RBBM_GBIF_CLIENT_QOS_CNTL */
++	gpuW(gpu, 0xe3c, 0x66906);                      /* UCHE_CMDQ_CONFIG */
++
++	amark("ASUS GPU: stage 7: SQE and ringbuffer, CP start\n");
++	gpuW64(gpu, 0x830, gSqe.iova);                  /* CP_SQE_INSTR_BASE */
++	gpuW64(gpu, 0x800, gRing.iova);                 /* CP_RB_BASE */
++	gpuW(gpu, 0x802, 12u | (2u << 8) | (1u << 27)); /* CP_RB_CNTL: 32 KiB, 32-byte blocks, no rptr update */
++	gWptr = 0;
++	gpuW(gpu, 0x807, 0);
++	gpuW(gpu, 0x808, 1);                            /* CP_SQE_CNTL: start the SQE */
++	ringEmit(pkt7(0x48, 8));                        /* CP_ME_INIT */
++	ringEmit(0x2f);
++	ringEmit(0x3);
++	ringEmit(0x20000000);
++	ringEmit(0);
++	ringEmit(0);
++	ringEmit(0);
++	ringEmit(0);
++	ringEmit(0);
++	bool ok = ringKickIdle(gpu, "CP_ME_INIT");
++	amark("ASUS GPU: CP_ME_INIT %s: rptr %u RBBM_STATUS %#x CP_HW_FAULT %#x SMMU CB%d FSR %#x FAR %#x%08x\n",
++	    ok ? "DONE" : "FAILED", gpuR(gpu, 0x806), gpuR(gpu, 0x210), gpuR(gpu, 0x821), cbn,
++	    *(volatile uint32_t *)(s->getVirtualAddress() + cb + 0x58),
++	    *(volatile uint32_t *)(s->getVirtualAddress() + cb + 0x64), *(volatile uint32_t *)(s->getVirtualAddress() + cb + 0x60));
++	if (!ok || stage < 8) {
++		s->release();
++		return;
++	}
++	amark("ASUS GPU: stage 8: zap shader through TrustZone (PAS 13)\n");
++	bool zap = gpuZap();
++	amark("ASUS GPU: zap %s\n", zap ? "authenticated" : "FAILED");
++	if (zap) {
++		ringEmit(pkt7(0x66, 1));                /* CP_SET_SECURE_MODE */
++		ringEmit(0);
++		ok = ringKickIdle(gpu, "SET_SECURE_MODE");
++		amark("ASUS GPU: CP_SET_SECURE_MODE 0 %s\n", ok ? "DONE" : "FAILED");
++	}
++	if (!ok || stage < 9) {
++		s->release();
++		return;
++	}
++	amark("ASUS GPU: stage 9: CP_MEM_WRITE test\n");
++	ringEmit(pkt7(0x3d, 3));                        /* CP_MEM_WRITE */
++	ringEmit((uint32_t)gScratch.iova);
++	ringEmit((uint32_t)(gScratch.iova >> 32));
++	ringEmit(0x600dbeef);
++	ok = ringKickIdle(gpu, "MEM_WRITE");
++	flush_dcache64((addr64_t)(uintptr_t)gScratch.va, 4096, FALSE);
++	amark("ASUS GPU: CP_MEM_WRITE %s: scratch[0] = %#x (want 0x600dbeef)\n", ok ? "done" : "FAILED",
++	    *(volatile uint32_t *)gScratch.va);
++	s->release();
++}
++
++/* TrustZone calls (SMCCC, SiP owner) as topaz zap_load (TopazGpuW): PIL service 2. */
++static uint64_t
++tzSmc(uint64_t a[8])
++{
++	register uint64_t x0 __asm__("x0") = a[0], x1 __asm__("x1") = a[1], x2 __asm__("x2") = a[2],
++	    x3 __asm__("x3") = a[3], x4 __asm__("x4") = a[4], x5 __asm__("x5") = a[5], x6 __asm__("x6") = a[6],
++	    x7 __asm__("x7") = a[7];
++	__asm__ volatile ("smc #0"
++            : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4), "+r"(x5), "+r"(x6), "+r"(x7)
++            :
++            : "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
++	a[0] = x0; a[1] = x1; a[2] = x2; a[3] = x3; a[4] = x4; a[5] = x5; a[6] = x6; a[7] = x7;
++	return x0;
++}
++
++static uint64_t
++tzScm(uint32_t cmd, uint64_t arginfo, uint64_t a, uint64_t b, uint64_t c, uint64_t *res1)
++{
++	uint32_t fn = 0x42000000u | (2u << 8) | cmd;
++	uint64_t args[8] = { fn, arginfo, a, b, c, 0, 0, 0 };
++	tzSmc(args);
++	for (int n = 0; args[0] == 1 && n < 100000; n++) {
++		uint64_t again[8] = { 1, arginfo, a, b, c, 0, args[6], 0 };
++		memcpy(args, again, sizeof(args));
++		tzSmc(args);
++	}
++	if (res1) {
++		*res1 = args[1];
++	}
++	return args[0];
++}
++
++bool
++AsusPhoneInput::gpuZap()
++{
++	void *mdt = NULL, *seg = NULL;
++	size_t mdtSize = 0, segSize = 0;
++	bool ok = false;
++	GBuf meta = {};
++	if (asus_fw_load("a660_zap.mdt", &mdt, &mdtSize) != 0 || asus_fw_load("a660_zap.b02", &seg, &segSize) != 0 ||
++	    mdtSize < 52) {
++		amark("ASUS GPU: zap files missing\n");
++		goto out;
++	}
++	{
++		const uint8_t *m = (const uint8_t *)mdt;
++		uint32_t phoff, phnum16;
++		memcpy(&phoff, m + 28, 4);
++		phnum16 = m[44] | (m[45] << 8);
++		uint32_t minA = 0xffffffffu, maxA = 0, segPaddr = 0;
++		for (uint32_t i = 0; i < phnum16 && phoff + 32 * (i + 1) <= mdtSize; i++) {
++			const uint8_t *ph = m + phoff + 32 * i;
++			uint32_t type, paddr, memsz, flags;
++			memcpy(&type, ph, 4);
++			memcpy(&paddr, ph + 12, 4);
++			memcpy(&memsz, ph + 20, 4);
++			memcpy(&flags, ph + 24, 4);
++			if (type == 1 && memsz != 0 && ((flags >> 24) & 7) != 2) {
++				minA = paddr < minA ? paddr : minA;
++				uint32_t end = (paddr + memsz + 0xfff) & ~0xfffu;
++				maxA = end > maxA ? end : maxA;
++				segPaddr = paddr;
++			}
++		}
++		amark("ASUS GPU: zap layout min %#x max %#x seg %#x (b02 %zu bytes)\n", minA, maxA, segPaddr, segSize);
++		if (maxA <= minA || maxA - minA > 0x2000) {
++			goto out;
++		}
++		if (!gbufAlloc(&meta, (mdtSize + 4095) & ~4095ull, 0)) {
++			goto out;
++		}
++		memcpy(meta.va, mdt, mdtSize);
++		flush_dcache64((addr64_t)(uintptr_t)meta.va, (unsigned)meta.size, FALSE);
++		uint64_t st, res = 0;
++		tzScm(6, 1, 13, 0, 0, &res);                                    /* PIL_SHUTDOWN */
++		st = tzScm(1, 2 | (2u << 6), 13, meta.pa, 0, &res);             /* PIL_INIT_IMAGE */
++		amark("ASUS GPU: zap init_image %#llx/%#llx\n", st, res);
++		if (st != 0 || res != 0) {
++			goto out;
++		}
++		st = tzScm(2, 3, 13, 0x8b51a000ULL, maxA - minA, &res);          /* PIL_MEM_SETUP */
++		amark("ASUS GPU: zap mem_setup %#llx/%#llx\n", st, res);
++		if (st != 0 || res != 0) {
++			goto out;
++		}
++		IOMemoryMap *z = map(0x8b51a000ULL, 0x2000);
++		if (!z) {
++			goto out;
++		}
++		volatile uint8_t *dst = (volatile uint8_t *)z->getVirtualAddress();
++		for (uint32_t i = 0; i < 0x2000; i += 4) {
++			*(volatile uint32_t *)(dst + i) = 0;
++		}
++		uint32_t at = segPaddr - minA, n = (uint32_t)(segSize < 0x2000 - at ? segSize : 0x2000 - at);
++		for (uint32_t i = 0; i < n; i++) {
++			dst[at + i] = ((const uint8_t *)seg)[i];
++		}
++		__asm__ volatile ("dsb sy" ::: "memory");
++		z->release();
++		st = tzScm(5, 1, 13, 0, 0, &res);                               /* PIL_AUTH_RESET */
++		amark("ASUS GPU: zap auth_and_reset %#llx/%#llx\n", st, res);
++		ok = st == 0 && res == 0;
++	}
++out:
++	if (meta.md) {
++		meta.md->complete();
++		meta.md->release();
++	}
++	asus_fw_free(mdt, mdtSize);
++	asus_fw_free(seg, segSize);
++	return ok;
 +}
 +
 +/*
