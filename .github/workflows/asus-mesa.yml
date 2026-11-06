@@ -1,0 +1,94 @@
+name: asus-mesa
+
+# Mesa 25.0.7 (Gallium freedreno + softpipe, OSMesa) for the iOS 16 userland of the ASUS I007,
+# as userland/mesa/mk-mesa-mac.sh does on a Mac: the darwin-redwood/HackiOS patches in
+# userland/mesa and redwood-drm (libdrm stand-in that talks to the kernel's RedwoodGPU).
+# freedreno knows the Adreno 660 (chip id 0x06060001). Output: libOSMesa.8.dylib,
+# exported-gl.txt and gl.xml for building the EAGL layer (userland/gpu/eagl.c).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asus-mesa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          brew install meson ninja bison
+          python3 -m venv venv
+          venv/bin/pip -q install mako pyyaml packaging
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+      - name: Mesa source and patches
+        run: |
+          VERSION=25.0.7
+          SHA256=592272df3cf01e85e7db300c449df5061092574d099da275d19e97ef0510f8a6
+          curl -sL --fail -o mesa-$VERSION.tar.xz https://archive.mesa3d.org/mesa-$VERSION.tar.xz
+          echo "$SHA256  mesa-$VERSION.tar.xz" | shasum -a 256 -c
+          tar xJf mesa-$VERSION.tar.xz
+          for p in userland/mesa/*.patch; do
+            echo "patch $p"
+            patch -s --no-backup-if-mismatch -d mesa-$VERSION -p1 < "$p"
+          done
+          rm -rf mesa-$VERSION/src/redwood-drm
+          cp -r userland/mesa/redwood-drm mesa-$VERSION/src/redwood-drm
+      - name: Configure
+        run: |
+          export PATH=$PWD/venv/bin:$(brew --prefix bison)/bin:$PATH
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CC=$(xcrun --sdk iphoneos -f clang)
+          cat > cross.ini <<INI
+          [binaries]
+          c = ['$CC', '-target', 'arm64-apple-ios16.0', '-isysroot', '$SDK']
+          cpp = ['$CC++', '-target', 'arm64-apple-ios16.0', '-isysroot', '$SDK', '-fuse-cxa-atexit']
+          objc = ['$CC', '-target', 'arm64-apple-ios16.0', '-isysroot', '$SDK']
+          ar = '$(xcrun -f ar)'
+          ranlib = '$(xcrun -f ranlib)'
+          strip = '$(xcrun -f strip)'
+          pkg-config = 'false'
+
+          [host_machine]
+          system = 'darwin'
+          subsystem = 'ios'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          INI
+          meson setup build mesa-25.0.7 --cross-file cross.ini --wrap-mode=nofallback \
+            --prefix=/asus --libdir=lib --buildtype=release -Db_ndebug=true \
+            -Dplatforms= -Dgallium-drivers=softpipe,freedreno -Dfreedreno-kmds=msm -Dvulkan-drivers= \
+            -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dosmesa=true -Dllvm=disabled -Dshared-glapi=enabled \
+            -Dgles1=disabled -Dgles2=enabled -Dopengl=true -Dzstd=disabled -Dxmlconfig=disabled -Dexpat=disabled \
+            -Dshader-cache=disabled -Dvalgrind=disabled -Dlibunwind=disabled -Dglvnd=disabled -Dvideo-codecs= \
+            -Dtools= -Dgallium-vdpau=disabled -Dgallium-va=disabled -Dgallium-xa=disabled -Dlmsensors=disabled \
+            -Dbuild-tests=false 2>&1 | tail -60
+      - name: Build
+        run: |
+          export PATH=$PWD/venv/bin:$(brew --prefix bison)/bin:$PATH
+          ninja -C build 2>&1 | tail -40
+      - name: Package
+        run: |
+          mkdir -p out
+          $(xcrun -f strip) -x -o out/libOSMesa.8.dylib build/src/gallium/targets/osmesa/libOSMesa.8.dylib
+          install_name_tool -id /asus/lib/libOSMesa.8.dylib out/libOSMesa.8.dylib
+          nm -gU out/libOSMesa.8.dylib | awk '$3 ~ /^_gl/ { print substr($3, 2) }' > out/exported-gl.txt
+          cp mesa-25.0.7/src/mapi/glapi/registry/gl.xml out/gl.xml
+          otool -L out/libOSMesa.8.dylib
+          ls -l out
+          wc -l out/exported-gl.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asus-mesa
+          path: out/
