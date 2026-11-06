@@ -561,6 +561,18 @@
   blocks (the journal area is already zero on the phone); read-only phone check passed.
   Not tested on the phone yet: journal I/O through the UFS driver (512-byte sectors ->
   read-merge-write of 4K blocks) and its speed.
+- **Root fix + journal written to the phone (2026-11-06 ~14:40, user approved):** 143
+  blocks via asus-iosroot-blockpatch.py, read back and verified; header 0x80002100 (clean,
+  journaled). The PC disk C: was full (0 MB) during the write; the script now keeps all
+  files on the phone (write script over adb exec-in, sha256 checked). Freed 7.8 GB by
+  deleting the 20H392 dmg/apfs images in work/apple-20H392 (user approved; the small
+  generated files there, d22ap.adt and os.trustcache.im4p used by image builds, kept).
+- **Run 0048b (image 0048 again, SMP8, first journaled boot):** "hfs: Initializing the
+  journal (joffset 0x10ea000 sz 0x800000)", "/dev/ufsroot0 on / (hfs, local, journaled)",
+  clean reboot after 1266 s, root clean + journaled afterwards. No Setup. FPS not
+  measurable: SpringBoard's first lines come around autoswipe round 25 (the unlock swipe
+  at 420 s was too early), 0.2-6.4 fps lines. Images 0051 (SMP8), 0052 (cores 0,4-7),
+  0053 (AMP) = same kernels with asusautoswipe=900 asusreboot=1500.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
