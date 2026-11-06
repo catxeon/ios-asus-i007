@@ -968,7 +968,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,542 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -1001,6 +1001,8 @@
 + * first swap) switches the console to serial, which also hides panics.
 + */
 +#include "SweetSurface.h"
++
++static volatile SInt32 asus_fb_frames;  /* swaps shown, for the ASUS FPS log line */
 +
 +extern "C" __attribute__((weak)) int sweet_console_muted;  /* osfmk/console/serial_console.c */
 +
@@ -1177,6 +1179,15 @@
 +		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
 +	}
 +	IOLockUnlock(fb->fLock);
++	if (count % 300 == 0) {
++		static uint32_t last;
++		uint32_t frames = (uint32_t)asus_fb_frames;
++		if (frames != last) {
++			IOLog("ASUS FPS: %u frames in 5 s (%u.%u fps)\n", frames - last, (frames - last) / 5,
++			    ((frames - last) * 2) % 10);
++		}
++		last = frames;
++	}
 +	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
 +}
 +
@@ -1213,6 +1224,7 @@
 +void
 +AppleCLCD::swap(const uint8_t *rec)
 +{
++	OSIncrementAtomic(&asus_fb_frames);
 +	uint32_t mask = get32(rec, 0x104);
 +
 +	/* Panel rows outside the presented display (fOffY < 0): black, once. */

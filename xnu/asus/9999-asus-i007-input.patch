@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2651 @@
+@@ -0,0 +1,2698 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22364,6 +22364,8 @@
 +volatile uint32_t *gTouchIrq;
 +}
 +
++static void asus_autoswipe(void *arg, wait_result_t wr);
++
 +void
 +AsusPhoneInput::touchBitbang(IOMemoryMap *tlmm)
 +{
@@ -22430,6 +22432,51 @@
 +	}
 +	fTouchPoll->setTimeoutMS(TOUCH_POLL_MS);
 +	amark("ASUS TOUCH: FocalTech reports -> iOS (poll %u ms, %u fingers)\n", TOUCH_POLL_MS, TOUCH_FINGERS);
++	uint32_t autoswipe = 0;
++	if (PE_parse_boot_argn("asusautoswipe", &autoswipe, sizeof(autoswipe)) && autoswipe) {
++		thread_t th;
++		if (kernel_thread_start(asus_autoswipe, (void *)(uintptr_t)autoswipe, &th) == KERN_SUCCESS) {
++			thread_deallocate(th);
++		}
++	}
++}
++
++/*
++ * Boot-arg asusautoswipe=N (seconds): an unattended frame-rate workload. N s after the
++ * touch screen is up, unlock with a swipe up from the bottom edge, then 30 rounds of a
++ * home-screen page swipe left and back right (1.5 s apart). The display's "ASUS FPS"
++ * lines then compare kernels and core layouts without anybody at the phone.
++ * Coordinates are native panel pixels (1080x2448), as sweet_hid_touch() takes them.
++ */
++static void
++asus_swipe(int x0, int y0, int x1, int y1, unsigned ms)
++{
++	unsigned steps = ms / 16;
++	sweet_hid_touch(0, 1, x0, y0);
++	for (unsigned i = 1; i <= steps; i++) {
++		IOSleep(16);
++		sweet_hid_touch(0, 1, x0 + (x1 - x0) * (int)i / (int)steps, y0 + (y1 - y0) * (int)i / (int)steps);
++	}
++	IOSleep(16);
++	sweet_hid_touch(0, 0, x1, y1);
++}
++
++static void
++asus_autoswipe(void *arg, __unused wait_result_t wr)
++{
++	uint32_t secs = (uint32_t)(uintptr_t)arg;
++	IOSleep(secs * 1000);
++	IOLog("ASUS AUTOSWIPE: unlock swipe\n");
++	asus_swipe(540, 2440, 540, 1100, 500);
++	IOSleep(4000);
++	for (unsigned round = 1; round <= 30; round++) {
++		IOLog("ASUS AUTOSWIPE: round %u\n", round);
++		asus_swipe(950, 1300, 130, 1300, 300);
++		IOSleep(1500);
++		asus_swipe(130, 1300, 950, 1300, 300);
++		IOSleep(1500);
++	}
++	IOLog("ASUS AUTOSWIPE: done\n");
 +}
 +
 +void
