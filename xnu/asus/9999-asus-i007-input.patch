@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2698 @@
+@@ -0,0 +1,2727 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23785,7 +23785,7 @@
 +
 +/* Our own context bank for one SMMU stream (S1 translate, S2 bypass, 4 KiB, 4 GiB VA). */
 +static bool
-+smmuBind(IOMemoryMap *s, uint32_t sid, uint64_t ttbr, int *smrOut, int *cbOut)
++smmuBind(IOMemoryMap *s, uint32_t sid, uint32_t mask, uint64_t ttbr, int *smrOut, int *cbOut)
 +{
 +	uint32_t idr0 = *(volatile uint32_t *)(s->getVirtualAddress() + 0x20);
 +	uint32_t idr1 = *(volatile uint32_t *)(s->getVirtualAddress() + 0x24);
@@ -23826,7 +23826,7 @@
 +	SR(cb + 0x03c) = 0;
 +	SR(cb + 0x000) = 0x67;
 +	SR(0xc00 + 4 * smr) = (uint32_t)cbn;
-+	SR(0x800 + 4 * smr) = (1u << 31) | (0x400u << 16) | sid;
++	SR(0x800 + 4 * smr) = (1u << 31) | ((mask & 0x7fff) << 16) | sid;
 +	__asm__ volatile ("dsb sy" ::: "memory");
 +	SR(cb + 0x618) = 0;
 +	SR(cb + 0x7f0) = 0;
@@ -23880,7 +23880,9 @@
 +		return;
 +	}
 +	int smr = -1, cbn = -1;
-+	bool bound = smmuBind(s, 0, l1pa, &smr, &cbn);
++	/* Mask 0x403: streams 0-3 (gfx3d_user 0, lpac 1, secure 2) share our context: an
++	 * unmatched stream is a global fault (sCR0.USFCFG), a suspect for the 0042 EDL at CP start. */
++	bool bound = smmuBind(s, 0, 0x403, l1pa, &smr, &cbn);
 +	amark("ASUS GPU: SMMU stream 0 %s: SMR%d -> CB%d, tables %#llx, sqe %#llx ring %#llx scratch %#llx\n",
 +	    bound ? "bound" : "NOT bound", smr, cbn, l1pa, gSqe.pa, gRing.pa, gScratch.pa);
 +	if (!bound) {
@@ -23950,13 +23952,40 @@
 +	gpuW(gpu, 0x11, 0x0);                           /* RBBM_GBIF_CLIENT_QOS_CNTL */
 +	gpuW(gpu, 0xe3c, 0x66906);                      /* UCHE_CMDQ_CONFIG */
 +
-+	amark("ASUS GPU: stage 7: SQE and ringbuffer, CP start\n");
++	/*
++	 * Image 0042 died (EDL) after the marker for this block. Each step marked; boot-arg
++	 * asusgpucp=N stops after step N (1 SQE base, 2 RB, 3 SQE_CNTL, 4 ME_INIT kick), and
++	 * the SMMU global fault status (sGFSR 0x48) is logged before the SQE starts.
++	 */
++	uint32_t cpstep = 4;
++	PE_parse_boot_argn("asusgpucp", &cpstep, sizeof(cpstep));
++	volatile uint32_t *sgfsr = (volatile uint32_t *)(s->getVirtualAddress() + 0x48);
++	amark("ASUS GPU: stage 7 cp 1: CP_SQE_INSTR_BASE %#llx (sGFSR %#x)\n", gSqe.iova, *sgfsr);
 +	gpuW64(gpu, 0x830, gSqe.iova);                  /* CP_SQE_INSTR_BASE */
++	if (cpstep < 2) {
++		s->release();
++		return;
++	}
++	amark("ASUS GPU: stage 7 cp 2: ring %#llx\n", gRing.iova);
 +	gpuW64(gpu, 0x800, gRing.iova);                 /* CP_RB_BASE */
 +	gpuW(gpu, 0x802, 12u | (2u << 8) | (1u << 27)); /* CP_RB_CNTL: 32 KiB, 32-byte blocks, no rptr update */
 +	gWptr = 0;
 +	gpuW(gpu, 0x807, 0);
++	if (cpstep < 3) {
++		s->release();
++		return;
++	}
++	amark("ASUS GPU: stage 7 cp 3: CP_SQE_CNTL = 1 (sGFSR %#x, RBBM_STATUS %#x)\n", *sgfsr, gpuR(gpu, 0x210));
 +	gpuW(gpu, 0x808, 1);                            /* CP_SQE_CNTL: start the SQE */
++	IODelay(1000);
++	amark("ASUS GPU: SQE running? CP_SQE_STAT %#x RBBM_STATUS %#x CP_HW_FAULT %#x sGFSR %#x CB FSR %#x\n",
++	    gpuR(gpu, 0x909), gpuR(gpu, 0x210), gpuR(gpu, 0x821), *sgfsr,
++	    *(volatile uint32_t *)(s->getVirtualAddress() + cb + 0x58));
++	if (cpstep < 4) {
++		s->release();
++		return;
++	}
++	amark("ASUS GPU: stage 7 cp 4: CP_ME_INIT kick\n");
 +	ringEmit(pkt7(0x48, 8));                        /* CP_ME_INIT */
 +	ringEmit(0x2f);
 +	ringEmit(0x3);
