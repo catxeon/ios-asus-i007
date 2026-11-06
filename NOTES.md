@@ -501,6 +501,19 @@
   Next kernel (42145829535): a marker before each stage-7 group; SECVID TSB writes only
   with asusgpusecvid=1. Images ready for the morning: 0043 (lab, asusgpu=7) and 0044
   (iOS from iosroot, cpus=8, big cores at full speed, GPU stages off).
+- **0042 flash log (read after the user's reset, 07:21):** stage 7 got through "SMMU
+  stream 0 bound: SMR4 -> CB5" and "hw_init registers" (SECVID TSB writes included) and
+  the last marker is "SQE and ringbuffer, CP start": the EDL comes from starting the CP
+  (CP_SQE_INSTR_BASE / RB / SQE_CNTL / CP_ME_INIT), not from the register setup.
+- **Image 0044 (iOS, cpus=8, big cores at full speed, kernel 42145829535):** user:
+  "fast and responsive UI, but 15 fps" (CPU rendering). Clean reboot after 2766 s. The
+  log wrapped (51 MB): 69850 x "SWEET AKS: Spotlight sel 17" (device state polled ~26/s;
+  sfa = failed attempts, 0 is right; cause of the polling unknown). AKS logging now rate
+  limited (first 8 per process/selector, then every 1000th).
+- FPS: XNU sees 8 equal cores and may run the render server on a 1.8 GHz A55. Image 0045
+  = cores 0,4,5,6,7 only (mkadt --cpu-list, ASUS_CPU_LIST), same kernel; image 0046 = AMP
+  kernel 42164134227 (profile --amp: 9999-asus-i007-zzamp.patch __ARM_AMP__ +
+  MAX_CPU_CLUSTERS 2; ADT --amp: A55 cluster-type 'E' cluster 0, A78/X1 'P' cluster 1).
 - **Userland GPU, first piece: Mesa for iOS built in CI** (.github/workflows/asus-mesa.yml,
   macos-15, run 42145703219): Mesa 25.0.7 + userland/mesa patches + redwood-drm,
   gallium softpipe+freedreno, OSMesa: libOSMesa.8.dylib 14.8 MB (deps: libz, libSystem,
