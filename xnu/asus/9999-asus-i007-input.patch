@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2649 @@
+@@ -0,0 +1,2651 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22829,12 +22829,14 @@
 +extern "C" void *asus_thread_bind(void *processor) __asm__("_thread_bind");
 +extern "C" int asus_thread_block(void *continuation) __asm__("_thread_block");
 +extern "C" uint64_t mach_absolute_time(void);
++extern "C" int asus_ml_get_max_cpu_number(void) __asm__("_ml_get_max_cpu_number");
 +
 +static void
 +asus_cpu_bench(__unused void *arg, __unused wait_result_t wr)
 +{
 +	IOSleep(30000);
-+	for (int cpu = 0; cpu < 8; cpu++) {
++	int maxcpu = asus_ml_get_max_cpu_number();     /* image 0045 (5 CPUs): cpu_to_processor(5) asserted */
++	for (int cpu = 0; cpu <= maxcpu && cpu < 8; cpu++) {
 +		void *p = asus_cpu_to_processor(cpu);
 +		if (p == NULL) {
 +			continue;
@@ -24114,7 +24116,7 @@
 +void
 +AsusPhoneInput::cpuFreq()
 +{
-+	uint32_t bench = 1;
++	uint32_t bench = 0;     /* done its job (0035/0036); asuscpubench=1 runs it again */
 +	PE_parse_boot_argn("asuscpubench", &bench, sizeof(bench));
 +	if (bench) {
 +		thread_t th;
