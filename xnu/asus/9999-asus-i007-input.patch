@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2254 @@
+@@ -0,0 +1,2259 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23119,10 +23119,14 @@
 +
 +#define PTE_VALID       (1ull << 0)
 +#define PTE_TABLE       (1ull << 1)
-+#define PTE_PAGE        ((1ull << 0) | (1ull << 1) | (1ull << 6) | (2ull << 8) | (1ull << 10))
++#define PTE_PAGE        ((1ull << 0) | (1ull << 1) | (1ull << 6) | (2ull << 8) | (1ull << 10))     /* RW EL0+EL1 (Linux plain) */
++/* IOMMU_PRIV (Linux MSM_BO_MAP_PRIV): RW EL1 only; EL0-writable pages are implicitly
++ * privileged-execute-never, so the GMU code fetch at 0x4000 took a permission fault
++ * (image 0040, FSR 0x408). */
++#define PTE_PAGE_PRIV   ((1ull << 0) | (1ull << 1) | (2ull << 8) | (1ull << 10))
 +
 +bool
-+ptMap(Pt *t, uint64_t va, uint64_t pa)
++ptMap(Pt *t, uint64_t va, uint64_t pa, bool priv)
 +{
 +	uint32_t i1 = (uint32_t)(va >> 30), i2 = (uint32_t)((va >> 21) & 511), i3 = (uint32_t)(va >> 21);
 +	if (i1 >= 4 || i3 >= 2048) {
@@ -23142,15 +23146,15 @@
 +		}
 +		t->l2[i1][i2] = t->l3pa[i3] | PTE_VALID | PTE_TABLE;
 +	}
-+	t->l3[i3][(va >> 12) & 511] = (pa & 0xffffffff000ULL) | PTE_PAGE;
++	t->l3[i3][(va >> 12) & 511] = (pa & 0xffffffff000ULL) | (priv ? PTE_PAGE_PRIV : PTE_PAGE);
 +	return true;
 +}
 +
 +bool
-+ptMapBuf(Pt *t, const GBuf *b)
++ptMapBuf(Pt *t, const GBuf *b, bool priv)
 +{
 +	for (uint64_t o = 0; o < b->size; o += 4096) {
-+		if (!ptMap(t, b->iova + o, b->pa + o)) {
++		if (!ptMap(t, b->iova + o, b->pa + o, priv)) {
 +			return false;
 +		}
 +	}
@@ -23203,7 +23207,8 @@
 +	gGmuPt.l2pa[0] = 0;
 +	const GBuf *bufs[] = { &gIcache, &gDummy, &gLog, &gHfi, &gDebug };
 +	for (unsigned i = 0; i < 5; i++) {
-+		if (!ptMapBuf(&gGmuPt, bufs[i])) {
++		/* icache, dummy, debug fixed and privileged as Linux; log and HFI plain */
++		if (!ptMapBuf(&gGmuPt, bufs[i], bufs[i] != &gLog && bufs[i] != &gHfi)) {
 +			amark("ASUS GPU: GMU page tables full\n");
 +			asus_fw_free(fw, fwsize);
 +			return;
