@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,1016 @@
+@@ -0,0 +1,1085 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -923,6 +923,75 @@
 +{
 +	sweet_log_append(line, (int)strlen(line));
 +	asus_log_flush(true);
++}
++
++/*
++ * Firmware for drivers (GPU: a660_gmu.bin, a660_sqe.fw, a660_zap.*) from the phone's own
++ * /vendor/firmware, kept off the kernel image (the kernel is built in public CI): a
++ * 256 KiB area right before the console log at the end of iosroot, written from Android
++ * (dd) by work/asus-gpu-fw tooling. Layout: "ASUSFW01", u32 count, then count entries of
++ * { char name[32]; u32 offset; u32 size; } (offsets from the area start). Read only.
++ */
++#define ASUS_FW_BLOCKS  64
++int asus_fw_load(const char *name, void **data, size_t *size);
++void asus_fw_free(void *data, size_t size);
++
++int
++asus_fw_load(const char *name, void **data, size_t *size)
++{
++	*data = NULL;
++	*size = 0;
++	if (!su.ready || su.nblocks < 2 * SWEET_LOG_BLOCKS + ASUS_FW_BLOCKS) {
++		return ENXIO;
++	}
++	uint64_t base = su.first_block + su.nblocks - SWEET_LOG_BLOCKS - ASUS_FW_BLOCKS;
++	const uint8_t *b = (const uint8_t *)(su.dma + DMA_BOUNCE);
++	int error = 0;
++	lck_mtx_lock(&sweet_ufs_lock);
++	error = ufs_read_blocks(base, ASUS_FW_BLOCKS);
++	if (!error) {
++		uint32_t count = 0;
++		if (memcmp(b, "ASUSFW01", 8) != 0) {
++			error = ENOENT;
++		} else {
++			memcpy(&count, b + 8, 4);
++			error = ENOENT;
++			for (uint32_t i = 0; i < count && i < 64; i++) {
++				const uint8_t *e = b + 12 + 40 * i;
++				uint32_t off, len;
++				memcpy(&off, e + 32, 4);
++				memcpy(&len, e + 36, 4);
++				if (strncmp((const char *)e, name, 32) != 0) {
++					continue;
++				}
++				if ((uint64_t)off + len > ASUS_FW_BLOCKS * UFS_BLOCK || len == 0) {
++					error = EINVAL;
++					break;
++				}
++				void *p = kalloc_data(len, Z_WAITOK);
++				if (p == NULL) {
++					error = ENOMEM;
++					break;
++				}
++				memcpy(p, b + off, len);
++				*data = p;
++				*size = len;
++				error = 0;
++				break;
++			}
++		}
++	}
++	lck_mtx_unlock(&sweet_ufs_lock);
++	printf("ASUS FW: %s: %s (%zu bytes)\n", name, error ? "not found" : "loaded", *size);
++	return error;
++}
++
++void
++asus_fw_free(void *data, size_t size)
++{
++	if (data != NULL) {
++		kfree_data(data, size);
++	}
 +}
 +
 +/* Reset paths: what printf would only queue, straight into the ring; on a panic also

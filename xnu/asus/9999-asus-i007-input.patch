@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,1614 @@
+@@ -0,0 +1,2019 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21718,6 +21718,7 @@
 +	void gpuProbe();
 +	void gpuStage2(IOMemoryMap *gcc, IOMemoryMap *gpucc);
 +	void gpuSmmuDump();
++	void gpuStage4();
 +	bool gpuBranch(IOMemoryMap *m, uint32_t off, const char *name);
 +	bool gpuRcg(IOMemoryMap *m, uint32_t cmd, uint32_t src, uint32_t div2m1, const char *name);
 +	void touchBringup();
@@ -23027,6 +23028,410 @@
 +	if (stage >= 3) {
 +		gpuSmmuDump();
 +	}
++	if (stage >= 4) {
++		gpuStage4();
++	}
++}
++
++/*
++ * Stage 4 (asusgpu>=4): start the GMU (Linux a6xx_gmu_init/resume/fw_start for an
++ * A660, a650 family: PDC in AOP, icache at GMU VA 0x4000, HFI v2).
++ * Memory the GMU reaches through the GPU SMMU (stream 5, mask 0x400 from the DT):
++ *   0x00004000 icache (firmware code block), 0x60000000 dummy 8 KiB,
++ *   0x60002000 log 16 KiB, 0x60006000 HFI 16 KiB, 0x60400000 debug 28 KiB.
++ * Our own context bank with stage-1 tables (4 KiB granule, 4 GiB VA, Normal NC), the
++ * firmware from asus_fw_load() (iosroot firmware area, not in the kernel image).
++ */
++extern "C" int asus_fw_load(const char *name, void **data, size_t *size);
++extern "C" void asus_fw_free(void *data, size_t size);
++extern "C" __attribute__((weak)) int
++asus_fw_load(const char *name, void **data, size_t *size)
++{
++	(void)name;
++	*data = NULL;
++	*size = 0;
++	return ENOENT;
++}
++extern "C" __attribute__((weak)) void
++asus_fw_free(void *data, size_t size)
++{
++	(void)data;
++	(void)size;
++}
++
++namespace {
++struct GBuf {
++	IOBufferMemoryDescriptor *md;
++	uint8_t *va;
++	uint64_t pa, size, iova;
++};
++
++bool
++gbufAlloc(GBuf *b, uint64_t size, uint64_t iova)
++{
++	b->md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
++	    kIODirectionInOut | kIOMemoryPhysicallyContiguous, size, 0x0000000ffffff000ULL);
++	if (b->md == NULL || b->md->prepare() != kIOReturnSuccess) {
++		return false;
++	}
++	b->va = (uint8_t *)b->md->getBytesNoCopy();
++	b->pa = b->md->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
++	b->size = size;
++	b->iova = iova;
++	bzero(b->va, size);
++	flush_dcache64((addr64_t)(uintptr_t)b->va, (unsigned)size, FALSE);
++	return b->pa != 0;
++}
++
++/* Stage-1 tables for one context bank: 4 KiB granule, T0SZ 32 (4 GiB), level 1 start. */
++struct Pt {
++	GBuf chunk;                     /* 64 tables */
++	unsigned used;
++	uint64_t *l1;
++	uint64_t *l2[4];
++	uint64_t l2pa[4];
++	uint64_t *l3[2048];
++	uint64_t l3pa[2048];
++};
++
++uint64_t *
++ptTable(Pt *t, uint64_t *pa)
++{
++	if (t->used >= 64) {
++		return NULL;
++	}
++	uint64_t *v = (uint64_t *)(t->chunk.va + 4096 * t->used);
++	*pa = t->chunk.pa + 4096 * t->used;
++	t->used++;
++	return v;
++}
++
++#define PTE_VALID       (1ull << 0)
++#define PTE_TABLE       (1ull << 1)
++#define PTE_PAGE        ((1ull << 0) | (1ull << 1) | (1ull << 6) | (2ull << 8) | (1ull << 10))
++
++bool
++ptMap(Pt *t, uint64_t va, uint64_t pa)
++{
++	uint32_t i1 = (uint32_t)(va >> 30), i2 = (uint32_t)((va >> 21) & 511), i3 = (uint32_t)(va >> 21);
++	if (i1 >= 4 || i3 >= 2048) {
++		return false;
++	}
++	if (t->l2[i1] == NULL) {
++		t->l2[i1] = ptTable(t, &t->l2pa[i1]);
++		if (t->l2[i1] == NULL) {
++			return false;
++		}
++		t->l1[i1] = t->l2pa[i1] | PTE_VALID | PTE_TABLE;
++	}
++	if (t->l3[i3] == NULL) {
++		t->l3[i3] = ptTable(t, &t->l3pa[i3]);
++		if (t->l3[i3] == NULL) {
++			return false;
++		}
++		t->l2[i1][i2] = t->l3pa[i3] | PTE_VALID | PTE_TABLE;
++	}
++	t->l3[i3][(va >> 12) & 511] = (pa & 0xffffffff000ULL) | PTE_PAGE;
++	return true;
++}
++
++bool
++ptMapBuf(Pt *t, const GBuf *b)
++{
++	for (uint64_t o = 0; o < b->size; o += 4096) {
++		if (!ptMap(t, b->iova + o, b->pa + o)) {
++			return false;
++		}
++	}
++	return true;
++}
++
++GBuf gIcache, gDummy, gLog, gHfi, gDebug;
++Pt gGmuPt;
++}
++
++static inline void gmuW(IOMemoryMap *g, uint32_t reg, uint32_t v)
++{
++	*(volatile uint32_t *)(g->getVirtualAddress() + 4 * reg) = v;
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++static inline uint32_t gmuR(IOMemoryMap *g, uint32_t reg)
++{
++	return *(volatile uint32_t *)(g->getVirtualAddress() + 4 * reg);
++}
++static bool gmuPoll(IOMemoryMap *g, uint32_t reg, uint32_t mask, uint32_t want, unsigned us)
++{
++	for (unsigned i = 0; i < us; i += 10) {
++		if ((gmuR(g, reg) & mask) == want) {
++			return true;
++		}
++		IODelay(10);
++	}
++	return (gmuR(g, reg) & mask) == want;
++}
++
++void
++AsusPhoneInput::gpuStage4()
++{
++	amark("ASUS GPU: stage 4: GMU firmware from the iosroot firmware area\n");
++	void *fw = NULL;
++	size_t fwsize = 0;
++	if (asus_fw_load("a660_gmu.bin", &fw, &fwsize) != 0 || fwsize < 16) {
++		amark("ASUS GPU: no a660_gmu.bin, stopping\n");
++		return;
++	}
++	amark("ASUS GPU: stage 4: GMU memory (icache 1 MiB, dummy, log, hfi, debug)\n");
++	if (!gbufAlloc(&gIcache, 1 << 20, 0x4000) || !gbufAlloc(&gDummy, 0x2000, 0x60000000) ||
++	    !gbufAlloc(&gLog, 0x4000, 0x60002000) || !gbufAlloc(&gHfi, 0x4000, 0x60006000) ||
++	    !gbufAlloc(&gDebug, 0x7000, 0x60400000) || !gbufAlloc(&gGmuPt.chunk, 64 * 4096, 0)) {
++		amark("ASUS GPU: GMU memory allocation failed\n");
++		asus_fw_free(fw, fwsize);
++		return;
++	}
++	gGmuPt.l1 = ptTable(&gGmuPt, &gGmuPt.l2pa[0]);  /* first table = L1 (pa in chunk.pa) */
++	gGmuPt.l2pa[0] = 0;
++	const GBuf *bufs[] = { &gIcache, &gDummy, &gLog, &gHfi, &gDebug };
++	for (unsigned i = 0; i < 5; i++) {
++		if (!ptMapBuf(&gGmuPt, bufs[i])) {
++			amark("ASUS GPU: GMU page tables full\n");
++			asus_fw_free(fw, fwsize);
++			return;
++		}
++	}
++	flush_dcache64((addr64_t)(uintptr_t)gGmuPt.chunk.va, 64 * 4096, FALSE);
++	amark("ASUS GPU: icache pa %#llx dummy %#llx log %#llx hfi %#llx debug %#llx tables %#llx\n",
++	    gIcache.pa, gDummy.pa, gLog.pa, gHfi.pa, gDebug.pa, gGmuPt.chunk.pa);
++
++	/* GPU SMMU: a free context bank and stream match for SID 5 (mask 0x400). */
++	IOMemoryMap *s = map(0x03da0000ULL, 0x20000);
++	if (!s) {
++		asus_fw_free(fw, fwsize);
++		return;
++	}
++	uint32_t idr0 = rd(s, 0x20), idr1 = rd(s, 0x24);
++	uint32_t pgshift = (idr1 & (1u << 31)) ? 16 : 12, npage = 1u << (((idr1 >> 28) & 7) + 1);
++	uint32_t nsmr = idr0 & 0xff, ncb = idr1 & 0xff, gr1 = 1u << pgshift;
++	int smr = -1, cbn = -1;
++	for (int n = (int)nsmr - 1; n >= 0; n--) {
++		uint32_t v = rd(s, 0x800 + 4 * n);
++		if ((v >> 31) && (v & 0x7fff) == 5) {
++			smr = n;                        /* already matched: take it over */
++			break;
++		}
++		if (!(v >> 31) && smr < 0) {
++			smr = n;
++		}
++	}
++	for (int n = (int)ncb - 1; n >= 0; n--) {
++		uint32_t cb = (npage + n) << pgshift;
++		if (cb + 0x800 <= 0x20000 && rd(s, gr1 + 4 * n) == 0 && rd(s, cb) == 0) {
++			cbn = n;
++			break;
++		}
++	}
++	if (smr < 0 || cbn < 0) {
++		amark("ASUS GPU: no free SMR (%d) or context bank (%d) of %u/%u\n", smr, cbn, nsmr, ncb);
++		s->release();
++		asus_fw_free(fw, fwsize);
++		return;
++	}
++	uint32_t cb = (npage + (uint32_t)cbn) << pgshift;
++	amark("ASUS GPU: stage 4: SMMU SMR%d -> CB%d (cb page %#x) for the GMU\n", smr, cbn, cb);
++	wr(s, cb + 0x000, 0);                           /* SCTLR off while programming */
++	wr(s, cb + 0x058, 0xffffffffu);                 /* FSR clear */
++	wr(s, gr1 + 0x800 + 4 * cbn, 1);                /* CBA2R: AArch64 descriptors */
++	wr(s, gr1 + 4 * cbn, 0x0001f000);               /* CBAR: S1 translate, S2 bypass */
++	wr(s, cb + 0x020, (uint32_t)gGmuPt.chunk.pa);   /* TTBR0 = the L1 table */
++	wr(s, cb + 0x024, (uint32_t)(gGmuPt.chunk.pa >> 32));
++	wr(s, cb + 0x030, 32u | (1u << 23));            /* TCR: T0SZ 32, 4 KiB, NC walks, EPD1 */
++	wr(s, cb + 0x010, 1);                           /* TCR2: PASize 36 bits */
++	wr(s, cb + 0x038, 0x44);                        /* MAIR0 attr0 = Normal non-cacheable */
++	wr(s, cb + 0x03c, 0);
++	wr(s, cb + 0x000, 0x67);                        /* SCTLR: CFIE CFRE AFE TRE M */
++	wr(s, 0xc00 + 4 * smr, (uint32_t)cbn);          /* S2CR: translate in CB cbn */
++	wr(s, 0x800 + 4 * smr, (1u << 31) | (0x400u << 16) | 5u);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	wr(s, cb + 0x618, 0);                           /* TLBIALL */
++	wr(s, cb + 0x7f0, 0);                           /* TLBSYNC */
++	IODelay(100);
++	amark("ASUS GPU: SMMU CB%d SCTLR %#x TTBR0 %#x%08x SMR %#x S2CR %#x FSR %#x\n", cbn,
++	    rd(s, cb), rd(s, cb + 0x24), rd(s, cb + 0x20), rd(s, 0x800 + 4 * smr), rd(s, 0xc00 + 4 * smr),
++	    rd(s, cb + 0x58));
++
++	IOMemoryMap *g = map(0x03d6a000ULL, 0x34000);
++	IOMemoryMap *rscc = map(0x03de0000ULL, 0x10000);
++	IOMemoryMap *pdc = map(0x0b290000ULL, 0x10000);
++	if (!g || !rscc || !pdc) {
++		OSSafeReleaseNULL(g);
++		OSSafeReleaseNULL(rscc);
++		OSSafeReleaseNULL(pdc);
++		s->release();
++		asus_fw_free(fw, fwsize);
++		return;
++	}
++
++	/* a6xx_gmu_rpmh_init, a650 family (PDC in AOP), then a6xx_rpmh_stop. */
++	amark("ASUS GPU: stage 4: RSCC sequencer and PDC\n");
++	gmuW(rscc, 0x0004, 1u << 24);                   /* GPU_RSCC_RSC_STATUS0_DRV0 */
++	gmuW(rscc, 0x000b, 1);                          /* PDC_SLAVE_ID_DRV0 */
++	gmuW(rscc, 0x000e, 0);
++	gmuW(rscc, 0x000d, 0);
++	gmuW(rscc, 0x000e + 2, 0);
++	gmuW(rscc, 0x000d + 2, 0);
++	gmuW(rscc, 0x000e + 4, 0x80000000);
++	gmuW(rscc, 0x000d + 4, 0);
++	gmuW(rscc, 0x0100, 0);                          /* OVERRIDE_START_ADDR */
++	gmuW(rscc, 0x0008, 0x4520);                     /* PDC_SEQ_START_ADDR */
++	gmuW(rscc, 0x0009, 0x4510);
++	gmuW(rscc, 0x000a, 0x4514);
++	gmuW(rscc, 0x0180, 0xeaaae5a0);                 /* SEQ_MEM_0_DRV0 */
++	gmuW(rscc, 0x0181, 0xe1a1ebab);
++	gmuW(rscc, 0x0182, 0xa2e0a581);
++	gmuW(rscc, 0x0183, 0xecac82e2);
++	gmuW(rscc, 0x0184, 0x0020edad);
++	gmuW(pdc, 0x1148, 0);                           /* PDC GPU_SEQ_START_ADDR */
++	gmuW(pdc, 0x1140, 0x80000001);                  /* PDC GPU_ENABLE_PDC */
++	gmuW(g, 0x9307, 1);                             /* rpmh_stop: RSCC_CONTROL_REQ */
++	bool ok = gmuPoll(rscc, 0x0004, 1u << 16, 1u << 16, 10000);
++	gmuW(g, 0x9307, 0);
++	amark("ASUS GPU: RSCC stop %s (status %#x)\n", ok ? "ok" : "TIMEOUT", gmuR(rscc, 0x0004));
++
++	/* a6xx_gmu_resume / fw_start */
++	gmuW(g, 0x9304, 0xffffffffu);                   /* AO_HOST_INTERRUPT_CLR */
++	gmuW(g, 0x9306, 0xffffffffu);                   /* ... MASK: all masked (polled) */
++	gmuW(g, 0x50f1, 1);                             /* FALNEXT veto */
++	gmuW(g, 0x50f0, 1);                             /* FAL veto */
++	gmuW(g, 0x51cc, 1);                             /* GENERAL_7: TCM retention */
++	amark("ASUS GPU: stage 4: rpmh_start\n");
++	gmuW(g, 0x9307, 1u << 1);
++	ok = gmuPoll(g, 0x9308, 1u << 1, 1u << 1, 10000) && gmuPoll(rscc, 0x0101, 0xffffffffu, 0, 10000);
++	gmuW(g, 0x9307, 0);
++	amark("ASUS GPU: rpmh_start %s (ack %#x seq_busy %#x)\n", ok ? "ok" : "TIMEOUT",
++	    gmuR(g, 0x9308), gmuR(rscc, 0x0101));
++	if (!ok) {
++		goto out;
++	}
++
++	amark("ASUS GPU: stage 4: GMU firmware blocks\n");
++	{
++		const uint8_t *p = (const uint8_t *)fw, *end = p + fwsize;
++		unsigned nblk = 0;
++		while (p + 16 <= end) {
++			uint32_t addr, size;
++			memcpy(&addr, p, 4);
++			memcpy(&size, p + 4, 4);
++			const uint8_t *data = p + 16;
++			if (data + size > end) {
++				break;
++			}
++			if (size) {
++				if (addr < 0x4000) {
++					for (uint32_t o = 0; o < size; o += 4) {
++						uint32_t w;
++						memcpy(&w, data + o, 4);
++						gmuW(g, 0xc00 + ((addr + o) >> 2), w);     /* ITCM */
++					}
++				} else if (addr >= 0x10004000 && addr < 0x10008000) {
++					for (uint32_t o = 0; o < size; o += 4) {
++						uint32_t w;
++						memcpy(&w, data + o, 4);
++						gmuW(g, 0x1c00 + ((addr - 0x10004000 + o) >> 2), w);    /* DTCM */
++					}
++				} else {
++					const GBuf *hit = NULL;
++					for (unsigned i = 0; i < 5; i++) {
++						if (addr >= bufs[i]->iova && addr + size <= bufs[i]->iova + bufs[i]->size) {
++							hit = bufs[i];
++						}
++					}
++					if (hit == NULL) {
++						IOLog("ASUS GPU: fw block %#x size %#x has no home\n", addr, size);
++					} else {
++						memcpy(hit->va + (addr - hit->iova), data, size);
++						flush_dcache64((addr64_t)(uintptr_t)(hit->va + (addr - hit->iova)), size, FALSE);
++					}
++				}
++				nblk++;
++			}
++			p = data + size;
++		}
++		amark("ASUS GPU: %u firmware blocks loaded\n", nblk);
++	}
++
++	/* HFI queue table (a6xx_hfi_init): table header, two queue headers, queues at 4K/8K. */
++	{
++		uint32_t *t = (uint32_t *)gHfi.va;
++		t[0] = 0;                       /* version */
++		t[1] = 24 + 2 * 48;             /* size */
++		t[2] = 24 >> 2;                 /* qhdr0_offset */
++		t[3] = 48 >> 2;                 /* qhdr_size */
++		t[4] = 2;
++		t[5] = 2;
++		for (unsigned q = 0; q < 2; q++) {
++			uint32_t *h = t + 6 + 12 * q;
++			h[0] = 1;                                       /* status */
++			h[1] = (uint32_t)gHfi.iova + 4096 * (q + 1);    /* iova */
++			h[2] = 10u << 8 | q;                            /* type (id 0 cmd, 1 response) */
++			h[3] = 4096 >> 2;
++			h[4] = 0;
++			h[5] = 0;
++			h[6] = 1;
++			h[7] = 1;
++			h[8] = 1;
++			h[9] = 0;
++			h[10] = 0;
++			h[11] = 0;
++		}
++		flush_dcache64((addr64_t)(uintptr_t)gHfi.va, 4096, FALSE);
++	}
++
++	amark("ASUS GPU: stage 4: fw_start registers\n");
++	gmuW(g, 0x501c, 0);                             /* CM3_FW_INIT_RESULT */
++	gmuW(g, 0x5001, 0x02);                          /* CM3_BOOT_CONFIG */
++	gmuW(g, 0x5185, (uint32_t)gHfi.iova);           /* HFI_QTBL_ADDR */
++	gmuW(g, 0x5184, 1);                             /* HFI_QTBL_INFO */
++	gmuW(g, 0x9311, (1u << 31) | (0xau << 18) | 0xa0);     /* AHB_FENCE_RANGE_0 */
++	gmuW(g, 0x502d, 0x4052);                        /* CM3_CFG */
++	gmuW(g, 0x5182, 0x06060100);                    /* HFI_SFR_ADDR = GMU chip id (0x06060001 massaged) */
++	gmuW(g, 0x5100, (uint32_t)gLog.iova | (0x4000 / 4096 - 1));    /* PWR_COL_CP_MSG */
++	gmuW(g, 0x4c0f, 1);                             /* SYS_BUS_CONFIG */
++	gmuW(g, 0x4c00, 1);                             /* ICACHE_CONFIG */
++	gmuW(g, 0x4c01, 1);                             /* DCACHE_CONFIG */
++	gmuW(g, 0x50c0, 0x9c40400);                     /* PWR_COL_INTER_FRAME_CTRL (idle level active) */
++	gmuW(g, 0x50e8, gmuR(g, 0x50e8) | 0x0f11);      /* RPMH_CTRL: interface, LLC/DDR/MX/CX/GFX votes */
++
++	amark("ASUS GPU: stage 4: GMU start (CM3 out of reset)\n");
++	{
++		uint32_t v = gmuR(g, 0x1c00 + 0xff8), mask, want;
++		if (v <= 0x20010004) {
++			mask = 0xffffffffu;
++			want = 0xbabeface;
++		} else {
++			mask = 0x1ff;
++			want = 0x100;
++		}
++		gmuW(g, 0x5000, 1);                     /* CM3_SYSRESET */
++		gmuW(g, 0x5101, 0);                     /* PWR_COL_CP_RESP (log wptr) */
++		gmuW(g, 0x5000, 0);
++		ok = gmuPoll(g, 0x501c, mask, want, 20000);
++		amark("ASUS GPU: GMU firmware init %s: result %#x (want %#x, fw ver word %#x) SMMU FSR %#x FAR %#x%08x\n",
++		    ok ? "OK" : "TIMEOUT", gmuR(g, 0x501c), want, v, rd(s, cb + 0x58), rd(s, cb + 0x64), rd(s, cb + 0x60));
++	}
++	if (!ok) {
++		goto out;
++	}
++	amark("ASUS GPU: stage 4: HFI queues\n");
++	gmuW(g, 0x5186, 1);                             /* HFI_CTRL_INIT */
++	ok = gmuPoll(g, 0x5180, 1, 1, 20000);
++	amark("ASUS GPU: HFI start %s (status %#x, version %#x)\n", ok ? "OK" : "TIMEOUT",
++	    gmuR(g, 0x5180), gmuR(g, 0x5181));
++out:
++	g->release();
++	rscc->release();
++	pdc->release();
++	s->release();
++	asus_fw_free(fw, fwsize);
++	amark("ASUS GPU: stage 4 done\n");
 +}
 +
 +/*
