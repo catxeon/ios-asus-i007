@@ -585,6 +585,12 @@
   within ~7 % (noise level); the 5-core layout is the slightly better default. The limit
   is the CPU renderer, not the core count: next step for frame rate is GPU or a cheaper
   render path, not scheduling.
+- PC disk cleanup (2026-11-10, user approved): WSL ~/asus-roots/springboard-v12.hfs and
+  springboard-v13.hfs deleted (v14 = 528ab8ee... and iosroot-now.img kept), ext4.vhdx
+  compacted 77.5 -> 48.4 GB (fstrim as root, then elevated Optimize-VHD); C: has ~32 GB
+  free. v12/v13 can be rebuilt with ../make_springboard_v12.py / _v13.py if ever needed.
+  The repo directory is owned by the CodexSandboxOffline account: from the normal user,
+  git needs `git -c safe.directory=* ...`.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
