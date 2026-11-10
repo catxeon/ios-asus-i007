@@ -693,7 +693,21 @@
   behind SMR5 (id 5, mask 0x400) -> CB6; HFI v2 start, perf/bw tables, perf vote; OOB
   GPU_SET (GX on); SMR4/SMR3 (ids 0, 1, mask 0x400) -> CB0 with SCTLR 0x167; hw_init
   registers; SQE + 32 KiB ring; CP_ME_INIT; zap; CP_SET_SECURE_MODE 0.
-- NEXT (GPU, kernel side): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
+- **Stage 10: the `redwood_gpu_*` hardware interface works (image 0058, lab, kernel CI
+  42761120579 = commit b6eeb09, asusgpu=10, SHA256 9fc590c8...2dc50; 2026-11-10 12:12
+  local, unattended, self-reset after 186 s).** The interface lives in AsusPhoneInput.cpp
+  next to the stages (same ring, scratch page and CB0 tables): GPU VA allocator
+  0x20000000-0xf0000000, redwood_gpu_map/unmap (4 KiB pages, entries flushed one by one,
+  CB_TLBIALL), submit = CP_INDIRECT_BUFFER x n + CP_EVENT_WRITE CACHE_FLUSH_TS writing the
+  submission number to scratch+0x100, done/last/report/stop, a660 parameters (chip id
+  0x06060001, GMEM 1.5 MiB at 0, hbb 16, swizzle 6, macrotile 1), redwood_gpu_identity()
+  = false (the SMMU translates and reaches all DRAM, no pool below 4 GiB needed). Page
+  tables grow in chunks of 64. Log ../phone-0058/log.txt: `stage 10: IB at 0x20000000 (pa
+  0x143e7c000): fence 1 done, wrote 0xfeedc0de ...: the GPU runs indirect buffers`,
+  `second IB: fence 2 done, wrote 0xbadcafe ...; test buffer unmapped; ready 1`.
+  Local check before CI: the new code alone compiles with stubs in WSL clang++
+  (-fsyntax-only); scratchpad script, not in the repo.
+- NEXT (GPU, kernel side, superseded by the line above for the hardware layer): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
   it and a kernel self-test that submits an indirect buffer. Userland after that: EAGL
