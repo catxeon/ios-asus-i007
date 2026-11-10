@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2727 @@
+@@ -0,0 +1,2771 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23785,7 +23785,7 @@
 +
 +/* Our own context bank for one SMMU stream (S1 translate, S2 bypass, 4 KiB, 4 GiB VA). */
 +static bool
-+smmuBind(IOMemoryMap *s, uint32_t sid, uint32_t mask, uint64_t ttbr, int *smrOut, int *cbOut)
++smmuBind(IOMemoryMap *s, uint32_t sid, uint32_t mask, uint64_t ttbr, int prefer, uint32_t sctlr, int *smrOut, int *cbOut)
 +{
 +	uint32_t idr0 = *(volatile uint32_t *)(s->getVirtualAddress() + 0x20);
 +	uint32_t idr1 = *(volatile uint32_t *)(s->getVirtualAddress() + 0x24);
@@ -23804,7 +23804,11 @@
 +			smr = n;
 +		}
 +	}
-+	for (int n = (int)ncb - 1; n >= 0; n--) {
++	if (prefer >= 0 && prefer < (int)ncb && ((npage + (uint32_t)prefer) << pgshift) + 0x800 <= 0x20000 &&
++	    SR(gr1 + 4 * prefer) == 0) {
++		cbn = prefer;
++	}
++	for (int n = (int)ncb - 1; n >= 0 && cbn < 0; n--) {
 +		if (((npage + n) << pgshift) + 0x800 <= 0x20000 && SR(gr1 + 4 * n) == 0) {
 +			cbn = n;
 +			break;
@@ -23824,7 +23828,7 @@
 +	SR(cb + 0x010) = 1;
 +	SR(cb + 0x038) = 0x44;
 +	SR(cb + 0x03c) = 0;
-+	SR(cb + 0x000) = 0x67;
++	SR(cb + 0x000) = sctlr;
 +	SR(0xc00 + 4 * smr) = (uint32_t)cbn;
 +	SR(0x800 + 4 * smr) = (1u << 31) | ((mask & 0x7fff) << 16) | sid;
 +	__asm__ volatile ("dsb sy" ::: "memory");
@@ -23880,9 +23884,15 @@
 +		return;
 +	}
 +	int smr = -1, cbn = -1;
-+	/* Mask 0x403: streams 0-3 (gfx3d_user 0, lpac 1, secure 2) share our context: an
-+	 * unmatched stream is a global fault (sCR0.USFCFG), a suspect for the 0042 EDL at CP start. */
-+	bool bound = smmuBind(s, 0, 0x403, l1pa, &smr, &cbn);
++	/*
++	 * Linux on this SoC (sm8350.dtsi) attaches GPU streams 0 AND 1 (mask 0x400 each) to one
++	 * domain in context bank 0 (arm-smmu-qcom: the CP switches page tables there), with
++	 * SCTLR.HUPCF. Image 0042 matched stream 0 only (mask 0x400): stream 1 (LPAC, which
++	 * has its own microcode fetch) was unmatched = a global fault with sCR0.USFCFG, the
++	 * same picture as the GPI EDL (a DMA from a stream nobody configured). Mask 0x403:
++	 * streams 0-3 (gfx3d_user 0, lpac 1, secure 2) and their 0x400 twins share our tables.
++	 */
++	bool bound = smmuBind(s, 0, 0x403, l1pa, 0, 0x167, &smr, &cbn);
 +	amark("ASUS GPU: SMMU stream 0 %s: SMR%d -> CB%d, tables %#llx, sqe %#llx ring %#llx scratch %#llx\n",
 +	    bound ? "bound" : "NOT bound", smr, cbn, l1pa, gSqe.pa, gRing.pa, gScratch.pa);
 +	if (!bound) {
@@ -23892,11 +23902,11 @@
 +	uint32_t cb = (uint32_t)(((1u << ((((*(volatile uint32_t *)(s->getVirtualAddress() + 0x24)) >> 28) & 7) + 1)) + (uint32_t)cbn) << 12);
 +
 +	/*
-+	 * Image 0042 went to EDL somewhere in stage 7 (log unread yet): markers before each
-+	 * group, and the RBBM_SECVID_TSB_* registers (0xf800-0xf810, the secure side's
-+	 * trusted-buffer window) only with boot-arg asusgpusecvid=1.
++	 * Image 0042 got through all of this (SECVID TSB writes included) and died after the
++	 * CP start marker. A marker before each group stays; asusgpusecvid=0 skips the
++	 * RBBM_SECVID_TSB_* registers (0xf800-0xf810, the trusted-buffer window).
 +	 */
-+	uint32_t secvid = 0;
++	uint32_t secvid = 1;                            /* as Linux; asusgpusecvid=0 skips them */
 +	PE_parse_boot_argn("asusgpusecvid", &secvid, sizeof(secvid));
 +	amark("ASUS GPU: stage 7: GBIF halt release\n");
 +	gpuW(gpu, 0x3c45, 0);                           /* GBIF_HALT */
@@ -23951,6 +23961,40 @@
 +	gpuW(gpu, 0x841, 0x1);                          /* CP_CHICKEN_DBG */
 +	gpuW(gpu, 0x11, 0x0);                           /* RBBM_GBIF_CLIENT_QOS_CNTL */
 +	gpuW(gpu, 0xe3c, 0x66906);                      /* UCHE_CMDQ_CONFIG */
++
++	/*
++	 * Read-only picture before the CP starts: SMMU global fault state and the stream table,
++	 * the GX clock the GMU owns (GPU_CC PLL0, gfx3d RCG and branch; a660_gmu.bin carries the
++	 * PLL configuration words itself) and a core clock estimate: the always-count CP perf
++	 * counter (hw_init selected it above) against 10 ms.
++	 */
++	{
++		volatile uint8_t *sb = (volatile uint8_t *)s->getVirtualAddress();
++#define SG(o) (*(volatile uint32_t *)(sb + (o)))
++		amark("ASUS GPU: SMMU sCR0 %#x sGFSR %#x sGFSYNR0 %#x sGFSYNR1 %#x sGFSYNR2 %#x\n",
++		    SG(0x0), SG(0x48), SG(0x50), SG(0x54), SG(0x58));
++		amark("ASUS GPU: SMR/S2CR 0: %#x/%#x 1: %#x/%#x 2: %#x/%#x 3: %#x/%#x 4: %#x/%#x 5: %#x/%#x\n",
++		    SG(0x800), SG(0xc00), SG(0x804), SG(0xc04), SG(0x808), SG(0xc08), SG(0x80c), SG(0xc0c),
++		    SG(0x810), SG(0xc10), SG(0x814), SG(0xc14));
++		amark("ASUS GPU: CB%d SCTLR %#x TTBR0 %#x%08x TCR %#x FSR %#x\n", cbn, SG(cb + 0x0), SG(cb + 0x24),
++		    SG(cb + 0x20), SG(cb + 0x30), SG(cb + 0x58));
++#undef SG
++		IOMemoryMap *cc = map(0x03d90000ULL, 0xa000);
++		if (cc) {
++			amark("ASUS GPU: PLL0 mode %#x L %#x cal %#x status %#x opmode %#x alpha %#x\n", rd(cc, 0x0),
++			    rd(cc, 0x4), rd(cc, 0x8), rd(cc, 0x30), rd(cc, 0x38), rd(cc, 0x40));
++			amark("ASUS GPU: gfx3d rcg %#x/%#x, 0x1054 %#x, gx_gmu %#x, GX GDSC %#x, CX GDSC %#x\n",
++			    rd(cc, 0x101c), rd(cc, 0x1020), rd(cc, 0x1054), rd(cc, 0x1064), rd(cc, 0x100c), rd(cc, 0x106c));
++			cc->release();
++		}
++		uint64_t c0 = gpuR(gpu, 0x400) | ((uint64_t)gpuR(gpu, 0x401) << 32);
++		uint64_t a0 = gpuR(gpu, 0x980) | ((uint64_t)gpuR(gpu, 0x981) << 32);
++		IODelay(10000);
++		uint64_t c1 = gpuR(gpu, 0x400) | ((uint64_t)gpuR(gpu, 0x401) << 32);
++		uint64_t a1 = gpuR(gpu, 0x980) | ((uint64_t)gpuR(gpu, 0x981) << 32);
++		amark("ASUS GPU: in 10 ms: CP perf counter +%llu (~%llu MHz core clock), always-on +%llu; RBBM_STATUS %#x\n",
++		    c1 - c0, (c1 - c0) / 10000, a1 - a0, gpuR(gpu, 0x210));
++	}
 +
 +	/*
 +	 * Image 0042 died (EDL) after the marker for this block. Each step marked; boot-arg
