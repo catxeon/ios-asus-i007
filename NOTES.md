@@ -103,11 +103,31 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
       against ~/linux-msm): same register list except hwcg, CP protect, CP_APRIV_CNTL and
       RBBM_INT_0_MASK; redwood_gpu_submit does not emit Linux's two PC_CCU_INVALIDATE
       events before the IBs.
-    - Next: stop testing through iOS (26 min a run, nothing visible). A kernel self-test
-      for lab images (2 min a run): CP_MEM_WRITE into pages spread over a 14 MB buffer made
-      and mapped as gemNew does; a 2D solid fill (CP_BLIT) of it as 1125x2436 BGRA with
-      4544-byte rows, pixels counted by the CPU; the context bank's FSR/FAR/FSYNR0,
-      RBBM_STATUS, RBBM_INT_0_STATUS and CP_HW_FAULT after each.
+    - Stage 7 checked against ~/linux-msm (6.12) a6xx hw_init: the same registers and
+      values for the A660. Left out: a6xx_set_hwcg, a6xx_set_cp_protect, CP_APRIV_CNTL,
+      RBBM_INT_0_MASK, the GMU power counter; and Linux drops OOB GPU_SET at the end.
+    - **GMU_SPTPRAC_PWR_CLK_STATUS (0x50d0) was only ever read before the GMU started**
+      (0xc0 = GX GDSC off + GX clock off, all 19 logs). Nothing shows the SP/TP/RB domain
+      on after GPU_SET. Guess to test first: it is off (or its clock is), which would fit
+      everything: the CP runs, no faults, no pixels, no visibility stream.
+  - **Stage 11 (commit c8cefef, kernel CI 42907840162 started 2026-11-11 ~01:30, result
+    not seen yet).** For lab images, boot-arg `asusgpu=11` (>=10 keeps everything else):
+    - `ASUS GPU: after GPU_SET: SPTPRAC_PWR_CLK_STATUS ...` (bits: 2 SPTPRAC GDSC off, 3 on,
+      4 SP clock off, 6 GX GDSC off, 7 GX clock off).
+    - redwood_gpu_state(why): `ASUS GPU: WHY: SPTPRAC_PWR_CLK_STATUS .. RBBM_STATUS .. INT0
+      .. CP_HW_FAULT .. sGFSR .. CB FSR .. FAR .. FSYNR0 ..` after stage 10, after each test
+      and (from RedwoodGPU, `shown`) with every middle-pixel line.
+    - `stage 11 a`: a screen-sized buffer made and mapped as gemNew does (IOBMD, 4 KiB
+      steps of getPhysicalSegment), CP_MEM_WRITE markers into 8 of its pages, first to last.
+    - `stage 11 b`: 2D solid fill of it (1125x2436, 4544-byte rows, 8888 unorm linear) with
+      Mesa's sequence (CCU flush/invalidate events, CP_SET_MARKER RM6_BLIT2DSCALE,
+      RB_CCU_CNTL 0x18000000, RB_DBG_ECO_CNTL 0x04100000, RB_2D_BLIT_CNTL 0x10f03080, ...,
+      CP_BLIT, PC_CCU_FLUSH_COLOR_TS); the CPU counts pixels, expected 0xff332211. A FAILED
+      here is not proof by itself (the sequence is mine, from Mesa main's fd6_blitter.cc /
+      tu_clear_blit.cc and the register XML; never run on known-good hardware): read it
+      together with the state lines.
+    - Lab image recipe: `ASUS_UFS=1 ASUS_TOUCH_LAB=1 ASUS_CPUS=8 ASUS_REBOOT=120
+      ASUS_EXTRA_ARGS="asusgpu=11 asuscpubench=0"`.
 
 **Open problem 2: GMEM (tiled + binning) hangs the CP** (0061/0062, decoded in "Image
 0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
