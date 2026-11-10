@@ -35,6 +35,10 @@ on:
         description: With smp, A55 E cluster + A78/X1 P cluster (images built with ASUS_AMP=1)
         type: boolean
         default: false
+      gpu:
+        description: Include RedwoodGPU for Mesa on the Adreno 660 (requires display and input; boot-arg asusgpu=10)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -69,6 +73,7 @@ jobs:
           if [ '${{ inputs.ufs }}' = true ]; then args+=(--ufs); fi
           if [ '${{ inputs.smp }}' = true ]; then args+=(--smp); fi
           if [ '${{ inputs.amp }}' = true ]; then args+=(--amp); fi
+          if [ '${{ inputs.gpu }}' = true ]; then args+=(--gpu); fi
           python3 tools/prepare-asus-profile.py dxb "${args[@]}"
       - name: Select matching Xcode and dependencies
         run: |
