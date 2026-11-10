@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2812 @@
+@@ -0,0 +1,3201 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23160,7 +23160,14 @@
 +ptTable(Pt *t, uint64_t *pa)
 +{
 +	if (t->used >= 64) {
-+		return NULL;
++		/* the driver interface maps far more than the bring-up buffers: another chunk (the
++		 * old one stays referenced by the tables above it and is never freed) */
++		GBuf more = {};
++		if (!gbufAlloc(&more, 64 * 4096, 0)) {
++			return NULL;
++		}
++		t->chunk = more;
++		t->used = 0;
 +	}
 +	uint64_t *v = (uint64_t *)(t->chunk.va + 4096 * t->used);
 +	*pa = t->chunk.pa + 4096 * t->used;
@@ -23868,6 +23875,385 @@
 +}
 +
 +/*
++ * Stage 10 (asusgpu>=10): the GPU stays on and answers the hardware interface of topaz's
++ * RedwoodGPU.cpp (the msm DRM user client Mesa freedreno talks to): GPU addresses, pages
++ * into the context bank's tables, indirect buffers with a fence. As TopazAdreno.cpp without
++ * its pass-through mode: here the SMMU translates and reaches all of DRAM (36-bit output).
++ * The fence is the submission's number, written by CACHE_FLUSH_TS into the scratch page.
++ */
++extern "C" {
++bool redwood_gpu_ready(void);
++bool redwood_gpu_identity(void);
++bool redwood_gpu_parameter(uint32_t which, uint64_t *value);
++uint64_t redwood_gpu_address(uint64_t size);
++void redwood_gpu_address_free(uint64_t address, uint64_t size);
++bool redwood_gpu_map(uint64_t address, uint64_t phys, bool read_only);
++void redwood_gpu_mapped(void);
++void redwood_gpu_unmap(uint64_t address, uint64_t size);
++void redwood_gpu_to_memory(void *start, uint64_t size);
++uint32_t redwood_gpu_submit(const uint64_t *addresses, const uint32_t *words, uint32_t count);
++bool redwood_gpu_done(uint32_t fence);
++uint32_t redwood_gpu_last(void);
++void redwood_gpu_worked(uint64_t *microseconds, uint32_t *submissions, uint32_t by[7]);
++void redwood_gpu_report(const char *why);
++void redwood_gpu_stop(void);
++void redwood_tl(const char *format, ...) __printflike(1, 2);
++uint32_t gpu_log;
++}
++
++namespace {
++const uint64_t kGpuVaStart = 0x20000000ull, kGpuVaEnd = 0xf0000000ull;  /* bring-up buffers sit at 0x10000000 */
++const uint32_t kFenceOffset = 0x100;            /* in the scratch page; word 0 keeps the stage 9 marker */
++IOMemoryMap *gGpuRegs, *gGpuSmmu;
++uint32_t gGpuCb;                                /* our context bank's page in the SMMU map */
++IOLock *gGpuLock;
++bool gGpuReady, gGpuPtDirty;
++uint32_t gGpuSeqno;
++struct { uint64_t start, size; } gGpuVaFree[1024];
++unsigned gGpuVaFreeCount;
++
++void
++gpuTlbFlush(void)
++{
++	volatile uint8_t *b = (volatile uint8_t *)gGpuSmmu->getVirtualAddress() + gGpuCb;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	*(volatile uint32_t *)(b + 0x618) = 0;          /* CB_TLBIALL */
++	*(volatile uint32_t *)(b + 0x7f0) = 0;          /* CB_TLBSYNC */
++	for (unsigned i = 0; i < 1000 && (*(volatile uint32_t *)(b + 0x7f4) & 1); i++) {
++		IODelay(1);
++	}
++}
++
++uint32_t
++gpuRingFree(void)
++{
++	uint32_t r = gpuR(gGpuRegs, 0x806), w = gWptr % kRingDwords;
++	return (r + kRingDwords - w - 1) % kRingDwords;
++}
++}
++
++bool
++redwood_gpu_ready(void)
++{
++	return gGpuReady;
++}
++
++bool
++redwood_gpu_identity(void)
++{
++	return false;
++}
++
++bool
++redwood_gpu_parameter(uint32_t which, uint64_t *value)
++{
++	switch (which) {
++	case 0x01: *value = 660; return true;                   /* GPU_ID */
++	case 0x02: *value = 0x180000; return true;              /* GMEM_SIZE: 1 MiB + 512 KiB (a6xx_catalog a660) */
++	case 0x03: *value = 0x06060001; return true;            /* CHIP_ID (Android DT qcom,chipid) */
++	case 0x04: *value = 315000000ull; return true;          /* MAX_FREQ: the level the GMU was asked for */
++	case 0x05:                                              /* TIMESTAMP: CP always-on counter */
++		*value = gGpuReady ? ((uint64_t)gpuR(gGpuRegs, 0x981) << 32 | gpuR(gGpuRegs, 0x980)) : 0;
++		return true;
++	case 0x06: *value = 0; return true;                     /* GMEM_BASE: 0 for the a650 family */
++	case 0x07: *value = 1; return true;                     /* PRIORITIES */
++	case 0x08: case 0x09: case 0x0a: case 0x11:             /* PP_PGTABLE FAULTS SUSPENDS RAYTRACING */
++		*value = 0;
++		return true;
++	case 0x10: *value = 16; return true;                    /* HIGHEST_BANK_BIT (a6xx_calc_ubwc_config a660) */
++	case 0x12: *value = 6; return true;                     /* UBWC_SWIZZLE */
++	case 0x13: *value = 1; return true;                     /* MACROTILE_MODE */
++	default:
++		return false;                                   /* VA_START/VA_SIZE: addresses are ours to give */
++	}
++}
++
++uint64_t
++redwood_gpu_address(uint64_t size)
++{
++	size = (size + 0xffff) & ~0xffffull;
++	for (unsigned i = 0; i < gGpuVaFreeCount; i++) {
++		if (gGpuVaFree[i].size >= size) {
++			uint64_t address = gGpuVaFree[i].start;
++			gGpuVaFree[i].start += size;
++			gGpuVaFree[i].size -= size;
++			if (gGpuVaFree[i].size == 0) {
++				memmove(&gGpuVaFree[i], &gGpuVaFree[i + 1], (--gGpuVaFreeCount - i) * sizeof(gGpuVaFree[0]));
++			}
++			return address;
++		}
++	}
++	return 0;
++}
++
++void
++redwood_gpu_address_free(uint64_t address, uint64_t size)
++{
++	unsigned at;
++
++	size = (size + 0xffff) & ~0xffffull;
++	for (at = 0; at < gGpuVaFreeCount && gGpuVaFree[at].start < address; at++) {
++	}
++	if (at > 0 && gGpuVaFree[at - 1].start + gGpuVaFree[at - 1].size == address) {
++		gGpuVaFree[at - 1].size += size;
++		if (at < gGpuVaFreeCount && address + size == gGpuVaFree[at].start) {
++			gGpuVaFree[at - 1].size += gGpuVaFree[at].size;
++			memmove(&gGpuVaFree[at], &gGpuVaFree[at + 1], (--gGpuVaFreeCount - at) * sizeof(gGpuVaFree[0]));
++		}
++	} else if (at < gGpuVaFreeCount && address + size == gGpuVaFree[at].start) {
++		gGpuVaFree[at].start = address;
++		gGpuVaFree[at].size += size;
++	} else if (gGpuVaFreeCount < sizeof(gGpuVaFree) / sizeof(gGpuVaFree[0])) {
++		memmove(&gGpuVaFree[at + 1], &gGpuVaFree[at], (gGpuVaFreeCount - at) * sizeof(gGpuVaFree[0]));
++		gGpuVaFreeCount++;
++		gGpuVaFree[at].start = address;
++		gGpuVaFree[at].size = size;
++	}
++}
++
++/* One 4 KiB page into the context bank's tables; the walker reads DRAM, so every touched entry is flushed. */
++bool
++redwood_gpu_map(uint64_t address, uint64_t phys, bool read_only)
++{
++	uint32_t i1 = (uint32_t)(address >> 30), i2 = (uint32_t)((address >> 21) & 511), i3 = (uint32_t)(address >> 21);
++	if (i1 >= 4 || (phys >> 36) != 0) {
++		return false;
++	}
++	bool hadL2 = gGpuPt.l2[i1] != NULL, hadL3 = gGpuPt.l3[i3] != NULL;
++	if (!ptMap(&gGpuPt, address, phys, false)) {
++		return false;
++	}
++	uint64_t *e = &gGpuPt.l3[i3][(address >> 12) & 511];
++	if (read_only) {
++		*e |= 1ull << 7;                        /* AP[2]: read-only */
++	}
++	flush_dcache64((addr64_t)(uintptr_t)e, 8, FALSE);
++	if (!hadL3) {
++		flush_dcache64((addr64_t)(uintptr_t)&gGpuPt.l2[i1][i2], 8, FALSE);
++	}
++	if (!hadL2) {
++		flush_dcache64((addr64_t)(uintptr_t)&gGpuPt.l1[i1], 8, FALSE);
++	}
++	gGpuPtDirty = true;
++	return true;
++}
++
++void
++redwood_gpu_mapped(void)
++{
++	if (gGpuPtDirty && gGpuSmmu != NULL) {
++		gGpuPtDirty = false;
++		gpuTlbFlush();
++	}
++}
++
++void
++redwood_gpu_unmap(uint64_t address, uint64_t size)
++{
++	for (uint64_t off = 0; off < size; off += 4096) {
++		uint64_t va = address + off;
++		uint32_t i3 = (uint32_t)(va >> 21);
++		if ((va >> 32) == 0 && gGpuPt.l3[i3] != NULL) {
++			uint64_t *e = &gGpuPt.l3[i3][(va >> 12) & 511];
++			*e = 0;
++			flush_dcache64((addr64_t)(uintptr_t)e, 8, FALSE);
++		}
++	}
++	if (gGpuSmmu != NULL) {
++		gpuTlbFlush();
++	}
++}
++
++void
++redwood_gpu_to_memory(void *start, uint64_t size)
++{
++	if (start != NULL && size != 0) {
++		flush_dcache64((addr64_t)(uintptr_t)start, (unsigned)size, FALSE);     /* clean + invalidate */
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++bool
++redwood_gpu_done(uint32_t fence)
++{
++	if (gScratch.va == NULL) {
++		return false;
++	}
++	flush_dcache64((addr64_t)(uintptr_t)(gScratch.va + kFenceOffset), 64, FALSE);
++	return (int32_t)(*(volatile uint32_t *)(gScratch.va + kFenceOffset) - fence) >= 0;
++}
++
++uint32_t
++redwood_gpu_last(void)
++{
++	return gGpuSeqno;
++}
++
++void
++redwood_gpu_worked(uint64_t *microseconds, uint32_t *submissions, uint32_t by[7])
++{
++	*microseconds = 0;
++	*submissions = 0;
++	bzero(by, 7 * sizeof(uint32_t));
++}
++
++/* The indirect buffers, then CACHE_FLUSH_TS writing the submission's number. 0: not ready or the ring is full. */
++uint32_t
++redwood_gpu_submit(const uint64_t *addresses, const uint32_t *words, uint32_t count)
++{
++	uint32_t need = 4 * count + 5;
++
++	if (!gGpuReady || need >= kRingDwords) {
++		return 0;
++	}
++	IOLockLock(gGpuLock);
++	for (int spin = 0; gpuRingFree() < need && spin < 20000; spin++) {
++		IODelay(100);
++	}
++	if (gpuRingFree() < need) {
++		IOLockUnlock(gGpuLock);
++		return 0;
++	}
++	for (uint32_t i = 0; i < count; i++) {
++		ringEmit(pkt7(0x3f, 3));                /* CP_INDIRECT_BUFFER */
++		ringEmit((uint32_t)addresses[i]);
++		ringEmit((uint32_t)(addresses[i] >> 32));
++		ringEmit(words[i]);
++	}
++	if (++gGpuSeqno == 0) {
++		gGpuSeqno = 1;
++	}
++	uint32_t fence = gGpuSeqno;
++	ringEmit(pkt7(0x46, 4));                        /* CP_EVENT_WRITE */
++	ringEmit(4);                                    /* CACHE_FLUSH_TS */
++	ringEmit((uint32_t)(gScratch.iova + kFenceOffset));
++	ringEmit((uint32_t)((gScratch.iova + kFenceOffset) >> 32));
++	ringEmit(fence);
++	flush_dcache64((addr64_t)(uintptr_t)gRing.va, (unsigned)gRing.size, FALSE);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	gpuW(gGpuRegs, 0x807, gWptr % kRingDwords);     /* CP_RB_WPTR */
++	IOLockUnlock(gGpuLock);
++	return fence;
++}
++
++void
++redwood_gpu_report(const char *why)
++{
++	if (gGpuRegs == NULL || gGpuSmmu == NULL) {
++		return;
++	}
++	volatile uint8_t *sb = (volatile uint8_t *)gGpuSmmu->getVirtualAddress();
++	uint64_t ib1 = gpuR(gGpuRegs, 0x928) | ((uint64_t)gpuR(gGpuRegs, 0x929) << 32);
++	flush_dcache64((addr64_t)(uintptr_t)(gScratch.va + kFenceOffset), 64, FALSE);
++	amark("ASUS GPU: %s: fence %u done %u rptr %u wptr %u RBBM_STATUS %#x CP_HW_FAULT %#x INT0 %#x IB1 %#llx rem %u\n", why,
++	    gGpuSeqno, *(volatile uint32_t *)(gScratch.va + kFenceOffset), gpuR(gGpuRegs, 0x806), gWptr % kRingDwords,
++	    gpuR(gGpuRegs, 0x210), gpuR(gGpuRegs, 0x821), gpuR(gGpuRegs, 0x201), ib1, gpuR(gGpuRegs, 0x92a));
++	amark("ASUS GPU: %s: SMMU sGFSR %#x CB FSR %#x FAR %#x%08x FSYNR0 %#x\n", why, *(volatile uint32_t *)(sb + 0x48),
++	    *(volatile uint32_t *)(sb + gGpuCb + 0x58), *(volatile uint32_t *)(sb + gGpuCb + 0x64),
++	    *(volatile uint32_t *)(sb + gGpuCb + 0x60), *(volatile uint32_t *)(sb + gGpuCb + 0x68));
++}
++
++void
++redwood_gpu_stop(void)
++{
++	if (gGpuReady) {
++		gpuW(gGpuRegs, 0x808, 0);               /* CP_SQE_CNTL */
++	}
++	gGpuReady = false;
++}
++
++void
++redwood_tl(const char *format, ...)
++{
++	(void)format;
++}
++
++/*
++ * The interface on, then its own test: a buffer at a GPU address from the allocator, an
++ * indirect buffer in its first page (CP_MEM_WRITE of a marker into its second page, then
++ * CP_NOP padding), submitted with a fence.
++ */
++static bool
++gpuDriverStart(IOMemoryMap *gpu, IOMemoryMap *s, uint32_t cb)
++{
++	static GBuf test;
++	gpu->retain();
++	s->retain();
++	gGpuRegs = gpu;
++	gGpuSmmu = s;
++	gGpuCb = cb;
++	gGpuLock = IOLockAlloc();
++	gGpuVaFreeCount = 0;
++	redwood_gpu_address_free(kGpuVaStart, kGpuVaEnd - kGpuVaStart);
++	*(volatile uint32_t *)(gScratch.va + kFenceOffset) = 0;
++	flush_dcache64((addr64_t)(uintptr_t)gScratch.va, 4096, FALSE);
++	gGpuReady = gGpuLock != NULL;
++	amark("ASUS GPU: stage 10: interface on (GPU VA %#llx-%#llx), indirect buffer test\n", kGpuVaStart, kGpuVaEnd);
++	if (!gGpuReady || !gbufAlloc(&test, 2 * 4096, 0)) {
++		amark("ASUS GPU: stage 10: no lock or test buffer\n");
++		gGpuReady = false;
++		return false;
++	}
++	uint64_t va = redwood_gpu_address(test.size);
++	bool mapped = va != 0;
++	for (uint64_t off = 0; mapped && off < test.size; off += 4096) {
++		mapped = redwood_gpu_map(va + off, test.pa + off, false);
++	}
++	redwood_gpu_mapped();
++	if (!mapped) {
++		amark("ASUS GPU: stage 10: mapping the test buffer at %#llx failed\n", va);
++		gGpuReady = false;
++		return false;
++	}
++	uint32_t *ib = (uint32_t *)test.va;
++	ib[0] = pkt7(0x3d, 3);                          /* CP_MEM_WRITE */
++	ib[1] = (uint32_t)(va + 4096);
++	ib[2] = (uint32_t)((va + 4096) >> 32);
++	ib[3] = 0xfeedc0de;
++	ib[4] = pkt7(0x10, 2);                          /* CP_NOP with two payload words */
++	ib[5] = 0;
++	ib[6] = 0;
++	redwood_gpu_to_memory(test.va, test.size);
++	uint32_t words = 7;
++	uint32_t fence = redwood_gpu_submit(&va, &words, 1);
++	bool done = false;
++	for (unsigned i = 0; fence != 0 && !done && i < 10000; i++) {
++		done = redwood_gpu_done(fence);
++		if (!done) {
++			IODelay(100);
++		}
++	}
++	flush_dcache64((addr64_t)(uintptr_t)test.va, (unsigned)test.size, FALSE);
++	uint32_t got = *(volatile uint32_t *)(test.va + 4096);
++	amark("ASUS GPU: stage 10: IB at %#llx (pa %#llx): fence %u %s, wrote %#x (want 0xfeedc0de): %s\n", va, test.pa, fence,
++	    done ? "done" : "NOT done", got, done && got == 0xfeedc0de ? "the GPU runs indirect buffers" : "FAILED");
++	if (!done || got != 0xfeedc0de) {
++		redwood_gpu_report("stage 10");
++		gGpuReady = false;
++		return false;
++	}
++	/* a second one: the fence must move on, and unmapping must not disturb the ring */
++	ib[3] = 0x0badcafe;
++	redwood_gpu_to_memory(test.va, test.size);
++	fence = redwood_gpu_submit(&va, &words, 1);
++	done = false;
++	for (unsigned i = 0; fence != 0 && !done && i < 10000; i++) {
++		done = redwood_gpu_done(fence);
++		if (!done) {
++			IODelay(100);
++		}
++	}
++	flush_dcache64((addr64_t)(uintptr_t)test.va, (unsigned)test.size, FALSE);
++	got = *(volatile uint32_t *)(test.va + 4096);
++	redwood_gpu_unmap(va, test.size);
++	redwood_gpu_address_free(va, test.size);
++	amark("ASUS GPU: stage 10: second IB: fence %u %s, wrote %#x (want 0xbadcafe); test buffer unmapped; ready %d\n", fence,
++	    done ? "done" : "NOT done", got, done && got == 0x0badcafe);
++	gGpuReady = done && got == 0x0badcafe;
++	return gGpuReady;
++}
++
++/*
 + * Stage 7 (asusgpu>=7): Linux a6xx hw_init for the A660 without clock gating, CP
 + * protection or APRIV (as topaz's A610 path): GBIF, 64-bit addressing, UCHE, ROQ,
 + * UBWC (hbb 16, amsbc, rgb565 predicator, uavflagprd 2, macrotile 1), then the SQE
@@ -23875,7 +24261,7 @@
 + * SMMU context for stream 0 (gfx3d_user), CP_SQE_CNTL, CP_ME_INIT.
 + * Stage 8 (asusgpu>=8): the zap shader through TrustZone (PAS 13, region 0x8b51a000)
 + * and CP_SET_SECURE_MODE 0. Stage 9 (asusgpu>=9): CP_MEM_WRITE of a marker into a
-+ * scratch page: the GPU executes our commands.
++ * scratch page: the GPU executes our commands. Stage 10 (asusgpu>=10): see gpuDriverStart().
 + */
 +void
 +AsusPhoneInput::gpuStage7(IOMemoryMap *gpu)
@@ -24111,6 +24497,9 @@
 +	flush_dcache64((addr64_t)(uintptr_t)gScratch.va, 4096, FALSE);
 +	amark("ASUS GPU: CP_MEM_WRITE %s: scratch[0] = %#x (want 0x600dbeef)\n", ok ? "done" : "FAILED",
 +	    *(volatile uint32_t *)gScratch.va);
++	if (ok && stage >= 10 && *(volatile uint32_t *)gScratch.va == 0x600dbeef) {
++		gpuDriverStart(gpu, s, cb);
++	}
 +	s->release();
 +}
 +
