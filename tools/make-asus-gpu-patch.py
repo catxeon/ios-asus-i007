@@ -103,6 +103,59 @@ topaz_gpu_midmem(void)
 	return false;
 }
 ''')
+# ASUS: buffers are ordinary cached memory (gpu_cached=1; the write-combined kind panicked in
+# image 0065: XNU made them contiguous from RAM it does not manage). submit() pushes what this
+# processor wrote out of its caches before the GPU runs; nothing made it drop what its caches
+# held of what the GPU then wrote. Images 0063-0066: frames drawn (a 1x1 glReadPixels of the
+# middle: 0 0 135 255), but a full-frame read and the display's copy saw zeros. Now, as Linux
+# msm does for cached buffers (sync for the CPU), once the GPU is done: before the display
+# copies a surface the GPU drew, and when a program prepares to read a buffer.
+gpu = once(gpu, '''	if (fence != 0 && gGPULock != NULL) {
+		IOLockLock(gGPULock);
+		done = !redwood_gpu_ready() || gpuWait(fence, milliseconds);
+		IOLockUnlock(gGPULock);
+	}
+	return done;
+}
+''', '''	if (fence != 0 && gGPULock != NULL) {
+		IOLockLock(gGPULock);
+		done = !redwood_gpu_ready() || gpuWait(fence, milliseconds);
+		IOLockUnlock(gGPULock);
+	}
+	/* ASUS: the GPU wrote it behind this processor's caches: what they still hold of it is old */
+	if (fence != 0 && done && surface->kernelAddress() != 0) {
+		static uint32_t shown;
+		uint8_t * pixels = (uint8_t *) surface->kernelAddress();
+
+		redwood_gpu_to_memory(pixels, surface->allocSize);
+		if (shown++ % 300 == 0 && shown < 6000 && surface->bytesPerRow != 0 && surface->height != 0) {
+			uint32_t middle = *(volatile uint32_t *) (pixels + surface->offset + (uint64_t) surface->bytesPerRow *
+			    (surface->height / 2) + 4ull * (surface->width / 2));
+			IOLog("RedwoodGPU: surface %u (%ux%u) shown after submission %u: middle pixel %08x\\n", surface->id,
+			    surface->width, surface->height, fence, middle);
+		}
+	}
+	return done;
+}
+''')
+gpu = once(gpu, '''		if (!gpuWait(redwood_gpu_last(), patience)) {
+			ret = kIOReturnBusy;
+			if (patience == 0 && !(r.cpuPrep.op & MSM_PREP_NOSYNC)) {
+				waitOver(&r.cpuPrep.timeout, redwood_gpu_last());
+			}
+		}
+		IOLockUnlock(gGPULock);
+''', '''		if (!gpuWait(redwood_gpu_last(), patience)) {
+			ret = kIOReturnBusy;
+			if (patience == 0 && !(r.cpuPrep.op & MSM_PREP_NOSYNC)) {
+				waitOver(&r.cpuPrep.timeout, redwood_gpu_last());
+			}
+		} else if ((r.cpuPrep.op & 1 /* MSM_PREP_READ */) && (b = buffer(r.cpuPrep.handle)) != NULL && b->kernel != NULL) {
+			/* ASUS: the program is about to read what the GPU wrote, not what this processor's caches hold */
+			redwood_gpu_to_memory(b->kernel, b->size);
+		}
+		IOLockUnlock(gGPULock);
+''')
 new_file = 'diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n' % (
     ARM + 'RedwoodGPU.cpp', ARM + 'RedwoodGPU.cpp', ARM + 'RedwoodGPU.cpp', gpu.count('\n'))
 new_file += ''.join('+' + l for l in gpu.splitlines(True))
