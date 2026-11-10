@@ -873,6 +873,18 @@
     classifier refused that override: needs the user's decision.
   - Image 0066 built, NOT booted (0063 + `gltrace=1200-1200 gltrace_lit=1`, SHA256
     1203ab7d...794f): a home-screen frame traced on the default (cached) path.
+  - **0066 (user OK "Запускай, журнал починит", booted on the dirty journaled root,
+    2026-11-10 22:23; user: black screen):** journal replay worked (`jnl: b(2, 0):
+    replay_journal: from: 2715136 to: 3726848`, `journal replay done`, mounted, root clean +
+    journaled after the run). Frame 1200 (home screen): after every draw the 1x1 read of
+    the middle is `0 0 135 255` (dark blue, opaque), but the full-frame read in the same
+    trace counts `0 pixels not black`. So the GPU draws; what the CPU reads of big
+    GPU-written buffers is stale (zeros). Cause: buffers are cached memory and RedwoodGPU
+    only cleans/invalidates in submit(), before the GPU runs; nothing invalidates after.
+  - Fix (commit 6ca3832, kernel CI 42889848301): topaz_surface_drawn() cleans+invalidates a
+    GPU-drawn surface before the display copies it (and logs its middle pixel every 300
+    shows: `RedwoodGPU: surface N (WxH) shown after submission F: middle pixel ...`);
+    cpu_prep with MSM_PREP_READ does the same for the buffer (Linux msm: sync for CPU).
 - NEXT (GPU, kernel side, superseded by the lines above): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
