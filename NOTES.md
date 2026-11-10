@@ -664,6 +664,40 @@
   NEXT: `ASUS_ALLOW_DIRTY_ROOT=1 tools/asus-phone-cycle.sh
   shim/asus-xnu/out/asus-i007-xnu-0056.img ../phone-0056 600` with the user at the phone;
   ask the user afterwards whether the phone reset itself or needed the power key.
+- **MILESTONE: THE ADRENO 660 CP RUNS UNDER XNU (image 0056, lab, kernel 42756929160,
+  asusgpu=7, 2026-11-10 08:04 local; no EDL, the user watched the screen: ASUS GPU lines,
+  then "ASUS init: still alive"; self-reset, Android back after 186 s).** Log
+  ../phone-0056/log.txt: `SMMU readback: stream 0 SMR4 0x84000000 S2CR 0, stream 1 SMR3
+  0x84000001 S2CR 0: both taken`; `stage 7 cp 3: CP_SQE_CNTL = 1`; `SQE running?
+  CP_SQE_STAT 0xb6 RBBM_STATUS 0x1 CP_HW_FAULT 0 sGFSR 0 CB FSR 0x400`; `CP_ME_INIT DONE:
+  rptr 9 RBBM_STATUS 0x1 CP_HW_FAULT 0 SMMU CB0 FSR 0x400` (FAR is stale garbage; FSR
+  0x400 is the same bit as before the start). Touch bring-up afterwards works as usual.
+  - Confirmed: the stage-7 EDLs were SMMU stream matching, not the CP sequence. The rule
+    for this SoC: every stream a device can emit must have its own SMR before the device
+    does DMA (GPU: id 0 and id 1, mask 0x400; GMU: id 5, mask 0x400), written exactly as
+    the DT lists them (a wider mask was dropped), and read back. The same very likely
+    explains the GPI EDL (apps SMMU, stream 0x5b6): worth revisiting for fast I2C later.
+  - The user allowed (2026-11-10, while away at work) running further GPU lab images
+    unattended; on an EDL stop phone work until the user is back (power-key reset).
+- **MILESTONE: THE GPU EXECUTES OUR COMMANDS (image 0057, lab, same kernel, asusgpu=9,
+  2026-11-10 08:08 local, unattended; self-reset, Android back after 186 s).** Log
+  ../phone-0057/log.txt: stage 7 as 0056 (`CP_ME_INIT DONE: rptr 9`); stage 8 `zap layout
+  min 0x5000 max 0x6000 seg 0x5000 (b02 1976 bytes)`, `zap init_image 0/0`, `zap mem_setup
+  0/0`, `zap auth_and_reset 0/0`, `zap authenticated`, `CP_SET_SECURE_MODE 0 DONE`; stage 9
+  `CP_MEM_WRITE done: scratch[0] = 0x600dbeef (want 0x600dbeef)`. So the TrustZone PIL
+  calls (PAS 13, region 0x8b51a000, metadata = the .mdt as is) work from XNU, the GPU is
+  out of secure mode and writes through our CB0 page tables. Clean reboot at 120 s (the
+  "initproc failed" line is the lab RAM root, as before).
+- GPU bring-up recipe that works (stages 1-9 in AsusPhoneInput.cpp, all on kernel
+  42756929160): GCC/GPU_CC clocks + CX GDSC; GMU firmware from the iosroot firmware area
+  behind SMR5 (id 5, mask 0x400) -> CB6; HFI v2 start, perf/bw tables, perf vote; OOB
+  GPU_SET (GX on); SMR4/SMR3 (ids 0, 1, mask 0x400) -> CB0 with SCTLR 0x167; hw_init
+  registers; SQE + 32 KiB ring; CP_ME_INIT; zap; CP_SET_SECURE_MODE 0.
+- NEXT (GPU, kernel side): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
+  interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
+  stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
+  it and a kernel self-test that submits an indirect buffer. Userland after that: EAGL
+  layer + injector + files in iosroot (writing the root needs the user's OK).
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
