@@ -862,6 +862,17 @@
     Mesa's buffers write-combined instead of cached-and-flushed (takes CPU/GPU cache
     coherency of vertex/texture/staging buffers out of the picture; also removes the 25 MB
     flush per submission) and a trace of frame 1200 (home screen, during the swipes).
+  - **0065 result: kernel panic ~90 s after boot**, right after `RedwoodGPU: client
+    backboardd (open 1)`: `phystokv_range: illegal PA: 0x7ee88000; phys base 0x140000000,
+    size 0x100000000 @arm_vm_init.c:406`. gpu_cached=0 makes gemNew allocate
+    write-combined IOBMDs, which XNU makes physically contiguous from RAM the kernel does
+    not manage (below 0x140000000), as topaz warned. Unusable as is; a WC path would need
+    non-contiguous kernel memory mapped WC to the client. PSCI reset worked; root now
+    "DIRTY, journaled" (attr 0x80002000): journal replay expected at the next mount, but
+    asus-phone-cycle.sh refuses dirty roots without ASUS_ALLOW_DIRTY_ROOT=1, and the auto-mode
+    classifier refused that override: needs the user's decision.
+  - Image 0066 built, NOT booted (0063 + `gltrace=1200-1200 gltrace_lit=1`, SHA256
+    1203ab7d...794f): a home-screen frame traced on the default (cached) path.
 - NEXT (GPU, kernel side, superseded by the lines above): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
