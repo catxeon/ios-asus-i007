@@ -847,6 +847,21 @@
   the binning pass) to split VSC from GMEM itself, then Linux's a660 hwcg table (not
   written by stage 7; Linux a6xx_set_hwcg + a660_hwcg, gmu_cgc_mode 0x00020200 for a660);
   (c) the 25 MB flush: buffers made write-combined instead of cached-and-flushed.
+- **But the screen stays black (user, 0062/0063/0064).** In 0063 the display swaps BGRA
+  surfaces 2-5 ~20/s (`ASUS FB: swap ... fmt 0x42475241`), so frames reach the panel; they
+  are empty. Not the kernel's cache maintenance: SWEET does not define __ARM_COHERENT_IO__
+  (only __ARM_COHERENT_CACHE__), so flush_dcache64 is the real by-VA dc civac here (topaz
+  made it a no-op later and added sweet_dcache_*).
+  - **0064** (0063 + `glcopy=1 gltrace_at=300 gltrace_lit=1`; image 7086065c...; user: still
+    black): frames go to the surfaces by glReadPixels (CPU) instead of the GPU blit
+    (`attachImage: ... a copy`, frame lines "1 picture copied out"), still black. The traced
+    frame was frame 3 (only 3 frames in the first 300 s of the window server): 3
+    full-screen quads with texture 4 (1125x2436 BGRA), framebuffer read back after each:
+    `middle 0 0 0 0 ... 0 pixels not black` (alpha 0 too). Too early a frame to conclude.
+  - **0065** (0063 + `gpu_cached=0 gltrace=1200-1200 gltrace_lit=1`; image f39030e2...):
+    Mesa's buffers write-combined instead of cached-and-flushed (takes CPU/GPU cache
+    coherency of vertex/texture/staging buffers out of the picture; also removes the 25 MB
+    flush per submission) and a trace of frame 1200 (home screen, during the swipes).
 - NEXT (GPU, kernel side, superseded by the lines above): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
