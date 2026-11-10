@@ -17,6 +17,9 @@ on:
       gpu_wait_tenths:
         description: How long backboardd waits for the kernel's GPU service, in 0.1 s
         default: '600'
+      runner:
+        description: Runner label (macos-15 = arm64; macos-15-intel when arm64 runners have no capacity)
+        default: macos-15
 
 permissions:
   contents: read
@@ -28,7 +31,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
