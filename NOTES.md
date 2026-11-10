@@ -163,8 +163,9 @@ are inert without the topaz_inject boot-arg). The WSL copy ~/asus-roots/iosroot-
 the root as of 19:13 + /asus/lib, NOT current (iOS boots since then changed the root):
 re-pull before preparing any block patch. User permissions given 2026-11-10: lab images
 unattended; the /asus/lib write and the GPU iOS boots; booting once on the dirty journaled
-root after the 0065 panic (journal replay worked). Ask again for anything else that writes
-the root. The auto-mode classifier refused asus-iosroot-blockpatch.py (even read-only) and
+root after the 0065 panic (journal replay worked). 2026-11-11: 0068 on the dirty root ("Да,
+запускай 0068"); lab images without asking each time, confirmed again ("Да, без спроса").
+Ask again for anything else that writes the root, and for every iOS boot. The auto-mode classifier refused asus-iosroot-blockpatch.py (even read-only) and
 ASUS_ALLOW_DIRTY_ROOT=1 without an explicit user OK.
 
 **Tooling quirks:** Git Bash rewrites "/"-looking arguments (a jq filter `"/"` became
