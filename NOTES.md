@@ -80,8 +80,34 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
     (2D solid fill of a 1125x2436 linear buffer, checked by the CPU) for lab images.
   - **Image 0068 built, NOT booted**: shim/asus-xnu/out/asus-i007-xnu-0068.img, SHA256
     76e1d467...ac03, kernel CI 42889848301 (6ca3832), 0067's recipe + `gltrace=1200-1200
-    gltrace_lit=1` (boot-args 521 chars). Booting it needs the user's OK: the root is
-    dirty (ASUS_ALLOW_DIRTY_ROOT=1), and the phone must be left alone for the full 1568 s.
+    gltrace_lit=1` (boot-args 521 chars).
+  - **0068 booted 2026-11-11 00:01:48 (user OK "Да, запускай 0068", dirty root), clean
+    reboot after 1568 s, ../phone-0068/log.txt (3751 lines).** Journal replay worked
+    (`replay_journal: from: 4268032 to: 5664768`, `journal replay done`); root after the
+    run: clean, journaled. 19.4 fps between swipe rounds 1 and 30 (the trace frame included).
+    - Kernel, after clean+invalidate of the surface: all 7 lines `surface N (1125x2436)
+      shown after submission F: middle pixel 00000000` (surfaces 2, 324, 628, 935, 1544,
+      2154; submissions 3 to 7062, i.e. through the home screen and the swipes).
+    - Mesa, frame 1200 with cpu_prep(READ) now invalidating: 79 read-backs, every one
+      `0 pixels not black`. Framebuffer 1623 (1125x2436): `middle 0 0 135 255, an eighth up
+      0 0 0 0` after each of its 54 draws (the same value as 0066's framebuffer 1616).
+      All eleven smaller framebuffers (70x29 to 466x465): `middle 0 0 0 0`, among them
+      framebuffer 1578 (466x465) right after a quad that covers it with texture 2900.
+    - So: **not CPU cache staleness** (6ca3832 changes nothing), and not only big buffers:
+      no read-back at any size shows a pixel a draw wrote. Guess: `0 0 135 255` is not a
+      pixel (identical in two boots and two framebuffers, unchanged by draws that cover it).
+      Either the RB writes nothing to memory (3D draws and 2D blits alike) or nothing is
+      rasterized; the CP side (IBs, CP_MEM_WRITE, CACHE_FLUSH_TS fences) works. The GMEM
+      hang (CP waits for a bin's visibility stream, 3D blocks idle) fits the same picture.
+    - Stage 7 against Linux a6xx_hw_init (from memory of the Linux source, to be checked
+      against ~/linux-msm): same register list except hwcg, CP protect, CP_APRIV_CNTL and
+      RBBM_INT_0_MASK; redwood_gpu_submit does not emit Linux's two PC_CCU_INVALIDATE
+      events before the IBs.
+    - Next: stop testing through iOS (26 min a run, nothing visible). A kernel self-test
+      for lab images (2 min a run): CP_MEM_WRITE into pages spread over a 14 MB buffer made
+      and mapped as gemNew does; a 2D solid fill (CP_BLIT) of it as 1125x2436 BGRA with
+      4544-byte rows, pixels counted by the CPU; the context bank's FSR/FAR/FSYNR0,
+      RBBM_STATUS, RBBM_INT_0_STATUS and CP_HW_FAULT after each.
 
 **Open problem 2: GMEM (tiled + binning) hangs the CP** (0061/0062, decoded in "Image
 0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
