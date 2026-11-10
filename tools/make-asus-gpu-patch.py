@@ -155,6 +155,27 @@ c1 = once(c1, '''			bzero(mem->getBytesNoCopy(), s->allocSize);
 ''')
 if '#include <pexpert/pexpert.h>' not in c1:
     c1 = once(c1, '#include <IOKit/IOLocks.h>\n', '#include <IOKit/IOLocks.h>\n#include <pexpert/pexpert.h>\n')
+# As topaz 0900 (from HackiOS): image 0061, CoreAnimation's OpenGL ES renderer on the iPhone X
+# asked for 'b3a8' screens (30-bit RGB + an 8-bit alpha plane), which eagl.c does not attach
+# (all draws GL_INVALID_FRAMEBUFFER_OPERATION) and the panel (8-bit) cannot show.
+c1 = once(c1, '''	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
+''', '''	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
+	/*
+	 * (topaz 0900, from HackiOS) 10-bit formats a wide-gamut iPhone asks for ('w30r', 'l10r',
+	 * 'w30R' and 'b3a8' with its separate alpha plane): neither the GL layer nor the panel
+	 * (8-bit) takes them. Made as one-plane BGRA, which the client reads back.
+	 */
+	bool one_plane = false;
+	if (s->pixelFormat == 0x77333072u || s->pixelFormat == 0x6C313072u || s->pixelFormat == 0x77333052u) {
+		s->pixelFormat = 0x42475241u;           /* BGRA */
+	} else if (s->pixelFormat == 0x62336138u) {
+		s->pixelFormat = 0x42475241u;
+		one_plane = true;
+	}
+''')
+c1 = once(c1, '''	OSArray *planes = OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
+''', '''	OSArray *planes = one_plane ? NULL : OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
+''')
 
 # ---------------------------------------------------------------- SweetFramebuffer.cpp
 f0 = created('9999-asus-i007-display.patch', ARM + 'SweetFramebuffer.cpp')

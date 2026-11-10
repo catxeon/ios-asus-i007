@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,3201 @@
+@@ -0,0 +1,3304 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -24136,21 +24136,124 @@
 +	return fence;
 +}
 +
++/* One dword the GPU sees at a GPU address (through our tables), for the hang report. */
++static bool
++gpuPeek(uint64_t va, uint32_t *out)
++{
++	static IOMemoryDescriptor *md;
++	static IOMemoryMap *mm;
++	static uint64_t page = ~0ull;
++	uint32_t i3 = (uint32_t)(va >> 21);
++
++	if ((va >> 32) != 0 || gGpuPt.l3[i3] == NULL) {
++		return false;
++	}
++	uint64_t pte = gGpuPt.l3[i3][(va >> 12) & 511];
++	if (!(pte & 1)) {
++		return false;
++	}
++	uint64_t pa = (pte & 0xffffffff000ULL) | (va & 0xffc);
++	if ((pa & ~0xfffULL) != page) {
++		OSSafeReleaseNULL(mm);
++		OSSafeReleaseNULL(md);
++		page = ~0ull;
++		md = IOMemoryDescriptor::withPhysicalAddress(pa & ~0xfffULL, 4096, kIODirectionIn);
++		mm = md != NULL ? md->map() : NULL;
++		if (mm == NULL) {
++			return false;
++		}
++		page = pa & ~0xfffULL;
++	}
++	*out = *(volatile uint32_t *)(mm->getVirtualAddress() + (pa & 0xfff));
++	return true;
++}
++
++static void
++gpuDump(const char *why, const char *what, uint64_t from, uint32_t dwords)
++{
++	for (uint32_t i = 0; i < dwords; i += 8) {
++		char line[160];
++		int n = snprintf(line, sizeof(line), "ASUS GPU: %s: %s %#llx:", why, what, from + 4ull * i);
++		for (uint32_t j = i; j < i + 8 && j < dwords && n > 0 && n < (int)sizeof(line) - 10; j++) {
++			uint32_t v = 0;
++			n += gpuPeek(from + 4ull * j, &v) ? snprintf(line + n, sizeof(line) - n, " %08x", v) :
++			    snprintf(line + n, sizeof(line) - n, " --------");
++		}
++		amark("%s\n", line);
++	}
++}
++
++/*
++ * Image 0061: Mesa's 4th submission hung with only the CP busy (RBBM_STATUS 0x800005), no SMMU
++ * fault, IB1 0x20458000 with 702 dwords left. What the CP is doing: its state registers, SQE
++ * status words, the ring around the read pointer (the IB packets: address, size), IB1 from
++ * where it starts (CP_INDIRECT_BUFFER in the ring) to past where it stands, and IB2.
++ */
 +void
 +redwood_gpu_report(const char *why)
 +{
++	static unsigned reports;
 +	if (gGpuRegs == NULL || gGpuSmmu == NULL) {
 +		return;
 +	}
 +	volatile uint8_t *sb = (volatile uint8_t *)gGpuSmmu->getVirtualAddress();
 +	uint64_t ib1 = gpuR(gGpuRegs, 0x928) | ((uint64_t)gpuR(gGpuRegs, 0x929) << 32);
++	uint64_t ib2 = gpuR(gGpuRegs, 0x92b) | ((uint64_t)gpuR(gGpuRegs, 0x92c) << 32);
++	uint32_t rem1 = gpuR(gGpuRegs, 0x92a), rem2 = gpuR(gGpuRegs, 0x92d), rptr = gpuR(gGpuRegs, 0x806);
 +	flush_dcache64((addr64_t)(uintptr_t)(gScratch.va + kFenceOffset), 64, FALSE);
 +	amark("ASUS GPU: %s: fence %u done %u rptr %u wptr %u RBBM_STATUS %#x CP_HW_FAULT %#x INT0 %#x IB1 %#llx rem %u\n", why,
-+	    gGpuSeqno, *(volatile uint32_t *)(gScratch.va + kFenceOffset), gpuR(gGpuRegs, 0x806), gWptr % kRingDwords,
-+	    gpuR(gGpuRegs, 0x210), gpuR(gGpuRegs, 0x821), gpuR(gGpuRegs, 0x201), ib1, gpuR(gGpuRegs, 0x92a));
++	    gGpuSeqno, *(volatile uint32_t *)(gScratch.va + kFenceOffset), rptr, gWptr % kRingDwords,
++	    gpuR(gGpuRegs, 0x210), gpuR(gGpuRegs, 0x821), gpuR(gGpuRegs, 0x201), ib1, rem1);
 +	amark("ASUS GPU: %s: SMMU sGFSR %#x CB FSR %#x FAR %#x%08x FSYNR0 %#x\n", why, *(volatile uint32_t *)(sb + 0x48),
 +	    *(volatile uint32_t *)(sb + gGpuCb + 0x58), *(volatile uint32_t *)(sb + gGpuCb + 0x64),
 +	    *(volatile uint32_t *)(sb + gGpuCb + 0x60), *(volatile uint32_t *)(sb + gGpuCb + 0x68));
++	if (reports++ >= 2) {
++		return;
++	}
++	amark("ASUS GPU: %s: IB2 %#llx rem %u CP_STATUS_1 %#x CP_PROTECT_STATUS %#x CP_SQE_INSTR_BASE %#x%08x\n", why, ib2, rem2,
++	    gpuR(gGpuRegs, 0x825), gpuR(gGpuRegs, 0x824), gpuR(gGpuRegs, 0x831), gpuR(gGpuRegs, 0x830));
++	{
++		char line[200];
++		int n = snprintf(line, sizeof(line), "ASUS GPU: %s: SQE stat", why);
++		for (uint32_t i = 0; i < 16 && n > 0 && n < (int)sizeof(line) - 10; i++) {
++			gpuW(gGpuRegs, 0x908, i);               /* CP_SQE_STAT_ADDR */
++			n += snprintf(line + n, sizeof(line) - n, " %x", gpuR(gGpuRegs, 0x909));
++		}
++		amark("%s\n", line);
++		n = snprintf(line, sizeof(line), "ASUS GPU: %s: CP scratch", why);
++		for (uint32_t i = 0; i < 8 && n > 0 && n < (int)sizeof(line) - 10; i++) {
++			n += snprintf(line + n, sizeof(line) - n, " %x", gpuR(gGpuRegs, 0x883 + i));
++		}
++		amark("%s\n", line);
++	}
++	/* the ring: 48 dwords before the read pointer, 8 after */
++	uint32_t from = (rptr + kRingDwords - 48) % kRingDwords;
++	uint32_t size1 = 0;
++	for (uint32_t i = 0; i < 56; i += 8) {
++		char line[160];
++		int n = snprintf(line, sizeof(line), "ASUS GPU: %s: ring %u:", why, (from + i) % kRingDwords);
++		for (uint32_t j = i; j < i + 8 && n > 0 && n < (int)sizeof(line) - 10; j++) {
++			n += snprintf(line + n, sizeof(line) - n, " %08x", ((volatile uint32_t *)gRing.va)[(from + j) % kRingDwords]);
++		}
++		amark("%s\n", line);
++	}
++	for (uint32_t i = 0; i < kRingDwords; i++) {
++		volatile uint32_t *r = (volatile uint32_t *)gRing.va;
++		if (r[i] == pkt7(0x3f, 3) && r[(i + 1) % kRingDwords] == (uint32_t)ib1 &&
++		    r[(i + 2) % kRingDwords] == (uint32_t)(ib1 >> 32)) {
++			size1 = r[(i + 3) % kRingDwords];
++		}
++	}
++	uint32_t at = size1 > rem1 ? size1 - rem1 : 0;
++	amark("ASUS GPU: %s: IB1 %#llx is %u dwords (from the ring), the CP at dword %u of it\n", why, ib1, size1, at);
++	gpuDump(why, "IB1", ib1, size1 != 0 && size1 < 96 ? size1 : 96);
++	if (at > 96) {
++		uint32_t back = at > 64 ? at - 64 : 0;
++		gpuDump(why, "IB1 near the CP", ib1 + 4ull * back, at + 16 - back);
++	}
++	if (ib2 != 0) {
++		gpuDump(why, "IB2", ib2, rem2 != 0 && rem2 < 64 ? rem2 + 8 : 64);
++	}
 +}
 +
 +void

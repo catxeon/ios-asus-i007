@@ -1387,7 +1387,35 @@ diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.c
  #include <IOKit/system.h>
  #include <libkern/c++/OSArray.h>
  #include <libkern/c++/OSDictionary.h>
-@@ -686,16 +687,28 @@
+@@ -288,6 +289,18 @@
+ 	s->elementWidth = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementWidth", 1);
+ 	s->elementHeight = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementHeight", 1);
+ 	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
++	/*
++	 * (topaz 0900, from HackiOS) 10-bit formats a wide-gamut iPhone asks for ('w30r', 'l10r',
++	 * 'w30R' and 'b3a8' with its separate alpha plane): neither the GL layer nor the panel
++	 * (8-bit) takes them. Made as one-plane BGRA, which the client reads back.
++	 */
++	bool one_plane = false;
++	if (s->pixelFormat == 0x77333072u || s->pixelFormat == 0x6C313072u || s->pixelFormat == 0x77333052u) {
++		s->pixelFormat = 0x42475241u;           /* BGRA */
++	} else if (s->pixelFormat == 0x62336138u) {
++		s->pixelFormat = 0x42475241u;
++		one_plane = true;
++	}
+ 	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
+ 	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
+ 	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
+@@ -301,7 +314,7 @@
+ 	}
+ 	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
+ 
+-	OSArray *planes = OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
++	OSArray *planes = one_plane ? NULL : OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
+ 	s->planeCount = 0;
+ 	if (planes != NULL) {
+ 		uint64_t next = s->offset;
+@@ -686,16 +699,28 @@
  	ret = sweet_surface_layout(s, props);
  	if (ret == kIOReturnSuccess) {
  		IOBufferMemoryDescriptor *mem = NULL;
@@ -1459,7 +1487,7 @@ diff --git a/iokit/Kernel/arm/AsusPhoneInput.cpp b/iokit/Kernel/arm/AsusPhoneInp
  }
  
  namespace {
-@@ -2603,6 +2604,10 @@
+@@ -2706,6 +2707,10 @@
  	amark("ASUS GPU: stage 10: second IB: fence %u %s, wrote %#x (want 0xbadcafe); test buffer unmapped; ready %d\n", fence,
  	    done ? "done" : "NOT done", got, done && got == 0x0badcafe);
  	gGpuReady = done && got == 0x0badcafe;
