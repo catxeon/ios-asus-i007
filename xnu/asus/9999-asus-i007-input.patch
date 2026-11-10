@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,2771 @@
+@@ -0,0 +1,2812 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23841,6 +23841,32 @@
 +	return true;
 +}
 +
++/* One more stream into an existing context bank (S2CR, then the SMR); returns the SMR index. */
++static int
++smmuStream(IOMemoryMap *s, uint32_t sid, uint32_t mask, int cbn)
++{
++	volatile uint8_t *b = (volatile uint8_t *)s->getVirtualAddress();
++	uint32_t nsmr = *(volatile uint32_t *)(b + 0x20) & 0xff;
++	int smr = -1;
++	for (int n = (int)nsmr - 1; n >= 0; n--) {
++		uint32_t v = *(volatile uint32_t *)(b + 0x800 + 4 * n);
++		if ((v >> 31) && (v & 0x7fff) == sid) {
++			smr = n;
++			break;
++		}
++		if (!(v >> 31) && smr < 0) {
++			smr = n;
++		}
++	}
++	if (smr < 0) {
++		return -1;
++	}
++	*(volatile uint32_t *)(b + 0xc00 + 4 * smr) = (uint32_t)cbn;
++	*(volatile uint32_t *)(b + 0x800 + 4 * smr) = (1u << 31) | ((mask & 0x7fff) << 16) | sid;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	return smr;
++}
++
 +/*
 + * Stage 7 (asusgpu>=7): Linux a6xx hw_init for the A660 without clock gating, CP
 + * protection or APRIV (as topaz's A610 path): GBIF, 64-bit addressing, UCHE, ROQ,
@@ -23887,17 +23913,32 @@
 +	/*
 +	 * Linux on this SoC (sm8350.dtsi) attaches GPU streams 0 AND 1 (mask 0x400 each) to one
 +	 * domain in context bank 0 (arm-smmu-qcom: the CP switches page tables there), with
-+	 * SCTLR.HUPCF. Image 0042 matched stream 0 only (mask 0x400): stream 1 (LPAC, which
-+	 * has its own microcode fetch) was unmatched = a global fault with sCR0.USFCFG, the
-+	 * same picture as the GPI EDL (a DMA from a stream nobody configured). Mask 0x403:
-+	 * streams 0-3 (gfx3d_user 0, lpac 1, secure 2) and their 0x400 twins share our tables.
++	 * SCTLR.HUPCF. Image 0042 matched stream 0 only: stream 1 (LPAC) was unmatched = a
++	 * global fault with sCR0.USFCFG, the same picture as the GPI EDL. Image 0054 tried one
++	 * SMR with mask 0x403 (streams 0-3): it read back 0 (the write was dropped, probably
++	 * because it covers the secure stream 2), stream 0 itself was unmatched and the SoC
++	 * reset at CP_SQE_CNTL. So: the two entries Linux writes, read back before the CP starts.
 +	 */
-+	bool bound = smmuBind(s, 0, 0x403, l1pa, 0, 0x167, &smr, &cbn);
++	bool bound = smmuBind(s, 0, 0x400, l1pa, 0, 0x167, &smr, &cbn);
 +	amark("ASUS GPU: SMMU stream 0 %s: SMR%d -> CB%d, tables %#llx, sqe %#llx ring %#llx scratch %#llx\n",
 +	    bound ? "bound" : "NOT bound", smr, cbn, l1pa, gSqe.pa, gRing.pa, gScratch.pa);
 +	if (!bound) {
 +		s->release();
 +		return;
++	}
++	{
++		int smr1 = smmuStream(s, 1, 0x400, cbn);
++		volatile uint8_t *gb = (volatile uint8_t *)s->getVirtualAddress();
++		uint32_t r0 = *(volatile uint32_t *)(gb + 0x800 + 4 * smr), c0 = *(volatile uint32_t *)(gb + 0xc00 + 4 * smr);
++		uint32_t r1 = smr1 >= 0 ? *(volatile uint32_t *)(gb + 0x800 + 4 * smr1) : 0;
++		uint32_t c1 = smr1 >= 0 ? *(volatile uint32_t *)(gb + 0xc00 + 4 * smr1) : 0xffffffffu;
++		bool taken = r0 == 0x84000000u && r1 == 0x84000001u && c0 == (uint32_t)cbn && c1 == (uint32_t)cbn;
++		amark("ASUS GPU: SMMU readback: stream 0 SMR%d %#x S2CR %#x, stream 1 SMR%d %#x S2CR %#x: %s\n", smr, r0, c0,
++		    smr1, r1, c1, taken ? "both taken" : "NOT taken, the CP stays off");
++		if (!taken) {
++			s->release();
++			return;
++		}
 +	}
 +	uint32_t cb = (uint32_t)(((1u << ((((*(volatile uint32_t *)(s->getVirtualAddress() + 0x24)) >> 28) & 7) + 1)) + (uint32_t)cbn) << 12);
 +
