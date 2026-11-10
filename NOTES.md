@@ -633,6 +633,37 @@
     `CP_ME_INIT DONE`. EDL again -> the last `stage 7 cp N` marker names the step
     (asusgpucp=N stops after step N) and the unmatched-stream guess is wrong.
     DONE without EDL -> run 0055.
+- **Image 0054 (2026-11-10 07:31 local, user at the phone): EDL again at CP start.** The
+  cycle script printed "Android back after 104s", but that was the user's power-key
+  reset out of EDL (the user saw the ASUS GPU lines on the screen, then EDL): the script
+  cannot tell a self-reset from a manual one. (Commit def4257's message says "no EDL":
+  wrong, written before the user reported it.) Log ../phone-0054/log.txt, 283 lines,
+  last line `stage 7 cp 3: CP_SQE_CNTL = 1 (sGFSR 0, RBBM_STATUS 0x1)`; the `SQE
+  running?` line 1 ms later is missing. The dump right before:
+  - `SMR/S2CR 0: 0/0x21ee28ff 1: 0/0xc6200ff 2: 0/0x60e00ff 3: 0/0xa202ff 4: 0/0 5:
+    0x84000005/0x6`: **SMR4 read back 0.** The S2CR write (CB0) took, the SMR write
+    0x84030000 (id 0, mask 0x403) did not; the GMU's 0x84000005 is there. So no GPU
+    stream was matched when the SQE started. Guess: the SMMU stream table is filtered
+    (hypervisor) and an entry that covers the secure stream 2 is dropped. Whether 0042's
+    id 0 / mask 0x400 entry was taken is unknown (no readback then).
+  - `CB0 SCTLR 0x167 TTBR0 0x1454fc000 TCR 0x800020 FSR 0x400` (CB0 usable; FSR bit 10
+    reads set in the GMU's CB6 too), sCR0 0x290406, sGFSR/sGFSYNR 0 before the start.
+  - `PLL0 mode 0x80001805 L 0x20 cal 0x44 status 0 opmode 0x1 alpha 0xd000`, `gfx3d rcg
+    0x2/0x103`, 0x1054 = 0x221: the GMU configured and locked PLL0 (32.8125 x 19.2 MHz
+    / 2 = 315 MHz); `CP perf counter +3471483` in a 10 ms IODelay (~347 MHz, IODelay
+    runs ~10 % long). The GX clock is fine.
+  - Still consistent with "a DMA from an unmatched stream is fatal" (now stream 0 itself).
+- Fix (commit def4257, kernel CI 42756929160): the two entries Linux writes, id 0 and
+  id 1 with mask 0x400 each, both to CB0 (new smmuStream()), then `SMMU readback: stream 0
+  SMRn .. stream 1 SMRn ..: both taken | NOT taken, the CP stays off`: the CP is started
+  only if both SMRs read back 0x84000000 / 0x84000001 with S2CR = CB. A dropped entry
+  now ends the run without an EDL.
+  Kernel 42756929160 succeeded (c791e989..., ../asus-ci-42756929160). Lab images, same
+  options as 0054/0055: **0056** = `asusgpu=7` (SHA256 5e6c50d6...0e125), **0057** =
+  `asusgpu=9` (82978bf9...86e8f). 0055 (old kernel) is obsolete. NOT booted yet.
+  NEXT: `ASUS_ALLOW_DIRTY_ROOT=1 tools/asus-phone-cycle.sh
+  shim/asus-xnu/out/asus-i007-xnu-0056.img ../phone-0056 600` with the user at the phone;
+  ask the user afterwards whether the phone reset itself or needed the power key.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
