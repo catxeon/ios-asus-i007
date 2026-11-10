@@ -1,0 +1,77 @@
+name: asus-gl
+
+# The window server's OpenGL ES on the ASUS I007 (userland/gpu), for the iOS 16 userland:
+#   libasus-gl.dylib      eagl.c + gl_osmesa.c: EAGLContext's function table over Mesa (OSMesa,
+#                         gallium freedreno -> redwood-drm -> the kernel's RedwoodGPU)
+#   libasus-inject.dylib  topaz_inject.c: loaded into backboardd (kernel boot-arg topaz_inject),
+#                         waits for the RedwoodGPU service and loads libasus-gl.dylib
+#   libOSMesa.8.dylib     from an asus-mesa run (input mesa_run), signed again
+# All three go to /asus/lib on the iOS root. eagl_gen.h is made by userland/gpu/mkeagl.py
+# (HackiOS, MIT) from eagl_slots.txt and Mesa's gl.xml / exported-gl.txt.
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_run:
+        description: asus-mesa run whose artifact (libOSMesa.8.dylib, gl.xml, exported-gl.txt) to build against
+        default: '42145703219'
+      gpu_wait_tenths:
+        description: How long backboardd waits for the kernel's GPU service, in 0.1 s
+        default: '600'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: asus-gl-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mesa artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download '${{ inputs.mesa_run }}' -R "$GITHUB_REPOSITORY" -n asus-mesa -D mesa
+          ls -l mesa
+          otool -L mesa/libOSMesa.8.dylib
+      - name: Function table
+        run: |
+          mkdir -p obj out
+          python3 userland/gpu/mkeagl.py userland/gpu/eagl_slots.txt mesa/gl.xml mesa/exported-gl.txt \
+            userland/gpu/eagl.c > obj/eagl_gen.h
+          wc -l obj/eagl_gen.h
+      - name: Build
+        run: |
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CC="$(xcrun --sdk iphoneos -f clang) -target arm64-apple-ios16.0 -isysroot $SDK -O2 -Wall"
+          $CC -dynamiclib -install_name /asus/lib/libasus-gl.dylib -Iobj -Iuserland/gpu \
+            -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc mesa/libOSMesa.8.dylib \
+            -o out/libasus-gl.dylib userland/gpu/eagl.c userland/gpu/gl_osmesa.c
+          $CC -dynamiclib -install_name /asus/lib/libasus-inject.dylib \
+            '-DTOPAZ_GL="/asus/lib/libasus-gl.dylib"' '-DGPU_WAIT_TENTHS=${{ inputs.gpu_wait_tenths }}' \
+            -framework CoreFoundation -framework IOKit -lobjc \
+            -o out/libasus-inject.dylib userland/gpu/topaz_inject.c
+          cp mesa/libOSMesa.8.dylib out/
+          cp obj/eagl_gen.h out/
+      - name: Sign and describe
+        run: |
+          cd out
+          for f in libasus-gl.dylib libasus-inject.dylib libOSMesa.8.dylib; do
+            codesign -f -s - "$f"
+            codesign -dv "$f" 2>&1 | grep -E 'Identifier|CodeDirectory|Signature' || true
+            otool -L "$f"
+          done
+          nm -gU libasus-gl.dylib | grep -c ' _' || true
+          nm -u libasus-gl.dylib | grep -E '_gl|_OSMesa' | head -20
+          shasum -a 256 *.dylib | tee SHA256SUMS
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asus-gl
+          path: out/

@@ -8,8 +8,11 @@ against the files the display and input patches create:
 
   SweetSurface.h         drawn / wrapped / gpuPool / wrapDelta / scanoutSlot (zero from allocation)
   SweetSurface.cpp       asusgpu>=10: 64 rows behind every surface buffer (the GPU writes whole tiles)
-  SweetFramebuffer.cpp   a swap waits (100 ms at most) for the GPU to be done with the surface
+  SweetFramebuffer.cpp   a swap waits (100 ms at most) for the GPU to be done with the surface,
+                         and says so in the registry (RedwoodWaitsForGPU)
   AsusPhoneInput.cpp     the interface's self-test passed -> RedwoodGPUStart()
+  asus_userland.c        boot-arg topaz_inject: a policy named "AMFI" that lets dyld honour
+                         DYLD_INSERT_LIBRARIES (the profile also takes topaz 0919, exec_inject)
   files.arm64            RedwoodGPU.cpp
 
 Run from anywhere: python3 tools/make-asus-gpu-patch.py   (needs git for `git apply`)
@@ -174,6 +177,76 @@ f1 = once(f1, '''		if (s == NULL || s == fSurface) {
 		(void)topaz_surface_drawn(s, 100);      /* the GPU is done drawing it (or 100 ms have passed) */
 		uintptr_t src = s->kernelAddress();
 ''')
+f1 = once(f1, '''	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
+	registerService();
+''', '''	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
+	setProperty("RedwoodWaitsForGPU", true);        /* swap() waits for the GPU (userland/gpu/eagl.c reads it) */
+	registerService();
+''')
+
+# ---------------------------------------------------------------- asus_userland.c
+u0 = created('9999-asus-i007-userland.patch', 'bsd/kern/asus_userland.c')
+u1 = once(u0, '''void asus_userland_register(void);
+void
+asus_userland_register(void)
+{
+''', '''/*
+ * Profile --gpu, boot-arg topaz_inject (kern_exec.c, topaz 0919: DYLD_INSERT_LIBRARIES for
+ * named programs). dyld asks the policy named "AMFI" (__mac_syscall, call 0x5a: { u64 flags
+ * in, user pointer to u64 flags out }) what it may do for the process it starts; without an
+ * answer it runs restricted and ignores the DYLD_* variables, which is how the GPU's OpenGL ES
+ * library gets into backboardd. Registered only with that boot-arg: other boots keep having
+ * no policy of this name. Every other call succeeds and leaves the caller's output alone
+ * (as sweet and topaz do).
+ */
+static int
+asus_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
+{
+	uint64_t in_out[2] = { 0, 0 }, allow = 0xffULL;
+	int error;
+
+	if (call != 0x5a) {
+		return 0;
+	}
+	error = copyin(arg, in_out, sizeof(in_out));
+	if (error == 0) {
+		error = copyout(&allow, (user_addr_t)in_out[1], sizeof(allow));
+	}
+	return error;
+}
+
+static const struct mac_policy_ops asus_amfi_ops = {
+	.mpo_policy_syscall = asus_amfi_syscall,
+};
+
+static struct mac_policy_conf asus_amfi_conf = {
+	.mpc_name = "AMFI",
+	.mpc_fullname = "ASUS dyld policy answer for inserted libraries",
+	.mpc_ops = &asus_amfi_ops,
+};
+
+void asus_userland_register(void);
+void
+asus_userland_register(void)
+{
+''')
+u1 = once(u1, '''		error = mac_policy_register(&asus_trust_conf, &trust_handle, NULL);
+		printf("ASUS TRUST: policy registration %d\\n", error);
+	}
+}
+''', '''		error = mac_policy_register(&asus_trust_conf, &trust_handle, NULL);
+		printf("ASUS TRUST: policy registration %d\\n", error);
+	}
+	char inject[8];
+	if (PE_parse_boot_argn("topaz_inject", inject, sizeof(inject))) {
+		static mac_policy_handle_t amfi_handle;
+		error = mac_policy_register(&asus_amfi_conf, &amfi_handle, NULL);
+		printf("ASUS AMFI: dyld policy answer %s (%d)\\n", error ? "NOT registered" : "registered", error);
+	}
+}
+''')
+if '#include <pexpert/pexpert.h>' not in u1:
+    u1 = once(u1, '#include <pexpert/device_tree.h>\n', '#include <pexpert/device_tree.h>\n#include <pexpert/pexpert.h>\n')
 
 # ---------------------------------------------------------------- AsusPhoneInput.cpp
 p0 = created('9999-asus-i007-input.patch', ARM + 'AsusPhoneInput.cpp')
@@ -212,6 +285,7 @@ out = ''.join([
     diff(ARM + 'SweetSurface.cpp', c0, c1),
     diff(ARM + 'SweetFramebuffer.cpp', f0, f1),
     diff(ARM + 'AsusPhoneInput.cpp', p0, p1),
+    diff('bsd/kern/asus_userland.c', u0, u1),
     conf,
 ])
 target = repo / 'xnu/asus/9999-asus-i007-zgpu.patch'

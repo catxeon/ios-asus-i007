@@ -24,7 +24,12 @@
 
 extern const void *_dyld_get_shared_cache_range(size_t *length);
 
+#ifndef TOPAZ_GL                /* ASUS: -DTOPAZ_GL='"/asus/lib/libasus-gl.dylib"' (.github/workflows/asus-gl.yml) */
 #define TOPAZ_GL "/topaz/lib/libtopaz-gl.dylib"
+#endif
+#ifndef GPU_WAIT_TENTHS         /* how long the window server waits for the kernel's GPU service, in 0.1 s */
+#define GPU_WAIT_TENTHS 50
+#endif
 
 /*
  * CoreAnimation's OpenGL ES renderer hands a "function"'s numbers (a colour matrix, ...) to
@@ -230,7 +235,7 @@ topaz_inject(void)
 		return;
 	}
 	/* the kernel starts the GPU once the root filesystem is there: give it a moment */
-	for (int i = 0; i < 50; i++) {
+	for (int i = 0; i < GPU_WAIT_TENTHS; i++) {
 		gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("RedwoodGPU"));
 		if (gpu != 0) {
 			break;

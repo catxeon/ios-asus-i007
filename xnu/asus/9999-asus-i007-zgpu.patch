@@ -1432,7 +1432,15 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
  static volatile SInt32 asus_fb_frames;  /* swaps shown, for the ASUS FPS log line */
  
  extern "C" __attribute__((weak)) int sweet_console_muted;  /* osfmk/console/serial_console.c */
-@@ -312,6 +316,7 @@
+@@ -183,6 +187,7 @@
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	setProperty("external", false);
+ 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
++	setProperty("RedwoodWaitsForGPU", true);        /* swap() waits for the GPU (userland/gpu/eagl.c reads it) */
+ 	registerService();
+ 	IOLog("ASUS FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
+@@ -312,6 +317,7 @@
  			OSSafeReleaseNULL(s);
  			continue;
  		}
@@ -1462,6 +1470,71 @@ diff --git a/iokit/Kernel/arm/AsusPhoneInput.cpp b/iokit/Kernel/arm/AsusPhoneInp
  	return gGpuReady;
  }
  
+diff --git a/bsd/kern/asus_userland.c b/bsd/kern/asus_userland.c
+--- a/bsd/kern/asus_userland.c
++++ b/bsd/kern/asus_userland.c
+@@ -22,6 +22,7 @@
+ #include <sys/systm.h>
+ #include <kern/kalloc.h>
+ #include <pexpert/device_tree.h>
++#include <pexpert/pexpert.h>
+ #include <sys/codesign.h>
+ #include <sys/mount.h>
+ #include <sys/ubc_internal.h>
+@@ -228,6 +229,41 @@
+ 	.mpc_name = "ASUS ENTITLEMENTS",
+ 	.mpc_fullname = "ASUS XML entitlements from code signatures",
+ 	.mpc_ops = &asus_entitlements_ops,
++};
++
++/*
++ * Profile --gpu, boot-arg topaz_inject (kern_exec.c, topaz 0919: DYLD_INSERT_LIBRARIES for
++ * named programs). dyld asks the policy named "AMFI" (__mac_syscall, call 0x5a: { u64 flags
++ * in, user pointer to u64 flags out }) what it may do for the process it starts; without an
++ * answer it runs restricted and ignores the DYLD_* variables, which is how the GPU's OpenGL ES
++ * library gets into backboardd. Registered only with that boot-arg: other boots keep having
++ * no policy of this name. Every other call succeeds and leaves the caller's output alone
++ * (as sweet and topaz do).
++ */
++static int
++asus_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
++{
++	uint64_t in_out[2] = { 0, 0 }, allow = 0xffULL;
++	int error;
++
++	if (call != 0x5a) {
++		return 0;
++	}
++	error = copyin(arg, in_out, sizeof(in_out));
++	if (error == 0) {
++		error = copyout(&allow, (user_addr_t)in_out[1], sizeof(allow));
++	}
++	return error;
++}
++
++static const struct mac_policy_ops asus_amfi_ops = {
++	.mpo_policy_syscall = asus_amfi_syscall,
++};
++
++static struct mac_policy_conf asus_amfi_conf = {
++	.mpc_name = "AMFI",
++	.mpc_fullname = "ASUS dyld policy answer for inserted libraries",
++	.mpc_ops = &asus_amfi_ops,
+ };
+ 
+ void asus_userland_register(void);
+@@ -246,5 +282,11 @@
+ 		error = mac_policy_register(&asus_trust_conf, &trust_handle, NULL);
+ 		printf("ASUS TRUST: policy registration %d\n", error);
+ 	}
++	char inject[8];
++	if (PE_parse_boot_argn("topaz_inject", inject, sizeof(inject))) {
++		static mac_policy_handle_t amfi_handle;
++		error = mac_policy_register(&asus_amfi_conf, &amfi_handle, NULL);
++		printf("ASUS AMFI: dyld policy answer %s (%d)\n", error ? "NOT registered" : "registered", error);
++	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
