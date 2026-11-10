@@ -2,6 +2,87 @@
 
 ## ASUS I007 bring-up handoff (2026-11-03, separate device)
 
+### >>> ACTIVE HANDOFF 2026-11-10 late (read this first; details in "Phone path" below) <<<
+
+User paused the work (2026-11-10 ~23:45) with "запиши все находки, продолжим позже".
+
+**Where it stands.** iOS 16.7 boots from the phone's own flash (iosroot, journaled HFS+).
+The Adreno 660 runs completely under XNU (GMU, CP, zap, IBs + fences, all in
+AsusPhoneInput.cpp stages 1-10, boot-arg asusgpu=10). Kernel profile --gpu adds RedwoodGPU
+(msm DRM user client), topaz 0919 exec_inject and an "AMFI" dyld policy answer. In iOS,
+libasus-inject.dylib loads libasus-gl.dylib (EAGL over Mesa 25.0.7 OSMesa/freedreno) into
+backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
+`glenv=FD_MESA_DEBUG=sysmem` it runs 25 min without a hang at 19.7 fps (CPU renderer: 9.9).
+**But the screen stays black** (user, every GPU boot 0062-0067).
+
+**Open problem 1: black screen (the current blocker).**
+- Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
+  frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
+  full-frame glReadPixels of the same framebuffer gives all zeros; glcopy=1 (frames to the
+  surface by glReadPixels instead of a GPU blit) is black too (0064).
+- Guess tried: stale CPU cache lines of GPU-written buffers. Kernel 6ca3832 (CI 42889848301)
+  cleans+invalidates a GPU-drawn surface before the display copies it and a buffer on
+  cpu_prep(READ). Image **0067** (booted 23:36:02) is still black per the user. Its log
+  (the cycle was still waiting for the self-reset at ~00:02) has `RedwoodGPU: surface N
+  (WxH) shown after submission F: middle pixel XXXXXXXX` every 300 shows: READ IT FIRST.
+  If the cycle did not finish, pull it by hand before any other boot (the next boot
+  overwrites it): `adb exec-out "su -c 'dd if=/dev/block/by-name/iosroot bs=4096
+  skip=8387578 count=1025 2>/dev/null'" > ../phone-0067/log.bin` then
+  `wsl python3 tools/sweet-log.py ../phone-0067/log.bin ../phone-0067/log.txt`.
+- Next ideas, in order: (a) 0067's middle-pixel lines: nonzero -> the display copy is at
+  fault (SweetFramebuffer swap source address/offset/rows for these surfaces; compare
+  with the CPU-renderer path that works); zero -> what the GPU blit writes does not land
+  in the surface (RedwoodGPU surfaceBuffer: IOSubMemoryDescriptor vs s->memory pages,
+  offset 0 vs s->offset, the mirror resource stride 4544 and layout in Mesa's
+  osmesa_surface_resource, linear vs UBWC). (b) Why a 1x1 read works and a full read
+  does not: Mesa readpixels path (staging blit + map) on the msm/redwood-drm interface:
+  check redwood-drm's mmap/clientMemoryForType path and Mesa's BO cache reuse. (c) topaz
+  ran this stack with write-combined pool memory and the SMMU in pass-through; a WC path
+  here needs non-contiguous kernel RAM (gpu_cached=0 panicked, see 0065).
+
+**Open problem 2: GMEM (tiled + binning) hangs the CP** (0061/0062, decoded in "Image
+0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
+FD_MESA_DEBUG=sysmem. Next: FD_MESA_DEBUG=nobin; Linux's a660 hwcg table (a6xx_set_hwcg,
+a660_hwcg, gmu_cgc_mode 0x00020200) which stage 7 never writes.
+
+**Perf notes:** ~25 MB pushed out of the CPU cache per submission (gpu_cached=1), one
+full-screen texture refilled from an IOSurface per frame (10.8 MB).
+
+**How images are built** (WSL; the scratchpad scripts are not in git):
+- iOS GPU image (0067):
+  `ASUS_PHONE_IOS=1 ASUS_UFS=1 ASUS_DISPLAY=1 ASUS_IOS_USERLAND=1
+  ASUS_IOS_GUI=../apple-20H392/devicetree/d22ap.adt ASUS_TRUST_CACHE=../apple-20H392/os.trustcache.im4p
+  ASUS_CPU_LIST=0,4,5,6,7 ASUS_REBOOT=1500 ASUS_XNU_VERSION=NNNN ASUS_EXTRA_ARGS="asusautoswipe=900
+  asusgpu=10 asustouchdelay=5 topaz_inject=/asus/lib/libasus-inject.dylib,backboardd
+  glenv=FD_MESA_DEBUG=sysmem" bash tools/build-asus-image.sh ../asus-ci-42889848301/kernel.development.sweet
+  ../asus-hfs-root/mac/asus-own-init.hfs` (boot-args must stay < 608 chars; 0064 was 526).
+- Lab image (RAM root, iosroot FS never mounted): `ASUS_UFS=1 ASUS_TOUCH_LAB=1 ASUS_CPUS=8
+  ASUS_REBOOT=120 ASUS_EXTRA_ARGS="asusgpu=10 asuscpubench=0" ...` same tools/build-asus-image.sh.
+- Boot: `tools/asus-phone-cycle.sh IMG ../phone-NNNN 2400` (adb can take ~4 min to answer
+  after Android boots; the script waits). FPS: mean of `ASUS FPS: N frames in 5 s` between
+  `ASUS AUTOSWIPE: round 1` and `round 30`.
+- Kernel CI: `gh workflow run asus-xnu.yml -R catxeon/ios-asus-i007 --ref asus-i007 -f hfs=true
+  -f display=true -f userland=true -f ufs=true -f input=true -f smp=true -f gpu=true
+  -f runner=macos-15-intel` (arm64 macOS runners had no capacity for hours on 2026-11-10).
+  GL libraries: `asus-gl.yml` (-f runner=macos-15-intel), artifact asus-gl. The zgpu patch is
+  generated: edit tools/make-asus-gpu-patch.py, then run it; never edit the patch by hand.
+
+**Root and permissions.** iosroot has /asus/lib (libOSMesa.8.dylib, libasus-gl.dylib,
+libasus-inject.dylib), written 2026-11-10 with the user's OK; undo = `python
+tools/asus-iosroot-blockpatch.py ../asus-rootfix-gl-v1 --restore` (backup.bin there; the files
+are inert without the topaz_inject boot-arg). The WSL copy ~/asus-roots/iosroot-now.img is
+the root as of 19:13 + /asus/lib, NOT current (iOS boots since then changed the root):
+re-pull before preparing any block patch. User permissions given 2026-11-10: lab images
+unattended; the /asus/lib write and the GPU iOS boots; booting once on the dirty journaled
+root after the 0065 panic (journal replay worked). Ask again for anything else that writes
+the root. The auto-mode classifier refused asus-iosroot-blockpatch.py (even read-only) and
+ASUS_ALLOW_DIRTY_ROOT=1 without an explicit user OK.
+
+**Tooling quirks:** Git Bash rewrites "/"-looking arguments (a jq filter `"/"` became
+`C:/Program Files/Git/`): use MSYS_NO_PATHCONV=1 or avoid "/" in gh/jq/adb arguments, and
+test a background watcher's condition once by hand. xnu/patches/* are CRLF in this checkout,
+xnu/asus/* LF. The repo dir is owned by CodexSandboxOffline: `git -c safe.directory=*`.
+
 ### Phone path (2026-11-05): read-only UFS driver, storage facts
 
 - Phone facts (adb, read-only; root via Magisk `su` for sysfs): ASUS_I007D, WW_I007D,
