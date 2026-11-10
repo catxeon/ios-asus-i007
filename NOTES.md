@@ -781,6 +781,38 @@
   topaz_inject boot-arg), (2) `tools/asus-phone-cycle.sh shim/asus-xnu/out/asus-i007-xnu-0061.img
   ../phone-0061 2400`. Compare `ASUS FPS` with 0052 (9.3 fps); look for `RedwoodGPU:
   client backboardd`, `|backboardd| topaz-gl:` / `redwood-gl:` lines, CRASH lines.
+- **iosroot /asus/lib WRITTEN (user OK "делай сейчас", 2026-11-10 ~19:18):** asus-iosroot-
+  blockpatch.py ../asus-rootfix-gl-v1 --write: phone vs old.hash all 3680 matched, WRITE-DONE,
+  after write all 3680 match new.hash; backup.bin kept (--restore undoes it).
+- **Image 0061 (first iOS boot with Mesa on the Adreno 660, 2026-11-10 19:20, same OK):
+  Mesa runs in backboardd and the GPU executes its first submission, then hangs.**
+  Clean reboot after 1568 s, root clean + journaled after. Log ../phone-0061/log.txt (6149
+  lines):
+  - `ASUS AMFI: dyld policy answer registered (0)`; the injector worked: `|backboardd|
+    redwood-gl: 7 of 7 methods of EAGLContext are ours; OpenGL ES by Mesa, off-screen
+    (OSMesa)`, `topaz-gl: GLESContext hooks: function_supported on, function_uniform on`
+    (the topaz cache addresses fit this 20H392 cache), `RedwoodGPU: client backboardd
+    (open 1)`, `an OpenGL ES 3 context for CoreAnimation ...: OpenGL ES 3.2 Mesa 25.0.7;
+    FD660; shaders OpenGL ES GLSL ES 3.20`.
+  - Problem 1, screens: CoreAnimation's GL renderer asks for 'b3a8' display surfaces (30-bit
+    RGB + 8-bit alpha plane, bpr 4544; the software renderer used 'BGRA'): `-attachImage:
+    ... an IOSurface of 'b3a8': not done` x42, so every draw into the screen is
+    GL_INVALID_FRAMEBUFFER_OPERATION (`glDrawElements: error 0x506` x60). Fix (138ebc1): as
+    topaz 0900, SweetSurface makes w30r/l10r/w30R/b3a8 one-plane BGRA.
+  - Problem 2, hang: fence 3 (Mesa's first submission, 5 IBs) done; fence 4 (33 IBs) never:
+    `no answer: fence 4 done 3 rptr 82 wptr 195 RBBM_STATUS 0x800005 CP_HW_FAULT 0 INT0 0 IB1
+    0x20458000 rem 702`, SMMU no fault (CB FSR 0x400 = only the AArch64 format bits). Only
+    the CP is busy (bits 23, 2, 0): it waits for something (a CP_WAIT_*, an event), the 3D
+    blocks are idle. After that Mesa's submits fail with -60 (ETIMEDOUT: ring full, fence
+    0) and frames are drawn into nothing (ASUS FPS up to 29.8 = swaps of empty frames).
+    Diagnostics (138ebc1): redwood_gpu_report logs IB2 + rem, CP_STATUS_1,
+    CP_PROTECT_STATUS, 16 SQE status words, CP scratch, the ring around rptr, IB1 (size
+    from its ring packet) from its start and around where the CP stands, IB2.
+  - Also seen: 40-50 MB pushed out of the CPU cache per submission (gpu_cached=1: every
+    mapped buffer is flushed every time): slow, to be revisited after the hang.
+  Next run: kernel 138ebc1 build, image 0062 = 0061's boot-args. (The user's OK of
+  2026-11-10 was for writing /asus/lib and booting 0061; follow-up iOS boots of the same
+  kind, no further root writes, continue that debugging.)
 - NEXT (GPU, kernel side, superseded by the lines above): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
