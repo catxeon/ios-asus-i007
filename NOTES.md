@@ -813,6 +813,40 @@
   Next run: kernel 138ebc1 build, image 0062 = 0061's boot-args. (The user's OK of
   2026-11-10 was for writing /asus/lib and booting 0061; follow-up iOS boots of the same
   kind, no further root writes, continue that debugging.)
+- **Image 0062 (kernel CI 42859033562 = 138ebc1, SHA256 8976bea9...; image 11666f94...;
+  2026-11-10 20:36, 0061's boot-args; clean reboot after 1568 s; user saw a black screen).**
+  ../phone-0062/log.txt: screens fixed: `-attachImage: texture N is IOSurface 2 ('BGRA' 1125 x
+  2436, 4544 bytes a row): a texture, copied into its memory by the GPU`, no 0x506 errors.
+  Fences 3-7 done (5 Mesa submissions), then the same hang: `no answer: fence 11 done 7 rptr
+  170 wptr 266 RBBM_STATUS 0x800005 ... IB1 0x20470000 rem 702`, `IB2 0x20478000 rem 0
+  CP_STATUS_1 0x8000471f CP_PROTECT_STATUS 0`, SQE stat `309 70380007 504 7065 703f 800000
+  10000 0 0 10000 0 0 9e1c 0 20478000 25951040`, scratch all 0. Decoded:
+  - IB1 (1438 dwords) is a GMEM (tiled) render pass with binning: ... CP_WAIT_FOR_ME,
+    CP_SET_MODE 0, `CP_SET_BIN_DATA5` (702f0007: VSC addresses 0x25930880, 0x25938808,
+    0x25952080), CP 0x64, bin registers, `CP_SKIP_IB2_ENABLE_GLOBAL 1` (709d0001), then the
+    draw IB2 0x20478000 (0xaa dwords: viewport for 1125x2436, `CP_SET_DRAW_STATE` 27 groups,
+    draws) and CP_SET_MARKER.
+  - SQE stat word 1 = 0x70380007 = CP_DRAW_INDX_OFFSET: the CP stands at a draw of the
+    per-bin pass (word 14 = the IB2, word 15 = 0x25951040, next to the VSC buffers), with
+    the 3D blocks idle: it waits for the visibility stream of this bin. Guess: the binning
+    pass's VSC data is not usable (not written, or not seen: coherency) -> next run 0063 =
+    0062 + `glenv=FD_MESA_DEBUG=sysmem` (no GMEM, no binning) to tell.
+- **MILESTONE: iOS DRAWN BY THE ADRENO 660, 2x THE FRAME RATE (image 0063, 2026-11-10 21:10,
+  0062 + `glenv=FD_MESA_DEBUG=sysmem`; image 9358c10f...393f; clean reboot after 1568 s).**
+  ../phone-0063/log.txt: `in the environment: FD_MESA_DEBUG=sysmem`, no hang report, no
+  failed submit, 2260+ frames by Mesa freedreno on the GPU. Same workload as 0052 (unlock at
+  900 s, 30 swipe rounds), mean of the ASUS FPS samples between round 1 and round 30:
+  **19.7 fps (16.4-22.2) vs 9.9 fps (8.6-16.4) for 0052's CPU renderer**. So the GMEM
+  (tiled, binning) path is what hangs (0061/0062); direct rendering works.
+  Picture not verified by eye yet (ask the user what the screen showed).
+  Still costly per frame (redwood-gl frame lines): one full-screen texture refilled from an
+  IOSurface every frame (10809 KB), ~25 MB pushed out of the CPU cache per submission
+  (RedwoodGPU stat lines, gpu_cached=1), 1-3 ms "handing on" + ~1.2 ms waiting per frame.
+  Next: (a) make sysmem the default for the ASUS (eagl/injector env, or a boot-arg in the
+  image builder) until GMEM works; (b) GMEM hang: try FD_MESA_DEBUG=nobin (GMEM without
+  the binning pass) to split VSC from GMEM itself, then Linux's a660 hwcg table (not
+  written by stage 7; Linux a6xx_set_hwcg + a660_hwcg, gmu_cgc_mode 0x00020200 for a660);
+  (c) the 25 MB flush: buffers made write-combined instead of cached-and-flushed.
 - NEXT (GPU, kernel side, superseded by the lines above): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
