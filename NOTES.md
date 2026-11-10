@@ -748,6 +748,39 @@
      injector waits 60 s for the service);
   3. expect in the log: `RedwoodGPU: client backboardd`, `topaz-gl:` / `redwood-gl:` lines,
      submissions; fall back with boot-arg gl=0 (injector) or without topaz_inject.
+- **Builds of bbc032f (2026-11-10 evening).** macOS arm64 runners had no capacity for
+  hours ("The job was not acquired by Runner of type hosted even after multiple
+  attempts", job cancelled with 0 steps; GitHub status page all green). Both workflows now
+  take input `runner` (default macos-15); `-f runner=macos-15-intel` worked: kernel CI
+  **42840436225** (SHA256 ab0394a3...10800, ../asus-ci-42840436225) and asus-gl CI
+  **42840359007** (../asus-gl-42840359007: libasus-gl.dylib b9fc8fff..., libasus-inject.dylib
+  ce7fbd10..., libOSMesa.8.dylib 188a9a9a...; ad-hoc signed; mkeagl: 409 entries, 356 passed
+  on, 30 by hand, 23 missing).
+- **Lab image 0060** (that kernel, asusgpu=10 + topaz_inject=...; SHA256 035d84b3...1990;
+  unattended): `ASUS AMFI: dyld policy answer registered (0)`, stage 10 + `RedwoodGPU
+  service started`, clean self-reset after ~180 s.
+- **iosroot with /asus/lib prepared offline, NOT written.** Pulled iosroot read-only
+  (first 12 GiB, 2026-11-10 17:57, SHA256 7a0fb5a6...16810 = phone), hashed per block
+  (~/asus-roots/iosroot-now.hash, tools/asus-iosroot-blockdiff.py). First try with the
+  hfsplus tool: libOSMesa (15 MB) landed in fragmented free space, "inconsistent extents
+  information!", fsck: orphaned blocks. Reverted from the phone's own blocks (read-only
+  fetch, all 3757 matched old.hash). New tools/hfs-add-contiguous.py (steers nextAllocation
+  into a free run, as hfs-add-journal.py): /asus, /asus/lib (0755 root:wheel) and the three
+  dylibs (0755 root), each contiguous (blocks 6394.., 10043.., 10128..) and read back equal;
+  fsck -n: only the usual "Volume header needs minor repair" of journaled images; header
+  0x80002100, HFSJ, journalInfoBlock 4329, 211614 blocks free. Image SHA256
+  9288bb11...67f7eb. Block patch ../asus-rootfix-gl-v1 (3680 blocks in 61 runs, 14.4 MiB);
+  read-only check against the phone: all 3680 blocks match old.hash.
+  (The auto-mode classifier refused running asus-iosroot-blockpatch.py even without
+  --write; the read-only check used a fetch-only script.)
+- **iOS image 0061 ready, NOT booted** (kernel 42840436225, cores 0,4,5,6,7, asusreboot=1500,
+  asusautoswipe=900 = the 0052 FPS workload, + `asusgpu=10 asustouchdelay=5
+  topaz_inject=/asus/lib/libasus-inject.dylib,backboardd`; SHA256 7ede8892...dcc53a).
+  Needs the user's OK: (1) `python tools/asus-iosroot-blockpatch.py ../asus-rootfix-gl-v1
+  --write` (keeps backup.bin; --restore undoes it; the files are inert without the
+  topaz_inject boot-arg), (2) `tools/asus-phone-cycle.sh shim/asus-xnu/out/asus-i007-xnu-0061.img
+  ../phone-0061 2400`. Compare `ASUS FPS` with 0052 (9.3 fps); look for `RedwoodGPU:
+  client backboardd`, `|backboardd| topaz-gl:` / `redwood-gl:` lines, CRASH lines.
 - NEXT (GPU, kernel side, superseded by the lines above): an Adreno 660 hardware layer with topaz's `redwood_gpu_*`
   interface (ready, parameter, address, map/unmap, submit, done, ...) made from these
   stages, then topaz's RedwoodGPU.cpp (msm DRM user client for Mesa freedreno) on top of
