@@ -591,6 +591,48 @@
   free. v12/v13 can be rebuilt with ../make_springboard_v12.py / _v13.py if ever needed.
   The repo directory is owned by the CodexSandboxOffline account: from the normal user,
   git needs `git -c safe.directory=* ...`.
+- **GPU stage 7 EDL, offline analysis (2026-11-10; phone not connected, nothing booted).**
+  - Observation: af54256 (per-step CP markers, SMR mask 0x403) was never built. CI
+    42176394818 / 42176437062 ran on 51b90ae (dispatched 3 min before af54256 was pushed),
+    and image 0043 (kernel 42145829535) never ran. So the only stage-7 data is 0042.
+  - Compared with Linux 6.12 (WSL ~/linux-msm: a6xx_gpu.c hw_init, a6xx_gmu.c, a6xx_hfi.c,
+    sm8350.dtsi, arm-smmu-qcom.c, gpucc-sm8350.c). Our register sequence equals Linux's
+    hw_init for the A660 minus hwcg, CP protect, APRIV (we keep RB_CNTL NO_UPDATE), the
+    GMU power counter and the interrupt mask; CP_ME_INIT, RB_CNTL, the pkt7 header and the
+    SQE load (file minus 4 bytes) are the same. No difference there explains an EDL.
+  - The platform difference: sm8350.dtsi gives the GPU `iommus = <&adreno_smmu 0 0x400>,
+    <&adreno_smmu 1 0x400>` (streams 0 AND 1 in one domain) and arm-smmu-qcom puts the GPU
+    in context bank 0 ("so the GPU hardware can switch pagetables") with SCTLR.HUPCF.
+    0042 matched stream 0 only (SMR4 = id 0 mask 0x400 -> CB5), so stream 1 (LPAC on the
+    A660) had no SMR; with sCR0.USFCFG (0x290406) that is a global fault.
+  - Guess (not proven): a DMA from an unmatched stream is what kills the SoC. It fits all
+    three data points: GPI EDL at the first TRE fetch (stream 0x5b6 never configured),
+    0042 EDL at CP start, and no EDL for the GMU, whose stream 5 was matched and only
+    took context faults (0039 FSR 0x402, 0040 FSR 0x408).
+  - Rejected: "GPU_CC PLL0 is not configured". The boot dump shows PLL0 in reset (mode 0,
+    L 0, CONFIG_CTL_U1 at its reset value 0x029a699c) and gpucc-sm8350 configures it at
+    probe, but a660_gmu.bin holds the same configuration words (0x20485699, 0x2261,
+    0x2a9a699c, 0x01800000, 0x805 at file offset 0xc13c): the GMU programs the PLL itself.
+  - Change (commit 4385893): smmuBind(prefer CB, SCTLR): GPU streams 0-3 (mask 0x403) ->
+    CB0, SCTLR 0x167; SECVID TSB writes on by default again (as Linux; 0042 ran them and
+    went on; asusgpusecvid=0 skips); before `stage 7 cp 1` a read-only dump: SMMU sCR0 /
+    sGFSR / sGFSYNR0-2, SMR/S2CR 0-5, our CB, GPU_CC PLL0 (mode, L, cal, status, opmode,
+    alpha), gfx3d RCG 0x101c/0x1020 and 0x1054, and "in 10 ms: CP perf counter +N (~N MHz
+    core clock)" from RBBM_PERFCTR_CP_0 (expect ~315 MHz if the GMU clocks GX).
+  - No local xnu-cc toolchain on this PC (no ~/swift clang in WSL): CI is the compile check.
+  - Kernel CI **42755235723** (4385893; hfs display userland ufs input smp) succeeded,
+    kernel f4370c03...b4e25 in ../asus-ci-42755235723. Lab images (ASUS_UFS=1
+    ASUS_TOUCH_LAB=1 ASUS_CPUS=8 ASUS_REBOOT=120, RAM root asus-own-init.hfs, iosroot
+    never mounted): **0054** = `asusgpu=7 asuscpubench=0` (SHA256 a29adef0...930bc) and
+    **0055** = `asusgpu=9 asuscpubench=0` (99a55da8...9041e: zap shader through TrustZone
+    + CP_SET_SECURE_MODE + CP_MEM_WRITE; only after 0054 passes). NOT booted yet.
+  - NEXT (needs the user at the phone: an EDL takes a power-key reset):
+    `ASUS_ALLOW_DIRTY_ROOT=1 tools/asus-phone-cycle.sh shim/asus-xnu/out/asus-i007-xnu-0054.img
+    ../phone-0054 600`. Read in the log: the dump lines before `stage 7 cp 1` (sGFSR must
+    be 0, SMR0-5, PLL0, core clock MHz), then `stage 7 cp 1..4`, `SQE running?` and
+    `CP_ME_INIT DONE`. EDL again -> the last `stage 7 cp N` marker names the step
+    (asusgpucp=N stops after step N) and the unmatched-stream guess is wrong.
+    DONE without EDL -> run 0055.
 - `--ufs` kernel profile (commit cf167fe, CI 42018267667, kernel 53924b08):
   xnu/asus/9999-asus-i007-ufs.patch from ../make_asus_ufs_patch.py = sweet 0028 + 0030 +
   0034 + 0069 (without 0047's flash console log), writes impossible (ufsrw ignored,
