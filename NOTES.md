@@ -40,6 +40,49 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
   ran this stack with write-combined pool memory and the SMMU in pass-through; a WC path
   here needs non-contiguous kernel RAM (gpu_cached=0 panicked, see 0065).
 
+- 0067 log read (2026-11-10, next session). Observed: the log saved fine (952 lines, flush
+  #14) but ends at frame 3 (`ASUS FPS: 3 frames in 5 s`), then nothing until a touch and
+  key 2 + key 0 (the user's forced reset; Android back after 882 s, not the 1500 s timer).
+  0066 at the same place went on (frame 37 at 6.6 fps, 3161 lines). Only one middle-pixel
+  line: `surface 2 (1125x2436) shown after submission 3: middle pixel 00000000` (first
+  frame, may be really black: answers nothing). The root is DIRTY (journaled) after the
+  forced reset: the next iOS boot needs ASUS_ALLOW_DIRTY_ROOT=1 and the user's OK.
+  NOT a stall: every GPU boot has this gap (0062/0063/0064/0066: frames 1-3 in the first
+  minutes, the first stats line `N submissions in ~790000 ms`, SpringBoard's first line at
+  16:15:0x = ~900 s of uptime). 0067 was reset before that point, so **the cache fix
+  6ca3832 is still untested** past the first 3 frames.
+- Desk analysis after that (no boots), what the logs and the code do and do not show:
+  - "The GPU draws" rests on one number. In 0066's frame-1200 trace `middle 0 0 135 255`
+    is the same after all 34 draws, the first of them a 3x18 quad at 1015,60 (nowhere near
+    the middle), and `an eighth up` stays `0 0 0 0` (alpha 0) even after two full-screen
+    quads with the 1125x2436 texture 2889. So the middle value was in the frame's texture
+    before this frame drew anything; no draw of frame 1200 is seen to change a pixel.
+    0064's frame 3 read `middle 0 0 0 0`. What is proven: the CP runs Mesa's submissions
+    and fences complete (and CP_MEM_WRITE lands, stage 10).
+  - Against stale CPU caches as the whole story (guess, but a strong one): the screen is
+    uniformly black for 25 minutes over four rotating 13.9 MB surfaces, with ~25 MB pushed
+    through the caches per submission; stale lines could not survive that everywhere.
+  - Never tested: the GPU writing a big linear buffer. Stage 10 writes one word into a
+    2-page buffer with CP_MEM_WRITE (the CP's own path, not the RB's). Screen surfaces and
+    Mesa's full-frame staging buffers are 11-14 MB written by the RB (2D blit).
+  - SMMU faults are only printed by redwood_gpu_report (a hang): no sysmem run ever printed
+    the context bank's FSR. In 0062's hang report FSR was 0x400 (format bits, no fault).
+    FSR 0x400 and the FAR/FSYNR0 values there are the same as before the SQE started.
+  - Code read, nothing wrong found: newBuffer() maps 4 KiB steps of getPhysicalSegment into
+    the 4 KiB-granule tables (16 KiB kernel pages are fine with that), ptTable() chunks are
+    zeroed and flushed, redwood_gpu_map flushes the entries it touches.
+  - Plan: image 0068 = 0067's kernel + `gltrace=1200-1200 gltrace_lit=1` (no CI run), let
+    it run its 1568 s. Kernel middle-pixel lines nonzero + black screen -> the display copy;
+    kernel lines zero but Mesa's full-frame read now nonzero -> caches were the read
+    problem and the blit into the surface is lost (surfaceBuffer layout/offset); both zero
+    -> big GPU writes do not land. Then a kernel build with: the context bank's FSR/FAR in
+    the stats line, a grid of pixels instead of the middle one, and a stage-11 self-test
+    (2D solid fill of a 1125x2436 linear buffer, checked by the CPU) for lab images.
+  - **Image 0068 built, NOT booted**: shim/asus-xnu/out/asus-i007-xnu-0068.img, SHA256
+    76e1d467...ac03, kernel CI 42889848301 (6ca3832), 0067's recipe + `gltrace=1200-1200
+    gltrace_lit=1` (boot-args 521 chars). Booting it needs the user's OK: the root is
+    dirty (ASUS_ALLOW_DIRTY_ROOT=1), and the phone must be left alone for the full 1568 s.
+
 **Open problem 2: GMEM (tiled + binning) hangs the CP** (0061/0062, decoded in "Image
 0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
 FD_MESA_DEBUG=sysmem. Next: FD_MESA_DEBUG=nobin; Linux's a660 hwcg table (a6xx_set_hwcg,
