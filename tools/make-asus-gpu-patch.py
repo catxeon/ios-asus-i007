@@ -83,6 +83,7 @@ void RedwoodGPUStop(void);
 }
 ''', '''void RedwoodGPUStart(void);
 void RedwoodGPUStop(void);
+void redwood_gpu_state(const char * why);       /* ASUS: AsusPhoneInput.cpp */
 }
 
 /* ASUS: no pass-through mode, so its memory pool is not there (the branches that use it are dead). */
@@ -133,6 +134,7 @@ gpu = once(gpu, '''	if (fence != 0 && gGPULock != NULL) {
 			    (surface->height / 2) + 4ull * (surface->width / 2));
 			IOLog("RedwoodGPU: surface %u (%ux%u) shown after submission %u: middle pixel %08x\\n", surface->id,
 			    surface->width, surface->height, fence, middle);
+			redwood_gpu_state("shown");     /* (power, status and SMMU faults while programs draw) */
 		}
 	}
 	return done;

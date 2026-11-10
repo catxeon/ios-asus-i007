@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,3304 @@
+@@ -0,0 +1,3507 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23223,6 +23223,8 @@
 +Pt gGmuPt;
 +}
 +
++static IOMemoryMap *gAsusGmu;                   /* the GMU's registers, kept for redwood_gpu_state() */
++
 +static inline void gmuW(IOMemoryMap *g, uint32_t reg, uint32_t v)
 +{
 +	*(volatile uint32_t *)(g->getVirtualAddress() + 4 * reg) = v;
@@ -23720,6 +23722,13 @@
 +	gmuW(g, 0x5191, 1u << 31);
 +	amark("ASUS GPU: OOB GPU_SET %s (info %#x) GX GDSC %#x\n", ack ? "acked" : "TIMEOUT", gmuR(g, 0x5192),
 +	    rd(gpucc, 0x100c));
++	/* (read only before the GMU started until image 0068: 0xc0 = GX off. Bits: 2 SPTPRAC GDSC off,
++	 * 3 on, 4 SP clock off, 6 GX GDSC off, 7 GX clock off) */
++	amark("ASUS GPU: after GPU_SET: SPTPRAC_PWR_CLK_STATUS %#x\n", gmuR(g, 0x50d0));
++	if (gAsusGmu == NULL) {
++		g->retain();
++		gAsusGmu = g;
++	}
 +	if (!ack) {
 +		return;
 +	}
@@ -23752,6 +23761,12 @@
 +pkt7(uint32_t op, uint32_t cnt)
 +{
 +	return 0x70000000u | cnt | (pm4Par(cnt) << 15) | ((op & 0x7f) << 16) | (pm4Par(op) << 23);
++}
++
++uint32_t
++pkt4(uint32_t reg, uint32_t cnt)
++{
++	return 0x40000000u | cnt | (pm4Par(cnt) << 7) | ((reg & 0x3ffff) << 8) | (pm4Par(reg) << 27);
 +}
 +}
 +
@@ -23896,6 +23911,7 @@
 +uint32_t redwood_gpu_last(void);
 +void redwood_gpu_worked(uint64_t *microseconds, uint32_t *submissions, uint32_t by[7]);
 +void redwood_gpu_report(const char *why);
++void redwood_gpu_state(const char *why);
 +void redwood_gpu_stop(void);
 +void redwood_tl(const char *format, ...) __printflike(1, 2);
 +uint32_t gpu_log;
@@ -24272,6 +24288,185 @@
 +}
 +
 +/*
++ * One line of what stands behind "the GPU ran it": the SP/TP/RB power domain as the GMU
++ * reports it, the GPU's status and interrupts, and the SMMU's faults (a terminated
++ * transaction leaves no other trace: the context has HUPCF and does not stall).
++ */
++void
++redwood_gpu_state(const char *why)
++{
++	if (gGpuRegs == NULL || gGpuSmmu == NULL) {
++		return;
++	}
++	volatile uint8_t *sb = (volatile uint8_t *)gGpuSmmu->getVirtualAddress();
++	amark("ASUS GPU: %s: SPTPRAC_PWR_CLK_STATUS %#x RBBM_STATUS %#x INT0 %#x CP_HW_FAULT %#x sGFSR %#x CB FSR %#x "
++	    "FAR %#x%08x FSYNR0 %#x\n", why, gAsusGmu != NULL ? gmuR(gAsusGmu, 0x50d0) : 0xffffffffu,
++	    gpuR(gGpuRegs, 0x210), gpuR(gGpuRegs, 0x201), gpuR(gGpuRegs, 0x821), *(volatile uint32_t *)(sb + 0x48),
++	    *(volatile uint32_t *)(sb + gGpuCb + 0x58), *(volatile uint32_t *)(sb + gGpuCb + 0x64),
++	    *(volatile uint32_t *)(sb + gGpuCb + 0x60), *(volatile uint32_t *)(sb + gGpuCb + 0x68));
++}
++
++static bool
++gpuTestRun(uint64_t iva, uint32_t words, const char *what)
++{
++	uint32_t fence = redwood_gpu_submit(&iva, &words, 1);
++	bool done = false;
++	for (unsigned i = 0; fence != 0 && !done && i < 20000; i++) {
++		done = redwood_gpu_done(fence);
++		if (!done) {
++			IODelay(100);
++		}
++	}
++	amark("ASUS GPU: stage 11 %s: %u words, fence %u %s\n", what, words, fence, done ? "done" : "NOT done");
++	return done;
++}
++
++/*
++ * Stage 11 (asusgpu>=11): what stage 10 does not show (images 0062-0068: Mesa's submissions
++ * run, no read-back shows a pixel). A buffer as RedwoodGPU's gemNew makes them (ordinary
++ * kernel memory, not contiguous, its 16 KiB pages entered as 4 KiB ones) of a screen
++ * surface's size. (a) CP_MEM_WRITE of a marker into eight of its pages, first to last: the
++ * tables for a big buffer. (b) A 2D solid fill of it as 1125 x 2436 BGRA with 4544-byte rows
++ * (Mesa fd6_blitter / turnip r2d: CP_BLIT), pixels counted by this processor: the RB writing
++ * memory through the CCU, which is how Mesa's frames reach a surface and its read-backs.
++ */
++static void
++gpuBigTest(void)
++{
++	const uint32_t width = 1125, height = 2436, pitch = 4544;
++	const uint64_t size = ((uint64_t)pitch * (height + 64) + 0x3fff) & ~0x3fffull;
++	static GBuf ib;
++	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++	    kIODirectionInOut | kIOMemoryKernelUserShared, (vm_size_t)size, PAGE_SIZE);
++	if (md == NULL || !gbufAlloc(&ib, 2 * 4096, 0)) {
++		amark("ASUS GPU: stage 11: no memory\n");
++		OSSafeReleaseNULL(md);
++		return;
++	}
++	uint8_t *va = (uint8_t *)md->getBytesNoCopy();
++	uint64_t gva = redwood_gpu_address(size), iva = redwood_gpu_address(ib.size);
++	uint64_t first = 0, prev = 0;
++	unsigned breaks = 0;
++	bool mapped = gva != 0 && iva != 0;
++	for (uint64_t off = 0; mapped && off < size; off += 4096) {
++		IOByteCount len = 0;
++		addr64_t pa = md->getPhysicalSegment((IOByteCount)off, &len, kIOMemoryMapperNone);
++		mapped = pa != 0 && redwood_gpu_map(gva + off, pa, false);
++		if (off == 0) {
++			first = pa;
++		} else if (pa != prev + 4096) {
++			breaks++;
++		}
++		prev = pa;
++	}
++	for (uint64_t off = 0; mapped && off < ib.size; off += 4096) {
++		mapped = redwood_gpu_map(iva + off, ib.pa + off, false);
++	}
++	redwood_gpu_mapped();
++	amark("ASUS GPU: stage 11: %llu bytes at GPU %#llx (first page %#llx, %u breaks in the physical run), IB at %#llx: %s\n",
++	    size, gva, first, breaks, iva, mapped ? "mapped" : "NOT mapped");
++	if (!mapped) {
++		md->release();
++		return;
++	}
++	bzero(va, (size_t)size);
++	redwood_gpu_to_memory(va, size);
++
++	/* (a) the CP writes a word into eight pages of it */
++	const uint64_t at[8] = { 0, 4096, 8192 + 4, 0x4000, (size / 4) & ~0xfffull, ((size / 2) & ~0xfffull) + 0x1000,
++		                 size - 0x4000, size - 4096 };
++	uint32_t *w = (uint32_t *)ib.va, n = 0, got[8];
++	unsigned good = 0;
++	for (unsigned i = 0; i < 8; i++) {
++		w[n++] = pkt7(0x3d, 3);                 /* CP_MEM_WRITE */
++		w[n++] = (uint32_t)(gva + at[i]);
++		w[n++] = (uint32_t)((gva + at[i]) >> 32);
++		w[n++] = 0xa5000000u | i;
++	}
++	redwood_gpu_to_memory(ib.va, ib.size);
++	bool done = gpuTestRun(iva, n, "a (CP_MEM_WRITE into 8 pages)");
++	redwood_gpu_to_memory(va, size);
++	for (unsigned i = 0; i < 8; i++) {
++		got[i] = *(volatile uint32_t *)(va + at[i]);
++		good += got[i] == (0xa5000000u | i);
++	}
++	amark("ASUS GPU: stage 11 a: %u of 8 markers there (%#x %#x %#x %#x %#x %#x %#x %#x): %s\n", good, got[0], got[1],
++	    got[2], got[3], got[4], got[5], got[6], got[7],
++	    done && good == 8 ? "the CP reaches all of a big buffer" : "FAILED");
++	redwood_gpu_state("stage 11 a");
++
++	/* (b) the 2D engine fills it */
++	bzero(va, (size_t)size);
++	redwood_gpu_to_memory(va, size);
++	n = 0;
++	static const uint32_t events[] = { 0x1d, 0x1c, 0x19, 0x18 };   /* PC_CCU_FLUSH_COLOR_TS/_DEPTH_TS, _INVALIDATE_COLOR/_DEPTH */
++	for (unsigned i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
++		w[n++] = pkt7(0x46, 1);                 /* CP_EVENT_WRITE */
++		w[n++] = events[i];
++	}
++	w[n++] = pkt7(0x65, 1);                         /* CP_SET_MARKER */
++	w[n++] = 12;                                    /* RM6_BLIT2DSCALE */
++	w[n++] = pkt7(0x26, 0);                         /* CP_WAIT_FOR_IDLE */
++	w[n++] = pkt4(0x8e07, 1);                       /* RB_CCU_CNTL: colour cache at 3 CCUs x 64 KiB, full size (sysmem) */
++	w[n++] = 0x18000000;
++	w[n++] = pkt4(0x8e04, 1);                       /* RB_DBG_ECO_CNTL (Mesa's value for the A660) */
++	w[n++] = 0x04100000;
++	w[n++] = pkt4(0x8c01, 1);                       /* RB_2D_UNKNOWN_8C01 (pixel operation: none) */
++	w[n++] = 0;
++	w[n++] = pkt4(0x8c00, 1);                       /* RB_2D_BLIT_CNTL: solid colour, 8888 unorm, all channels, ifmt unorm8 */
++	w[n++] = 0x10f03080;
++	w[n++] = pkt4(0x8400, 1);                       /* GRAS_2D_BLIT_CNTL: the same */
++	w[n++] = 0x10f03080;
++	w[n++] = pkt4(0xacc0, 1);                       /* SP_2D_DST_FORMAT: 8888 unorm, all channels */
++	w[n++] = 0xf180;
++	w[n++] = pkt4(0x8c17, 4);                       /* RB_2D_DST_INFO (8888 unorm, linear), address, pitch / 64 */
++	w[n++] = 0x30;
++	w[n++] = (uint32_t)gva;
++	w[n++] = (uint32_t)(gva >> 32);
++	w[n++] = pitch >> 6;
++	w[n++] = pkt4(0x8c2c, 4);                       /* RB_2D_SRC_SOLID_C0-C3 */
++	w[n++] = 0x11;
++	w[n++] = 0x22;
++	w[n++] = 0x33;
++	w[n++] = 0xff;
++	w[n++] = pkt4(0x8405, 2);                       /* GRAS_2D_DST_TL, _BR */
++	w[n++] = 0;
++	w[n++] = (width - 1) | ((height - 1) << 16);
++	w[n++] = pkt7(0x46, 1);
++	w[n++] = 0x3f;                                  /* DEBUG_LABEL, as Mesa before a blit */
++	w[n++] = pkt7(0x26, 0);
++	w[n++] = pkt7(0x2c, 1);                         /* CP_BLIT */
++	w[n++] = 3;                                     /* BLIT_OP_SCALE */
++	w[n++] = pkt7(0x26, 0);
++	w[n++] = pkt7(0x46, 1);                         /* (CP_BLIT writes to the CCU: flushed to memory) */
++	w[n++] = 0x1d;
++	w[n++] = pkt7(0x26, 0);
++	redwood_gpu_to_memory(ib.va, ib.size);
++	done = gpuTestRun(iva, n, "b (2D solid fill)");
++	redwood_gpu_to_memory(va, size);
++	uint32_t lit = 0, other = 0;
++	for (uint32_t y = 0; y < height; y++) {
++		const volatile uint32_t *row = (const volatile uint32_t *)(va + (uint64_t)pitch * y);
++		for (uint32_t x = 0; x < width; x++) {
++			uint32_t p = row[x];
++			lit += p != 0;
++			other += p != 0 && p != 0xff332211u;
++		}
++	}
++	const volatile uint32_t *px = (const volatile uint32_t *)va;
++	amark("ASUS GPU: stage 11 b: %u of %u pixels written (%u not 0xff332211); first %#x middle %#x last %#x, past a "
++	    "row's end %#x: %s\n", lit, width * height, other, px[0], px[(pitch / 4) * (height / 2) + width / 2],
++	    px[(pitch / 4) * (height - 1) + width - 1], px[width + 4],
++	    done && lit == width * height ? "the RB writes memory" : "FAILED");
++	redwood_gpu_state("stage 11 b");
++	redwood_gpu_unmap(gva, size);
++	redwood_gpu_address_free(gva, size);
++	redwood_gpu_unmap(iva, ib.size);
++	redwood_gpu_address_free(iva, ib.size);
++	md->release();
++}
++
++/*
 + * The interface on, then its own test: a buffer at a GPU address from the allocator, an
 + * indirect buffer in its first page (CP_MEM_WRITE of a marker into its second page, then
 + * CP_NOP padding), submitted with a fence.
@@ -24352,6 +24547,14 @@
 +	redwood_gpu_address_free(va, test.size);
 +	amark("ASUS GPU: stage 10: second IB: fence %u %s, wrote %#x (want 0xbadcafe); test buffer unmapped; ready %d\n", fence,
 +	    done ? "done" : "NOT done", got, done && got == 0x0badcafe);
++	redwood_gpu_state("stage 10");
++	{
++		uint32_t stage = 0;
++		PE_parse_boot_argn("asusgpu", &stage, sizeof(stage));
++		if (done && got == 0x0badcafe && stage >= 11) {
++			gpuBigTest();
++		}
++	}
 +	gGpuReady = done && got == 0x0badcafe;
 +	return gGpuReady;
 +}
