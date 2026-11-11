@@ -144,8 +144,17 @@ minutes from power-on to the lock screen.**
   slide .. mh ..`, then `SMP name tN pc .. lr .. sp .. bt ..` for each thread (user
   frame-pointer backtrace, 16 frames; unslid = address - slide, tools/sweet-crash.py), and
   `SMP name[pid] exits: status ..` + the crash report's lines when one of them exits.
-  Kernel CI 43085581517 started. Then: lab image to check it does no harm, iOS image with
-  `asussample=com.apple.datami,SpringBoard,backboardd` (user's OK).
+  Kernel CI 43085581517 succeeded (kernel df3fdfbb..., ../asus-ci-43085581517). Lab image
+  0084 (22:32, `asussample=launchd asussampleevery=10`): 4 samples of pid 1 printed
+  (`SMP launchd[1] slide 0x0 mh 0x100000000`, `SMP launchd t0 pc 0x100000488 ...`; its
+  own init has no frame chain, so no bt), the clock and the GPU self-test as before, no
+  panic. Not exercised there: a real backtrace, the exit line.
+- **iOS image 0085 built, NOT booted** (kernel 43085581517; 0078's recipe with sysmem +
+  asusrtc + `asussample=com.apple.datami,SpringBoard,backboardd`; no applog_name; SHA256
+  335f8dde...9471). Needs the user's OK (iOS boot, 26 min, root is clean). To read:
+  the `SMP com.apple.datami` lines of samples 0-13 (where its threads stand), its `exits`
+  line at ~14 min, SpringBoard's and backboardd's threads meanwhile; symbolicate with
+  tools/sweet-crash.py and the dyld cache (unslid = address - slide).
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
