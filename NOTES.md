@@ -104,8 +104,36 @@ minutes from power-on to the lock screen.**
   for both questions: the lock screen's date (replaces 0081) and what datamigrator logs
   during the wait (`|com.apple.datamigrator| ...` lines). Needs the user's OK (iOS boot,
   26 min, root is clean).
-- If its log does not say: port sweet's process sampler (xnu/patches/0054: user pc/lr and
-  frame-pointer backtraces of named processes every 120 s; not in the ASUS profile).
+- **iOS image 0083 BOOTED** (2026-11-11 21:39-22:05, user's OK "Да, запускай 0083",
+  ../phone-0083; root clean before and after, Android back).
+  - THE CLOCK WORKS IN iOS: `ASUS RTC: ... UTC 1794422398` (boot sent at 21:39:54 local =
+    1794422394), launchd's lines now `2026-11-11 10:39:59` (Pacific time), SpringBoard's
+    `2026-11-11 10:54:08`. No `ASUS RTC: the system sets the time` line (nothing called
+    settimeofday). What the lock screen showed: not said by the user yet, ASK; Preferences
+    was opened at 11:01:35 (40 finger touches), so also ask whether the time zone was
+    changed.
+  - The cycle took 1539 s, not 1568-1569: 30 s less, as the IORTC wait's removal would
+    give (the asusreboot timer runs from after that point). launchd's hello comes ~1 s
+    after AsusPhoneInput::start now.
+  - The wait is unchanged: datamigrator started within seconds of launchd, then `3
+    submissions in 792621 ms`, SpringBoard's `Daemon connection invalidated` at 10:54:08
+    = 849 s after launchd's hello. NEW: right before that line xpcproxy and
+    `com.apple.datamigrator` are spawned A SECOND TIME. So the first instance sits for 14
+    min and goes away (no CRASH line: not a crash the kernel reports), the second answers
+    at once.
+  - `applog_name` gave NOTHING: not one `|com.apple.datamigrator|` line (0 of 3348), from
+    either instance. Not known why (the name in sweetnull is compared with proc_selfname;
+    or OS_ACTIVITY_DT_MODE does nothing here; or its stderr is not /dev/null).
+- Commit f21bcab: a process sampler in the zcrash patch (osfmk/kern/exception.c + a call
+  in proc_prepareexit; made from the stock sources by the scratchpad's
+  make_zcrash_sampler.py, `git apply --check` on stock OK, syntax checked with stubs).
+  Boot-arg `asussample=NAME[,NAME]` (first 16 characters of a process name count),
+  `asussampleevery=N` s (default 60; first sample at 90 s, 18 samples): `SMP name[pid]
+  slide .. mh ..`, then `SMP name tN pc .. lr .. sp .. bt ..` for each thread (user
+  frame-pointer backtrace, 16 frames; unslid = address - slide, tools/sweet-crash.py), and
+  `SMP name[pid] exits: status ..` + the crash report's lines when one of them exits.
+  Kernel CI 43085581517 started. Then: lab image to check it does no harm, iOS image with
+  `asussample=com.apple.datami,SpringBoard,backboardd` (user's OK).
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
