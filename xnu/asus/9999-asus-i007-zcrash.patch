@@ -37,7 +37,7 @@
  			etype = EXC_CRASH;
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -820,6 +820,217 @@ exception_triage(
+@@ -820,6 +820,228 @@ exception_triage(
  	return exception_triage_thread(exception, code, codeCnt, thread);
  }
  
@@ -99,7 +99,7 @@
 + * asussample=NAME[,NAME...] names processes (the first 16 characters of a name count).
 + * 90 s after the start and then every asussampleevery seconds (default 60), 18 times, it
 + * prints for each of their threads the user pc/lr/sp and a frame-pointer backtrace as
-+ * "SMP name tN pc ... lr ... sp ... bt ...", after a line with the pid, the shared cache's
++ * "SMP name tN pc ... lr ... sp ..." and "SMP name tN bt ..." lines, after a line with the pid, the shared cache's
 + * slide and the main binary's Mach-O header (unslid = address - slide; offset = address -
 + * mh). A thread blocked in a system call shows the call's stub in pc and its caller in
 + * lr/bt. When one of them exits, "SMP name[pid] exits: ..." and, if it exits by itself,
@@ -109,7 +109,7 @@
 +#include <kern/startup.h>
 +#include <kern/clock.h>
 +
-+#define ASUS_SAMPLE_TASKS       8
++#define ASUS_SAMPLE_TASKS       10
 +#define ASUS_SAMPLE_TIMES       18
 +static char asus_sample_names[128];
 +static uint32_t asus_sample_every = 60;
@@ -158,28 +158,39 @@
 +	task_lock(task);
 +	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 +		arm_saved_state_t *ss = find_user_regs(thread);
-+		char line[400];
-+		int n;
++		char line[160];
++		int n = 0;
 +		uint64_t fp;
 +
 +		if (ss == NULL || !is_saved_state64(ss)) {
 +			continue;
 +		}
 +		fp = get_saved_state_fp(ss);
-+		n = snprintf(line, sizeof(line), "SMP %s t%d pc 0x%llx lr 0x%llx sp 0x%llx bt", name, tn++,
-+		    (uint64_t)get_saved_state_pc(ss), (uint64_t)get_saved_state_lr(ss), (uint64_t)get_saved_state_sp(ss));
-+		for (int i = 0; i < 16 && fp != 0 && (fp & 7) == 0 && n < (int)sizeof(line) - 24; i++) {
++		printf("SMP %s t%d pc 0x%llx lr 0x%llx sp 0x%llx\n", name, tn, (uint64_t)get_saved_state_pc(ss),
++		    (uint64_t)get_saved_state_lr(ss), (uint64_t)get_saved_state_sp(ss));
++		/* (six return addresses a line: the console cuts a line at about 250 characters) */
++		for (int i = 0; i < 36 && fp != 0 && (fp & 7) == 0; i++) {
 +			uint64_t frame[2];
 +			if (vm_map_read_user(map, fp, frame, sizeof(frame)) != KERN_SUCCESS) {
 +				break;
 +			}
++			if (n == 0) {
++				n = snprintf(line, sizeof(line), "SMP %s t%d bt", name, tn);
++			}
 +			n += snprintf(line + n, sizeof(line) - (size_t)n, " 0x%llx", frame[1]);
++			if ((i % 6) == 5) {
++				printf("%s\n", line);
++				n = 0;
++			}
 +			if (frame[0] <= fp) {
 +				break;
 +			}
 +			fp = frame[0];
 +		}
-+		printf("%s\n", line);
++		if (n != 0) {
++			printf("%s\n", line);
++		}
++		tn++;
 +	}
 +	task_unlock(task);
 +}
