@@ -1,6 +1,43 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1845,6 +1845,13 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ 	int kr = 0;
+ 	int create_corpse = FALSE;
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	{
++		/* the processes of boot-arg asussample: say that, and how, they exit (osfmk/kern/exception.c) */
++		extern void asus_sample_exit(const char *, int, int, int);
++		asus_sample_exit(p->p_comm, proc_getpid(p), rv, p == current_proc());
++	}
++#endif
+ 	if (p->p_crash_behavior != 0 || p == initproc) {
+ 		proc_handle_critical_exit(p, rv);
+ 	}
+@@ -1884,6 +1891,20 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ 		subcode = ut->uu_subcode;
+ 		etype = ut->uu_exception;
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		if (p == current_proc()) {
++			extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
++			sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),
++			    ((uint64_t)ut->uu_exception << 32) | (uint32_t)ut->uu_code, ut->uu_subcode);
++			/* abort_with_payload messages (_objc_fatal, os_crash_fmt, ...) */
++			if (PROC_HAS_EXITREASON(p)) {
++				char *desc = exit_reason_get_string_desc(p->p_exit_reason);
++				printf("CRASH %s reason ns %u code 0x%llx: %s\n", p->p_comm,
++				    p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code,
++				    desc != NULL ? desc : "(none)");
++			}
++		}
++#endif
+ 		/* Defualt to EXC_CRASH if the exception is not an EXC_RESOURCE or EXC_GUARD */
+ 		if (etype != EXC_RESOURCE || etype != EXC_GUARD) {
+ 			etype = EXC_CRASH;
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -820,6 +820,60 @@
+@@ -820,6 +820,217 @@ exception_triage(
  	return exception_triage_thread(exception, code, codeCnt, thread);
  }
  
@@ -56,31 +93,165 @@
 +	}
 +	printf("%s\n", line);
 +}
++
++/*
++ * ASUS process sampler (after sweet's patch 0054): where is a daemon stuck? Boot-arg
++ * asussample=NAME[,NAME...] names processes (the first 16 characters of a name count).
++ * 90 s after the start and then every asussampleevery seconds (default 60), 18 times, it
++ * prints for each of their threads the user pc/lr/sp and a frame-pointer backtrace as
++ * "SMP name tN pc ... lr ... sp ... bt ...", after a line with the pid, the shared cache's
++ * slide and the main binary's Mach-O header (unslid = address - slide; offset = address -
++ * mh). A thread blocked in a system call shows the call's stub in pc and its caller in
++ * lr/bt. When one of them exits, "SMP name[pid] exits: ..." and, if it exits by itself,
++ * the crash report's lines for the exiting thread (who called exit).
++ */
++#include <kern/thread_call.h>
++#include <kern/startup.h>
++#include <kern/clock.h>
++
++#define ASUS_SAMPLE_TASKS       8
++#define ASUS_SAMPLE_TIMES       18
++static char asus_sample_names[128];
++static uint32_t asus_sample_every = 60;
++static uint32_t asus_sample_count;
++static thread_call_t asus_sample_call;
++
++void asus_sample_exit(const char *name, int pid, int rv, int self);
++
++static bool
++asus_sample_wanted(const char *name)
++{
++	size_t n = strlen(name);                        /* p_comm: 16 characters at most */
++
++	if (n == 0) {
++		return false;
++	}
++	for (const char *t = asus_sample_names; *t != 0;) {
++		const char *end = strchr(t, ',');
++		size_t tl = end != NULL ? (size_t)(end - t) : strlen(t);
++		if ((tl == n || (n == 16 && tl > 16)) && strncmp(t, name, n) == 0) {
++			return true;
++		}
++		if (end == NULL) {
++			break;
++		}
++		t = end + 1;
++	}
++	return false;
++}
++
++static void
++asus_sample_task(const char *name, int pid, task_t task)
++{
++	vm_map_t map = get_task_map(task);
++	uint64_t slide = 0;
++	int tn = 0;
++	thread_t thread;
++	vm_shared_region_t sr = vm_shared_region_get(task);
++
++	if (sr != NULL) {
++		slide = sr->sr_slide;
++		vm_shared_region_deallocate(sr);
++	}
++	printf("SMP %s[%d] slide 0x%llx mh 0x%llx\n", name, pid, slide, (uint64_t)task->mach_header_vm_address);
++
++	task_lock(task);
++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
++		arm_saved_state_t *ss = find_user_regs(thread);
++		char line[400];
++		int n;
++		uint64_t fp;
++
++		if (ss == NULL || !is_saved_state64(ss)) {
++			continue;
++		}
++		fp = get_saved_state_fp(ss);
++		n = snprintf(line, sizeof(line), "SMP %s t%d pc 0x%llx lr 0x%llx sp 0x%llx bt", name, tn++,
++		    (uint64_t)get_saved_state_pc(ss), (uint64_t)get_saved_state_lr(ss), (uint64_t)get_saved_state_sp(ss));
++		for (int i = 0; i < 16 && fp != 0 && (fp & 7) == 0 && n < (int)sizeof(line) - 24; i++) {
++			uint64_t frame[2];
++			if (vm_map_read_user(map, fp, frame, sizeof(frame)) != KERN_SUCCESS) {
++				break;
++			}
++			n += snprintf(line + n, sizeof(line) - (size_t)n, " 0x%llx", frame[1]);
++			if (frame[0] <= fp) {
++				break;
++			}
++			fp = frame[0];
++		}
++		printf("%s\n", line);
++	}
++	task_unlock(task);
++}
++
++static void
++asus_sample_fire(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	task_t found[ASUS_SAMPLE_TASKS], task;
++	char names[ASUS_SAMPLE_TASKS][20];
++	int pids[ASUS_SAMPLE_TASKS];
++	int n = 0;
++	uint64_t deadline;
++
++	/* (the names and pids are taken with the list locked; the tasks are held by a reference) */
++	lck_mtx_lock(&tasks_threads_lock);
++	queue_iterate(&tasks, task, task_t, tasks) {
++		void *proc = get_bsdtask_info(task);
++		if (n < ASUS_SAMPLE_TASKS && proc != NULL && asus_sample_wanted(proc_name_address(proc))) {
++			strlcpy(names[n], proc_name_address(proc), sizeof(names[n]));
++			pids[n] = proc_pid(proc);
++			task_reference(task);
++			found[n++] = task;
++		}
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++
++	printf("SMP --- sample %u: %d processes\n", asus_sample_count, n);
++	for (int i = 0; i < n; i++) {
++		asus_sample_task(names[i], pids[i], found[i]);
++		task_deallocate(found[i]);
++	}
++	if (++asus_sample_count < ASUS_SAMPLE_TIMES) {
++		clock_interval_to_deadline(asus_sample_every, NSEC_PER_SEC, &deadline);
++		thread_call_enter_delayed(asus_sample_call, deadline);
++	}
++}
++
++void
++asus_sample_exit(const char *name, int pid, int rv, int self)
++{
++	if (asus_sample_names[0] == 0 || !asus_sample_wanted(name)) {
++		return;
++	}
++	printf("SMP %s[%d] exits: status 0x%x (signal %d, code %d)%s\n", name, pid, rv, rv & 0x7f, (rv >> 8) & 0xff,
++	    self ? ", by this thread:" : ", ended by another thread");
++	if (self) {
++		sweet_crash_log(name, pid, rv & 0x7f, 0, 0);
++	}
++}
++
++__startup_func
++static void
++asus_sample_init(void)
++{
++	uint64_t deadline;
++
++	if (!PE_parse_boot_argn("asussample", asus_sample_names, sizeof(asus_sample_names)) ||
++	    asus_sample_names[0] == 0) {
++		asus_sample_names[0] = 0;
++		return;
++	}
++	PE_parse_boot_argn("asussampleevery", &asus_sample_every, sizeof(asus_sample_every));
++	if (asus_sample_every < 5) {
++		asus_sample_every = 5;
++	}
++	asus_sample_call = thread_call_allocate(asus_sample_fire, NULL);
++	clock_interval_to_deadline(90, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(asus_sample_call, deadline);
++}
++STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, asus_sample_init);
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 +
  kern_return_t
  bsd_exception(
  	exception_type_t        exception,
---- a/bsd/kern/kern_exit.c
-+++ b/bsd/kern/kern_exit.c
-@@ -1884,6 +1884,20 @@
- 		subcode = ut->uu_subcode;
- 		etype = ut->uu_exception;
- 
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
-+		if (p == current_proc()) {
-+			extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
-+			sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),
-+			    ((uint64_t)ut->uu_exception << 32) | (uint32_t)ut->uu_code, ut->uu_subcode);
-+			/* abort_with_payload messages (_objc_fatal, os_crash_fmt, ...) */
-+			if (PROC_HAS_EXITREASON(p)) {
-+				char *desc = exit_reason_get_string_desc(p->p_exit_reason);
-+				printf("CRASH %s reason ns %u code 0x%llx: %s\n", p->p_comm,
-+				    p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code,
-+				    desc != NULL ? desc : "(none)");
-+			}
-+		}
-+#endif
- 		/* Defualt to EXC_CRASH if the exception is not an EXC_RESOURCE or EXC_GUARD */
- 		if (etype != EXC_RESOURCE || etype != EXC_GUARD) {
- 			etype = EXC_CRASH;
