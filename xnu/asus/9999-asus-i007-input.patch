@@ -24684,8 +24684,8 @@
 +}
 +
 +/*
-+ * Stage 7 (asusgpu>=7): Linux a6xx hw_init for the A660 without clock gating, CP
-+ * protection or APRIV (as topaz's A610 path): GBIF, 64-bit addressing, UCHE, ROQ,
++ * Stage 7 (asusgpu>=7): Linux a6xx hw_init for the A660 without clock gating or CP
++ * protection, with CP_APRIV_CNTL (the A660 needs it): GBIF, 64-bit addressing, UCHE, ROQ,
 + * UBWC (hbb 16, amsbc, rgb565 predicator, uavflagprd 2, macrotile 1), then the SQE
 + * microcode (a660_sqe.fw minus its 4-byte header) and a 32 KiB ringbuffer behind an
 + * SMMU context for stream 0 (gfx3d_user), CP_SQE_CNTL, CP_ME_INIT.
@@ -24820,7 +24820,15 @@
 +	gpuW(gpu, 0xe3c, 0x66906);                      /* UCHE_CMDQ_CONFIG */
 +	{
 +		/* What Linux does and stage 7 left out, each behind a boot-arg, and any other register (asusgpuw). */
-+		uint32_t hwcg = 0, apriv = 0, pokes[16][2];
++		/*
++		 * CP_APRIV_CNTL is not optional on the A660 (Linux: ADRENO_QUIRK_HAS_HW_APRIV). Without it
++		 * the ring's commands are not privileged and CP_SET_SECURE_MODE 0 is taken and ignored:
++		 * RBBM_SECVID_TRUST_CNTL stayed 1, and in secure mode nothing the GPU draws reaches
++		 * ordinary memory (images 0062-0073: Mesa's frames and the stage 11 fill ran, no fault, no
++		 * pixel). Image 0075 with it: TRUST_CNTL 0, 2740500 of 2740500 pixels. asusgpuapriv=0
++		 * leaves it out, to see that again.
++		 */
++		uint32_t hwcg = 0, apriv = 1, pokes[16][2];
 +		PE_parse_boot_argn("asusgpuhwcg", &hwcg, sizeof(hwcg));
 +		PE_parse_boot_argn("asusgpuapriv", &apriv, sizeof(apriv));
 +		if (hwcg && gAsusGmu != NULL) {
