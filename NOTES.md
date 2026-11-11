@@ -15,6 +15,13 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
 `glenv=FD_MESA_DEBUG=sysmem` it runs 25 min without a hang at 19.7 fps (CPU renderer: 9.9).
 **But the screen stays black** (user, every GPU boot 0062-0067).
 
+**UPDATE 2026-11-11: root cause found, see "ROOT CAUSE OF THE BLACK SCREEN FOUND" below.**
+The GPU never left secure mode (CP_APRIV_CNTL was not written, so CP_SET_SECURE_MODE 0 was
+ignored); fixed in bb44ff1. A kernel self-test (boot-arg asusgpu=11, lab images, 3 min a
+run) fills a screen-sized buffer with the 2D engine and counts the pixels. iOS image 0076
+(the fix as a boot-arg) is built and waits for the user's OK. "Open problem 1" below is
+history; its dated lines tell how it was found.
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
@@ -179,6 +186,38 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
     `asusgpusecread=1` reads RBBM_SECVID_TRUST_CNTL last (may reset the phone).
     Plan: 0072 plain; then by what it says: untouched -> hwcg, apriv; zeroes -> the CCU /
     GMEM side (RB_CCU_CNTL offsets through asusgpuib).
+  - **ROOT CAUSE OF THE BLACK SCREEN FOUND (2026-11-11 ~05:55): the GPU never left secure
+    mode, because stage 7 did not write CP_APRIV_CNTL.** Lab images on kernel CI
+    42945459177 (5485d65, ../asus-ci-42945459177), ~3 min each, root untouched, logs in
+    ../phone-0072 ... ../phone-0075:
+    - 0072 (plain): fill `done after 571 us`, `0 the colour, 0 zero, 2740500 untouched`:
+      the RB wrote nothing at all. `GX_DOMAIN_MISC 0`, `RBBM_CLOCK_CNTL 0`,
+      `CP_APRIV_CNTL 0`; UCHE and RB rows as stage 7 set them.
+    - 0073 (`asusgpusecread=1 asusgpur=f803,f800,f801,f802,f810,f400`): TSB registers 0,
+      **`RBBM_SECVID_TRUST_CNTL 0x1`** after zap `authenticated` and `CP_SET_SECURE_MODE 0
+      DONE`. Reading it is harmless.
+    - 0074 (`asusgpuw=f400:0`): the phone reset at that write (Android back after 70 s, the
+      log ends before it): TrustZone guards the register, as Linux's comment says. Do not
+      write it.
+    - 0075 (`asusgpuapriv=1`): `CP_APRIV_CNTL 0x6e`, **`register 0xf400 reads 0`**, fill
+      `done after 614 us`, **`2740500 the colour (0xff332211), 0 zero, 0 untouched ...:
+      the RB writes memory`**.
+    - Why: the A660 has ADRENO_QUIRK_HAS_HW_APRIV in Linux, which then always writes
+      CP_APRIV_CNTL = bits 6 5 3 2 1. Guess at the mechanism: without bit 2 (ring
+      privilege level) the ring's commands are unprivileged and CP_SET_SECURE_MODE is
+      taken and ignored. In secure mode the CP's own writes (CP_MEM_WRITE, the fences'
+      and events' words) still reach ordinary memory; what the RB draws does not, without
+      any fault. That is every symptom of 0062-0068, and probably the GMEM hang too (not
+      tested yet).
+    - Fix: commit bb44ff1 (APRIV on by default, `asusgpuapriv=0` leaves it out), kernel CI
+      42949072293 started, result not seen yet.
+    - **iOS image 0076 built, NOT booted** (kernel 42945459177 + boot-arg
+      `asusgpuapriv=1`, otherwise 0067's recipe; SHA256 0c39a1bd...6b5a; boot-args 503
+      chars): the first iOS boot that should show a picture drawn by the GPU. Needs the
+      user's OK (iOS boot, 26 min, root is clean). Image 0070 is superseded.
+    - After that: FD_MESA_DEBUG=sysmem off (does GMEM still hang?), then the cost per
+      frame (25 MB out of the cache a submission; the cache fix 6ca3832 stays: it is
+      right, only it was not the cause).
   - **iOS image 0070 built, NOT booted** (kernel 42907840162 = c8cefef, 0067's recipe, no
     trace; SHA256 a5f230cf...fa82). Needs the user's OK (26 min, root is clean). It is for
     the `ASUS GPU: shown: ...` state lines every 300 shows: does Mesa's rendering leave
