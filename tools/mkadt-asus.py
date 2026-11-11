@@ -65,6 +65,14 @@ def gui_nodes(source):
               ('boot-manifest-hash', 0, BOOT_MANIFEST_HASH),
               ('unique-chip-id', 0, struct.pack('<Q', ASUS_ECID)),
               ('chip-id', 0, u32(0x8015)),
+              # iBoot's job too: the radios' addresses. MobileGestalt's UniqueDeviceID wants
+              # them; without mac-address-wifi0 it waits for a Wi-Fi IONetworkController with
+              # a local-mac-address until a timeout, and lsd asks once for every bundle it
+              # scans while seeding the LaunchServices database (MIInstallationIdentity):
+              # SpringBoard waited 14 min for that on every boot (images 0052-0087).
+              # Synthetic, locally administered addresses (not the phone's).
+              ('mac-address-wifi0', 0, bytes.fromhex('024153555301')),
+              ('mac-address-bluetooth0', 0, bytes.fromhex('024153555302')),
               ('certificate-production-status', 0, u32(0)),
               ('effective-production-status-ap', 0, u32(0)),
               ('certificate-security-mode', 0, u32(1)),

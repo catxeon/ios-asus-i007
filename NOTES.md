@@ -206,6 +206,41 @@ minutes from power-on to the lock screen.**
   - Also in this log: `CRASH Preferences ... 0x8badf00d ... failed to terminate
     gracefully after 5.0s` (Settings killed when it was closed; not looked into).
 
+- **iOS image 0087 BOOTED: ROOT CAUSE OF THE 14 MIN FOUND (a missing Wi-Fi MAC address
+  in the device tree)** (2026-11-12 00:24-00:50, user's OK "Да, запускай 0087",
+  ../phone-0087; 1538 s, root clean before and after; symbols in ~/dsc/smp-0087.txt).
+  - Observed, lsd (pid 30) in every sample of the wait: thread t1 is the seeding scan,
+    `-[MILaunchServicesDatabaseGatherer performGatherWithError:]` ->
+    `-[MIFilesystemScanner _scanAppsDirectory:]` -> ... ->
+    `-[MIInstalledInfoGatherer _populatePlaceholderRecordValues:signingInfo:]` ->
+    `+[MIInstallationIdentity installationIdentityForBundle:settingIfNotSet:error:]` ->
+    libMobileGestalt (8 frames) -> dispatch_semaphore_wait. Thread t6 is MobileGestalt's
+    own run loop thread (mode `MobileGestaltRunLoopMode`). t2 is SpringBoard's request
+    (`-[LSDatabaseBlockingFetchClient getServerStoreBlockingWithCompletionHandler:]`)
+    waiting for the scan. The first bt line of t1 takes 8 different values over the
+    samples: it moves from bundle to bundle and waits again each time.
+  - Observed in libMobileGestalt at those frames (strings next to the return addresses;
+    unslid base 0x19c555000): +0x125d8 builds the UniqueDeviceID (`%@%@%@%@%@`, "Could not
+    get unique chip ID"); +0x1c770 reads `IODeviceTree:/chosen` `mac-address-wifi0`, then
+    "sdio"/"wlan"/"marconi-wifi"; +0x270f8/+0x274bc (MGIOKitSupport) match
+    `IONetworkController` for `local-mac-address` and wait.
+  - Observed: Apple's D22AP device tree has /chosen `mac-address-wifi0`,
+    `mac-address-bluetooth0`, `mac-address-ethernet0/1` as iBoot templates
+    ("macaddr/wifiaddr,syscfg/WMac/6", flag 1); tools/mkadt-asus.py dropped templates and
+    set none, so the property was missing.
+  - So (inference from the above, not yet tested): every bundle lsd scans costs one
+    timed-out wait for a Wi-Fi controller that never comes; some 80 bundles make the 14
+    min; the UniqueDeviceID is never known, so nothing is cached. Why lsd's database is
+    not on disk afterwards is still open (maybe the same failure).
+  - Fix tried: tools/mkadt-asus.py sets /chosen `mac-address-wifi0` = 02:41:53:55:53:01
+    and `mac-address-bluetooth0` = 02:41:53:55:53:02 (synthetic, locally administered;
+    not the phone's). No kernel change: the device tree is made when the image is built.
+  - **iOS image 0088 built, NOT booted** (kernel 43099356535 as 0087, same boot-args with
+    the sampler on lsd etc.; the two properties checked in shim/asus-xnu/out/asus.adt;
+    SHA256 eb8699bc...36de). Needs the user's OK (iOS boot, 26 min, root is clean). To
+    see: when SpringBoard's first line comes (was 849 s after launchd's hello), where lsd
+    stands in sample 0, whether a .csstore appears in lsd's container afterwards.
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
