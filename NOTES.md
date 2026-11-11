@@ -30,6 +30,36 @@ Image 0079 (the same without FD_MESA_DEBUG=sysmem) ran without the old GMEM hang
 fps, and the user saw the same picture as in 0078. **Both open problems below (black
 screen, GMEM hang) are solved by the one fix.** Next: the cost per frame.
 
+**NOW WORKED ON (2026-11-11 evening, user: "давай начнём с времени"): the wall clock.**
+The user asked what else can be done (time, battery level, cellular); my answer ranked
+them: time (small), battery (medium: no IOPMPowerSource, the gauge chip not yet known),
+USB network (medium), cellular and Wi-Fi (very large). The user chose the time first.
+- Observed before: iOS shows Dec 31 1969 (launchd's log lines too): nothing answers
+  IOPlatformExpert::getGMTTimeOfDay, and nothing publishes the resource IORTC that
+  IOKitInitializeTime (bsd_init) waits up to 30 s for.
+- Hardware: the RTC is in the PMK8350 (SPMI SID 0, peripheral 0x61), seconds in
+  0x6148..0x614b little endian (Linux 6.12 rtc-pm8xxx.c, pmk8350_regs). Android: rtc0 =
+  `rtc-pm8xxx c440000.qcom,spmi:qcom,pmk8350@0:rtc@6100`, and its since_epoch is the bare
+  counter: 74574 s at 2026-11-11 ~20:33 local, i.e. it began again at 0 at about 23:50 on
+  2026-11-10. Guess: the hard reset by keys that evening (0067) cleared it. It ran on
+  through all of today's fastboot boots and PSCI resets. Android does not write it and
+  keeps the difference in a file; so do we: only read.
+- Commit cf8d431: AsusPhoneInput::start reads the counter through the SPMI observer (as
+  the keys), boot-arg `asusrtc=N` is UTC minus the counter (`tools/asus-rtc-offset.sh`
+  prints it from the running Android: `date +%s` minus since_epoch; 1794343816 today),
+  `asus_rtc_seconds()` answers IOPlatformExpert::getGMTTimeOfDay (a hunk for
+  IOPlatformExpert.cpp is now in the input patch), IORTC is published (boot-arg
+  `asusrtcwait=1`: not published, the old 30 s wait), `asus_rtc_set()` logs what
+  settimeofday sets and the asusrtc it stands for. Log lines: `ASUS RTC: apid .. counter
+  ..`, `ASUS RTC: the kernel asks for the time: ..`, `ASUS RTC: the calendar reads ..`
+  (when the flash log is ready). Kernel CI 43070765117 started.
+- Not done: a lab image to check it; then an iOS boot (user's OK) to see the lock screen's
+  date. Known gaps: the time zone (iOS shows Pacific time by default: launchd printed
+  16:00 for the epoch; the user's computer is at +0300; setting it means writing
+  /var/db/timezone/localtime on the iOS root = user's OK, or Settings by hand); the
+  difference is baked into the image at build time (a hard reset of the PMIC or a few
+  days' drift make it stale: rebuild); nothing stores a time set in iOS (later: where?).
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
