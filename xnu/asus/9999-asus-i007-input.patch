@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,3535 @@
+@@ -0,0 +1,3680 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -23724,7 +23724,8 @@
 +	    rd(gpucc, 0x100c));
 +	/* (read only before the GMU started until image 0068: 0xc0 = GX off. Bits: 2 SPTPRAC GDSC off,
 +	 * 3 on, 4 SP clock off, 6 GX GDSC off, 7 GX clock off) */
-+	amark("ASUS GPU: after GPU_SET: SPTPRAC_PWR_CLK_STATUS %#x\n", gmuR(g, 0x50d0));
++	amark("ASUS GPU: after GPU_SET: SPTPRAC_PWR_CLK_STATUS %#x, GX_DOMAIN_MISC (gpucc 0x1508: bit 0 GMEM clamp, "
++	    "bit 4 GMEM reset) %#x\n", gmuR(g, 0x50d0), rd(gpucc, 0x1508));
 +	if (gAsusGmu == NULL) {
 +		g->retain();
 +		gAsusGmu = g;
@@ -24287,6 +24288,57 @@
 +	(void)format;
 +}
 +
++/* Boot-arg NAME=REG:VALUE,REG:VALUE,... in hexadecimal (a lone REG has value 0): the pairs, `max` at most. */
++static unsigned
++gpuArgPairs(const char *name, uint32_t (*pairs)[2], unsigned max)
++{
++	char text[256];
++	unsigned count = 0;
++
++	bzero(text, sizeof(text));
++	if (!PE_parse_boot_argn(name, text, sizeof(text) - 1)) {
++		return 0;
++	}
++	const char *p = text;
++	while (*p != 0 && count < max) {
++		uint32_t v[2] = { 0, 0 };
++		for (unsigned k = 0; k < 2; k++) {
++			while ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || *p == 'x') {
++				if (*p == 'x') {
++					v[k] = 0;               /* (a 0x in front) */
++				} else {
++					v[k] = (v[k] << 4) | (uint32_t)(*p <= '9' ? *p - '0' : *p - 'a' + 10);
++				}
++				p++;
++			}
++			if (k == 0 && *p == ':') {
++				p++;
++			} else {
++				break;
++			}
++		}
++		pairs[count][0] = v[0];
++		pairs[count][1] = v[1];
++		count++;
++		if (*p != ',') {
++			break;
++		}
++		p++;
++	}
++	return count;
++}
++
++/* Rows of eight GPU registers, as they read now. */
++static void
++gpuRegRows(const char *what, uint32_t first, uint32_t count)
++{
++	for (uint32_t r = first; r < first + count; r += 8) {
++		amark("ASUS GPU: %s %#06x: %08x %08x %08x %08x %08x %08x %08x %08x\n", what, r, gpuR(gGpuRegs, r),
++		    gpuR(gGpuRegs, r + 1), gpuR(gGpuRegs, r + 2), gpuR(gGpuRegs, r + 3), gpuR(gGpuRegs, r + 4),
++		    gpuR(gGpuRegs, r + 5), gpuR(gGpuRegs, r + 6), gpuR(gGpuRegs, r + 7));
++	}
++}
++
 +/*
 + * One line of what stands behind "the GPU ran it": the SP/TP/RB power domain as the GMU
 + * reports it, the GPU's status and interrupts, and the SMMU's faults (a terminated
@@ -24309,15 +24361,18 @@
 +static bool
 +gpuTestRun(uint64_t iva, uint32_t words, const char *what)
 +{
++	uint64_t began = mach_absolute_time(), ns = 0;
 +	uint32_t fence = redwood_gpu_submit(&iva, &words, 1);
 +	bool done = false;
-+	for (unsigned i = 0; fence != 0 && !done && i < 20000; i++) {
++	for (unsigned i = 0; fence != 0 && !done && i < 200000; i++) {
 +		done = redwood_gpu_done(fence);
 +		if (!done) {
-+			IODelay(100);
++			IODelay(10);
 +		}
 +	}
-+	amark("ASUS GPU: stage 11 %s: %u words, fence %u %s\n", what, words, fence, done ? "done" : "NOT done");
++	absolutetime_to_nanoseconds(mach_absolute_time() - began, &ns);
++	amark("ASUS GPU: stage 11 %s: %u words, fence %u %s after %llu us\n", what, words, fence,
++	    done ? "done" : "NOT done", ns / 1000);
 +	return done;
 +}
 +
@@ -24395,8 +24450,19 @@
 +	    done && good == 8 ? "the CP reaches all of a big buffer" : "FAILED");
 +	redwood_gpu_state("stage 11 a");
 +
-+	/* (b) the 2D engine fills it */
++	/*
++	 * (b) the 2D engine fills it. Image 0071: everything ran (fence, the events' words, the
++	 * registers), no fault, and the buffer, zeroed before, was all zero. So the picture's rows
++	 * hold a pattern first: left alone = nothing was written; zeroes = written, but not what
++	 * was drawn (lost on the way through the colour cache in GMEM); the colour = it works.
++	 */
 +	bzero(va, (size_t)size);
++	for (uint32_t y = 0; y < height; y++) {
++		uint32_t *row = (uint32_t *)(va + (uint64_t)pitch * y);
++		for (uint32_t x = 0; x < width; x++) {
++			row[x] = 0x5a5a5a5au;
++		}
++	}
 +	redwood_gpu_to_memory(va, size);
 +	n = 0;
 +	/*
@@ -24447,6 +24513,12 @@
 +	w[n++] = pkt4(0x8405, 2);                       /* GRAS_2D_DST_TL, _BR */
 +	w[n++] = 0;
 +	w[n++] = (width - 1) | ((height - 1) << 16);
++	uint32_t extra[16][2];
++	unsigned extras = gpuArgPairs("asusgpuib", extra, 16);
++	for (unsigned i = 0; i < extras; i++) {         /* boot-arg asusgpuib=REG:VALUE,...: for experiments */
++		w[n++] = pkt4(extra[i][0], 1);
++		w[n++] = extra[i][1];
++	}
 +	w[n++] = pkt7(0x46, 1);
 +	w[n++] = 0x3f;                                  /* DEBUG_LABEL, as Mesa before a blit */
 +	w[n++] = pkt7(0x26, 0);
@@ -24472,21 +24544,45 @@
 +	amark("ASUS GPU: stage 11 b: the events' words: %#x %#x %#x (want 0xcc000001 0xcc000002 0xcc000003)\n",
 +	    *(volatile uint32_t *)(va + size - 64), *(volatile uint32_t *)(va + size - 60),
 +	    *(volatile uint32_t *)(va + size - 56));
-+	uint32_t lit = 0, other = 0;
++	uint32_t colour = 0, zero = 0, kept = 0, other = 0;
 +	for (uint32_t y = 0; y < height; y++) {
 +		const volatile uint32_t *row = (const volatile uint32_t *)(va + (uint64_t)pitch * y);
 +		for (uint32_t x = 0; x < width; x++) {
 +			uint32_t p = row[x];
-+			lit += p != 0;
-+			other += p != 0 && p != 0xff332211u;
++			if (p == 0xff332211u) {
++				colour++;
++			} else if (p == 0) {
++				zero++;
++			} else if (p == 0x5a5a5a5au) {
++				kept++;
++			} else {
++				other++;
++			}
 +		}
 +	}
 +	const volatile uint32_t *px = (const volatile uint32_t *)va;
-+	amark("ASUS GPU: stage 11 b: %u of %u pixels written (%u not 0xff332211); first %#x middle %#x last %#x, past a "
-+	    "row's end %#x: %s\n", lit, width * height, other, px[0], px[(pitch / 4) * (height / 2) + width / 2],
-+	    px[(pitch / 4) * (height - 1) + width - 1], px[width + 4],
-+	    done && lit == width * height ? "the RB writes memory" : "FAILED");
++	amark("ASUS GPU: stage 11 b: of %u pixels: %u the colour (0xff332211), %u zero, %u untouched (0x5a5a5a5a), %u other; "
++	    "first %#x middle %#x last %#x, past a row's end %#x: %s\n", width * height, colour, zero, kept, other, px[0],
++	    px[(pitch / 4) * (height / 2) + width / 2], px[(pitch / 4) * (height - 1) + width - 1], px[width + 4],
++	    done && colour == width * height ? "the RB writes memory" : "FAILED");
 +	redwood_gpu_state("stage 11 b");
++	amark("ASUS GPU: stage 11 b: RBBM_CLOCK_CNTL %#x CP_APRIV_CNTL %#x RBBM_STATUS3 %#x (%u asusgpuib writes)\n",
++	    gpuR(gGpuRegs, 0xae), gpuR(gGpuRegs, 0x844), gpuR(gGpuRegs, 0x213), extras);
++	gpuRegRows("UCHE", 0xe00, 0x40);
++	gpuRegRows("RB", 0x8e00, 0x10);
++	uint32_t asked[16][2];
++	unsigned asks = gpuArgPairs("asusgpur", asked, 16);     /* boot-arg asusgpur=REG,REG,...: how they read now */
++	for (unsigned i = 0; i < asks; i++) {
++		amark("ASUS GPU: stage 11 b: register %#x reads %#x\n", asked[i][0], gpuR(gGpuRegs, asked[i][0]));
++	}
++	uint32_t secread = 0;
++	PE_parse_boot_argn("asusgpusecread", &secread, sizeof(secread));
++	if (secread) {
++		/* (last: TrustZone may answer a read of this one badly) */
++		amark("ASUS GPU: stage 11: reading RBBM_SECVID_TRUST_CNTL (0xf400)\n");
++		IOSleep(2500);                          /* (the line reaches the log first: it is written every 2 s) */
++		amark("ASUS GPU: stage 11: RBBM_SECVID_TRUST_CNTL %#x\n", gpuR(gGpuRegs, 0xf400));
++	}
 +	redwood_gpu_unmap(gva, size);
 +	redwood_gpu_address_free(gva, size);
 +	redwood_gpu_unmap(iva, ib.size);
@@ -24722,6 +24818,55 @@
 +	gpuW(gpu, 0x841, 0x1);                          /* CP_CHICKEN_DBG */
 +	gpuW(gpu, 0x11, 0x0);                           /* RBBM_GBIF_CLIENT_QOS_CNTL */
 +	gpuW(gpu, 0xe3c, 0x66906);                      /* UCHE_CMDQ_CONFIG */
++	{
++		/* What Linux does and stage 7 left out, each behind a boot-arg, and any other register (asusgpuw). */
++		uint32_t hwcg = 0, apriv = 0, pokes[16][2];
++		PE_parse_boot_argn("asusgpuhwcg", &hwcg, sizeof(hwcg));
++		PE_parse_boot_argn("asusgpuapriv", &apriv, sizeof(apriv));
++		if (hwcg && gAsusGmu != NULL) {
++			/* a6xx_set_hwcg(true) with a660_hwcg (Linux 6.12 a6xx_catalog.c) */
++			static const uint32_t hwcgTable[][2] = {
++				{ 0x00b0, 0x02222222 }, { 0x00b4, 0x02222220 }, { 0x00b8, 0x00000080 }, { 0x00bc, 0x0000f3cf },
++				{ 0x00c0, 0x22222222 }, { 0x00c4, 0x22222222 }, { 0x00c8, 0x22222222 }, { 0x00cc, 0x00022222 },
++				{ 0x00d0, 0x11111111 }, { 0x00d4, 0x11111111 }, { 0x00d8, 0x11111111 }, { 0x00dc, 0x00011111 },
++				{ 0x00e0, 0x77777777 }, { 0x00e4, 0x77777777 }, { 0x00e8, 0x77777777 }, { 0x00ec, 0x00077777 },
++				{ 0x00f0, 0x22222222 }, { 0x00f4, 0x01002222 }, { 0x00f8, 0x00002220 }, { 0x0100, 0x00040f00 },
++				{ 0x0104, 0x25222022 }, { 0x0105, 0x00005555 }, { 0x0106, 0x00000011 }, { 0x0107, 0x00445044 },
++				{ 0x0108, 0x04222222 }, { 0x0111, 0x00002222 }, { 0x0114, 0x00222222 }, { 0x0117, 0x00000002 },
++				{ 0x011b, 0x00002222 }, { 0x0109, 0x00004000 }, { 0x0112, 0x00002222 }, { 0x0115, 0x00000200 },
++				{ 0x011c, 0x00000000 }, { 0x010a, 0x00000000 }, { 0x0113, 0x00000000 }, { 0x0116, 0x04104004 },
++				{ 0x011d, 0x00000000 }, { 0x0120, 0x00000222 }, { 0x0121, 0x00000111 }, { 0x0122, 0x00000000 },
++				{ 0x010b, 0x22222222 }, { 0x0110, 0x00000004 }, { 0x010f, 0x00000002 }, { 0x0533, 0x00000182 },
++				{ 0x0044, 0x00000000 }, { 0x0042, 0x00000000 }, { 0x0118, 0x00000222 }, { 0x0119, 0x00000111 },
++				{ 0x011a, 0x00000555 },
++			};
++			uint32_t was = gpuR(gpu, 0xae);
++			gmuW(gAsusGmu, 0x9309, 0x00020000);     /* GPU_GMU_AO_GMU_CGC_MODE_CNTL (a660) */
++			gmuW(gAsusGmu, 0x930a, 0x10111);        /* ..._CGC_DELAY_CNTL */
++			gmuW(gAsusGmu, 0x930b, 0x5555);         /* ..._CGC_HYST_CNTL */
++			gmuW(gAsusGmu, 0x80, gmuR(gAsusGmu, 0x80) & ~1u);      /* GX_SPTPRAC_CLOCK_CONTROL: SP clock off */
++			for (unsigned i = 0; i < sizeof(hwcgTable) / sizeof(hwcgTable[0]); i++) {
++				gpuW(gpu, hwcgTable[i][0], hwcgTable[i][1]);
++			}
++			gmuW(gAsusGmu, 0x80, gmuR(gAsusGmu, 0x80) | 1u);
++			IODelay(1);
++			gpuW(gpu, 0xae, 0x8aa8aa82);            /* RBBM_CLOCK_CNTL */
++			amark("ASUS GPU: stage 7: hardware clock gating as Linux: RBBM_CLOCK_CNTL %#x -> %#x\n", was, gpuR(gpu, 0xae));
++		} else {
++			amark("ASUS GPU: stage 7: RBBM_CLOCK_CNTL %#x RBBM_CLOCK_CNTL_RB0 %#x _CCU0 %#x _RAC %#x _UCHE %#x (left as "
++			    "they are)\n", gpuR(gpu, 0xae), gpuR(gpu, 0xf0), gpuR(gpu, 0xf8), gpuR(gpu, 0x104), gpuR(gpu, 0x10b));
++		}
++		if (apriv) {
++			gpuW(gpu, 0x844, 0x6e);                 /* CP_APRIV_CNTL as Linux for the A660 (bits 6 5 3 2 1) */
++			amark("ASUS GPU: stage 7: CP_APRIV_CNTL %#x\n", gpuR(gpu, 0x844));
++		}
++		unsigned npokes = gpuArgPairs("asusgpuw", pokes, 16);
++		for (unsigned i = 0; i < npokes; i++) {
++			gpuW(gpu, pokes[i][0], pokes[i][1]);
++			amark("ASUS GPU: stage 7: register %#x = %#x (asusgpuw), reads %#x\n", pokes[i][0], pokes[i][1],
++			    gpuR(gpu, pokes[i][0]));
++		}
++	}
 +
 +	/*
 +	 * Read-only picture before the CP starts: SMMU global fault state and the stream table,
