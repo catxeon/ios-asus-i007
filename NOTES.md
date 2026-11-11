@@ -27,8 +27,8 @@ below is history; its dated lines tell how it was found.
 After SpringBoard came up the user saw the lock screen (answer to "what was on the screen
 after the logo": "Экран блокировки"). Details under "iOS image 0078 BOOTED" below.
 Image 0079 (the same without FD_MESA_DEBUG=sysmem) ran without the old GMEM hang, 18-21
-fps; what its picture looked like the user has not said yet. Next: that answer, then the
-cost per frame.
+fps, and the user saw the same picture as in 0078. **Both open problems below (black
+screen, GMEM hang) are solved by the one fix.** Next: the cost per frame.
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
@@ -274,12 +274,13 @@ cost per frame.
         the same screen comes out with alpha 0xc1 and another colour without sysmem.
         Guess: a difference of the GMEM path (a blend over a tile that was not loaded
         from memory, or the like), or only another moment of an animation. Not looked
-        into. What the user saw on the screen in 0079: not said yet, ASK.
+        into. The user, asked how 0079's screen looked against 0078's: "Так же" (the
+        same). So no difference a person sees; the pixel's difference stays unexplained.
       - Not shown by the log: that Mesa really took the GMEM path for its passes (it
         chooses for each pass); the changed pixel and the lower rate speak for it.
-    - Next: hear what 0079 looked like; if the picture is right, the workaround
-      `glenv=FD_MESA_DEBUG=sysmem` is a speed choice only (measure both with the
-      autoswipe alone). Then the cost per frame (25 MB out of the cache a submission;
+    - Next: the workaround `glenv=FD_MESA_DEBUG=sysmem` is now a speed choice only
+      (measure both with the autoswipe alone: 0078's rates had the user's hand in
+      them). Then the cost per frame (25 MB out of the cache a submission;
       the cache fix 6ca3832 stays: it is right, only it was not the cause).
   - **iOS image 0070 built, NOT booted** (kernel 42907840162 = c8cefef, 0067's recipe, no
     trace; SHA256 a5f230cf...fa82). Needs the user's OK (26 min, root is clean). It is for
@@ -290,11 +291,22 @@ cost per frame.
 0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
 FD_MESA_DEBUG=sysmem. **2026-11-11: gone with the CP_APRIV_CNTL fix**: image 0079 without
 the workaround ran its 26 min and 30 swipe rounds with a clean GPU (see "iOS image 0079
-BOOTED" above). Open: whether its picture is right (middle pixel c11f201f against
-0078's ff1c1c1e).
+BOOTED" above). The user saw the same picture as in 0078 (the middle pixel differs:
+c11f201f against ff1c1c1e, unexplained). **Closed as far as known.**
 
 **Perf notes:** ~25 MB pushed out of the CPU cache per submission (gpu_cached=1), one
 full-screen texture refilled from an IOSurface per frame (10.8 MB).
+- 2026-11-11, averaged from the logs of 0078 (sysmem) / 0079 (no sysmem), frames from 900
+  on: libasus-gl's frame line gives 5.75 / 5.75 ms a frame (of it "handing on" 0.86 /
+  2.74 ms, "waiting" 1.3 / 1.3 ms) and 9.3 / 9.3 ms "before it" (the IOSurface texture's
+  refill, 10.8 MB each frame); RedwoodGPU: 71 / 62 submissions a second (about 3 a frame),
+  4.9 command buffers and 48 / 55 buffers named each, 25.0 / 20.7 MB and 1.08 / 0.93 ms
+  of cache work each (about 3 ms a frame). So about 15 ms of a frame's 40-50 ms are
+  accounted for by these counters; where the other 25-35 ms go is NOT known (CoreAnimation
+  itself, a wait for the swap, or Mesa outside the counted spans: needs a look at what
+  libasus-gl's counters cover, maybe new ones). "the GPU worked 0 us on each of 0": that
+  counter does not count. Candidates in order of size: the per-frame texture refill
+  (9.3 ms), the cache work (3 ms), "handing on" without sysmem (2.7 ms).
 
 **How images are built** (WSL; the scratchpad scripts are not in git):
 - iOS GPU image (0067):
