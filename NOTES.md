@@ -52,9 +52,21 @@ USB network (medium), cellular and Wi-Fi (very large). The user chose the time f
   `asusrtcwait=1`: not published, the old 30 s wait), `asus_rtc_set()` logs what
   settimeofday sets and the asusrtc it stands for. Log lines: `ASUS RTC: apid .. counter
   ..`, `ASUS RTC: the kernel asks for the time: ..`, `ASUS RTC: the calendar reads ..`
-  (when the flash log is ready). Kernel CI 43070765117 started.
-- Not done: a lab image to check it; then an iOS boot (user's OK) to see the lock screen's
-  date. Known gaps: the time zone (iOS shows Pacific time by default: launchd printed
+  (when the flash log is ready). Kernel CI 43070765117 succeeded (kernel 08107163...,
+  ../asus-ci-43070765117).
+- **Lab image 0080: THE KERNEL HAS THE RIGHT TIME** (2026-11-11 21:02, ../phone-0080,
+  `asusgpu=11 asuscpubench=0 asusrtc=1794343816`): `ASUS RTC: apid 76, counter 76340
+  (read, status 0x1), asusrtc 1794343816: UTC 1794420156`, `the kernel asks for the time:
+  1794420156`, `the calendar reads 1794420175` when the flash log came up. The boot was
+  sent at 21:02:32 local = 1794420152, so it is right to the few seconds that cannot be
+  told from here. The GPU self-test still passes on this kernel (2740500 pixels). Not
+  measured: whether the boot is 30 s shorter without the IORTC wait.
+- **iOS image 0081 built, NOT booted** (kernel 43070765117, 0078's recipe with sysmem +
+  `asusrtc=1794343816`; SHA256 2d4afab6...c3d6; boot-args 507 chars). Needs the user's OK
+  (iOS boot, 26 min, root is clean). To see: the lock screen's date and time (expected
+  11 November and Pacific time, i.e. the user's time minus 11 h, minutes right), launchd's
+  log dates, `ASUS RTC: the system sets the time` lines if timed sets anything.
+- Known gaps: the time zone (iOS shows Pacific time by default: launchd printed
   16:00 for the epoch; the user's computer is at +0300; setting it means writing
   /var/db/timezone/localtime on the iOS root = user's OK, or Settings by hand); the
   difference is baked into the image at build time (a hard reset of the PMIC or a few
