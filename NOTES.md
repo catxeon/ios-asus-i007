@@ -214,7 +214,13 @@ history; its dated lines tell how it was found.
       hand and left the hunk header at 3680 lines, so AsusPhoneInput.cpp was cut short
       (`unterminated conditional directive`). Header fixed in 3b75897 (checked: `git
       apply` of the input and zgpu patches in a scratch tree gives 3688 lines), kernel CI
-      42950765603 started, result not seen yet. When editing a file a patch creates in
+      42950765603 succeeded (kernel 330832cf..., ../asus-ci-42950765603). Lab image 0077
+      on it (plain `asusgpu=11`, + `asusgpur=f400,844`; 2026-11-11 06:24, ../phone-0077):
+      `stage 7: CP_APRIV_CNTL 0x6e`, `register 0xf400 reads 0`, `2740500 the colour ...:
+      the RB writes memory`. **The fix is in the kernel by default and verified.**
+      **iOS image 0078 built on it, NOT booted** (0067's recipe, no extra boot-arg, no
+      trace; SHA256 b36a7065...9854): boot this one rather than 0076 (same fix through
+      `asusgpuapriv=1` on the older kernel). When editing a file a patch creates in
       full, change it through a script that rewrites `@@ -0,0 +1,N @@` (the scratchpad
       edit_input_patch*.py did; a plain replace does not).
     - **iOS image 0076 built, NOT booted** (kernel 42945459177 + boot-arg
