@@ -18,9 +18,15 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
 **UPDATE 2026-11-11: root cause found, see "ROOT CAUSE OF THE BLACK SCREEN FOUND" below.**
 The GPU never left secure mode (CP_APRIV_CNTL was not written, so CP_SET_SECURE_MODE 0 was
 ignored); fixed in bb44ff1. A kernel self-test (boot-arg asusgpu=11, lab images, 3 min a
-run) fills a screen-sized buffer with the 2D engine and counts the pixels. iOS image 0076
-(the fix as a boot-arg) is built and waits for the user's OK. "Open problem 1" below is
-history; its dated lines tell how it was found.
+run) fills a screen-sized buffer with the 2D engine and counts the pixels. "Open problem 1"
+below is history; its dated lines tell how it was found.
+
+**UPDATE 2026-11-11 evening: THE SCREEN IS NOT BLACK ANY MORE.** iOS image 0078 (kernel
+42950765603, the fix by default) booted with the user's OK: the user saw the Apple logo
+("уже не чёрный экран - горит яблоко!"), the first picture drawn by the GPU on the panel.
+What the screen showed after SpringBoard came up (from ~15 min) is NOT yet known: ask the
+user. Details under "iOS image 0078 BOOTED" below. Next: FD_MESA_DEBUG=sysmem off (GMEM),
+then the cost per frame.
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
@@ -223,11 +229,30 @@ history; its dated lines tell how it was found.
       `asusgpuapriv=1` on the older kernel). When editing a file a patch creates in
       full, change it through a script that rewrites `@@ -0,0 +1,N @@` (the scratchpad
       edit_input_patch*.py did; a plain replace does not).
-    - **iOS image 0076 built, NOT booted** (kernel 42945459177 + boot-arg
+    - **iOS image 0078 BOOTED** (2026-11-11 19:19-19:45, user's OK "Да, запускай 0078",
+      ../phone-0078; full 1568 s, root clean before and after, Android back).
+      - Observed by the user, a few minutes into the boot: "уже не чёрный экран - горит
+        яблоко!" (the Apple logo: backboardd's early frames, which 0062-0068 sent as
+        zeros). What was on the screen after ~15 min (SpringBoard, the swipes) the user
+        has not said yet: ASK.
+      - Observed in the log: `stage 7: CP_APRIV_CNTL 0x6e`. The kernel's middle pixel of
+        the shown surface (every 300 shows) is no longer 00000000: `ffffffff` after
+        submission 3 (the logo), then `ff000000`, once `80000000`, and through the swipe
+        rounds `ff000000` and `ff1c1c1e` in turn (0x1c1c1e is iOS's dark grey: two
+        different screens), once `ff000100`. All 13 `ASUS GPU: shown:` lines:
+        RBBM_STATUS 0x1, INT0 0, CP_HW_FAULT 0, sGFSR 0 (CB FSR 0x400 / FAR
+        0x2a02000c1ca9 stand there since before CP_ME_INIT and do not change). No panic,
+        no hang; unlock swipe and rounds 1-30 all ran.
+      - Frame rate (ASUS FPS, 5 s samples): 20.0-29.6 through the rounds, mostly 22-28,
+        one sample 38.0 before them (0066/0068: 19.4, max 21.6). Guess, not looked into:
+        out of secure mode the GPU's writes are cheaper. Still `FD_MESA_DEBUG=sysmem` and
+        ~25 MB out of the cache a submission (~1.1 ms).
+      - Not known: whether the picture is right all over (colours, tearing, artefacts):
+        one middle pixel and the user's one sentence are all there is.
+    - iOS image 0076: superseded by 0078, never booted (kernel 42945459177 + boot-arg
       `asusgpuapriv=1`, otherwise 0067's recipe; SHA256 0c39a1bd...6b5a; boot-args 503
-      chars): the first iOS boot that should show a picture drawn by the GPU. Needs the
-      user's OK (iOS boot, 26 min, root is clean). Image 0070 is superseded.
-    - After that: FD_MESA_DEBUG=sysmem off (does GMEM still hang?), then the cost per
+      chars). Image 0070 is superseded too.
+    - Next: FD_MESA_DEBUG=sysmem off (does GMEM still hang?), then the cost per
       frame (25 MB out of the cache a submission; the cache fix 6ca3832 stays: it is
       right, only it was not the cause).
   - **iOS image 0070 built, NOT booted** (kernel 42907840162 = c8cefef, 0067's recipe, no
