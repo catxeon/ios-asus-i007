@@ -127,7 +127,35 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
       tu_clear_blit.cc and the register XML; never run on known-good hardware): read it
       together with the state lines.
     - Lab image recipe: `ASUS_UFS=1 ASUS_TOUCH_LAB=1 ASUS_CPUS=8 ASUS_REBOOT=120
-      ASUS_EXTRA_ARGS="asusgpu=11 asuscpubench=0"`.
+      ASUS_XNU_VERSION=NNNN ASUS_EXTRA_ARGS="asusgpu=11 asuscpubench=0" bash
+      tools/build-asus-image.sh KERNEL ../asus-hfs-root/mac/asus-own-init.hfs`.
+  - **Lab image 0069 (kernel CI 42907840162 = c8cefef, kernel in ../asus-ci-42907840162,
+    image a801778b...8bf7; 2026-11-11 01:06, Android back after 186 s, root untouched),
+    ../phone-0069/log.txt:**
+    - `after GPU_SET: SPTPRAC_PWR_CLK_STATUS 0` and 0 in every state line: nothing reported
+      off. **The SPTPRAC guess is wrong.**
+    - `stage 10: ... RBBM_STATUS 0x1 INT0 0 CP_HW_FAULT 0 sGFSR 0 CB FSR 0x400` (no fault).
+    - `stage 11: 11370496 bytes at GPU 0x20000000 (first page 0x146084000, 693 breaks in
+      the physical run)`, `stage 11 a: 8 of 8 markers there`: **the tables are right for a
+      big non-contiguous buffer**, the CP writes all of it.
+    - `stage 11 b (2D solid fill): 45 words, fence 4 NOT done`, 0 pixels, then `RBBM_STATUS
+      0x800005 ... CB FSR 0x402 FAR 0x1c70460000 FSYNR0 0x10010`: a translation fault on a
+      write. **My test's own bug, not the GPU's**: FAR = 0x70460001 (a CP_EVENT_WRITE
+      header) + 0x1c (the next event) taken as an address. On the A6xx the _TS events
+      (PC_CCU_FLUSH_COLOR_TS 0x1d, PC_CCU_FLUSH_DEPTH_TS 0x1c, like CACHE_FLUSH_TS) are 4
+      words: event, address, value (Mesa fd6_emit.h __event_write: needs_seqno). So (b)
+      says nothing yet about the RB.
+    - Learned on the way: a faulting GPU write is terminated silently AND the GPU then
+      stands still with RBBM_STATUS 0x800005, the same status as the GMEM hang of
+      0061/0062 (whose report showed FSR 0x400, no fault).
+  - Fixed: commit bb701bf, kernel CI 42942223681 (started 2026-11-11, result not seen
+    yet): the _TS events carry an address behind the picture's rows and markers
+    0xcc000001-3 (printed), the 2D registers are read back, redwood_gpu_report if the
+    fence does not come. Next: lab image 0071 = this kernel, same recipe.
+  - **iOS image 0070 built, NOT booted** (kernel 42907840162 = c8cefef, 0067's recipe, no
+    trace; SHA256 a5f230cf...fa82). Needs the user's OK (26 min, root is clean). It is for
+    the `ASUS GPU: shown: ...` state lines every 300 shows: does Mesa's rendering leave
+    SMMU faults (FSR other than 0x400)?
 
 **Open problem 2: GMEM (tiled + binning) hangs the CP** (0061/0062, decoded in "Image
 0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
