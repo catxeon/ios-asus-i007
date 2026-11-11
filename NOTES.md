@@ -181,9 +181,10 @@ minutes from power-on to the lock screen.**
     uid/gid -2: ACL-only directories), and /private/var/db/lsd is empty: no saved
     database (.csstore) anywhere after many boots. SpringBoard's container, same kind of
     directory, does hold a folder made by uid 501 at ~15 min of a boot.
-  - Guesses, in order: (1) lsd cannot write its database (the ACL-only directories:
-    sweet's patch 0057 dropped config_ext_resolver for exactly this, and 0057 is NOT in
-    the ASUS profile), so every boot seeds again; (2) the seeding itself waits for a
+  - Guesses, in order: (1) lsd cannot write its database into the ACL-only directories,
+    so every boot seeds again (but: the fix of sweet's patch 0057, config_ext_resolver
+    dropped, IS in the ASUS userland patch, and SpringBoard writes into such a directory:
+    so not for that reason); (2) the seeding itself waits for a
     daemon that is not there (installd is not started before the gap) and ends by a
     timeout: `Daemon connection invalidated` when it ends fits that; (3) it really takes
     14 min of work. Not known which: lsd was not sampled.
