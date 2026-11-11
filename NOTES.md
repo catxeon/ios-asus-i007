@@ -234,8 +234,12 @@ then the cost per frame.
       - Observed by the user, a few minutes into the boot: "уже не чёрный экран - горит
         яблоко!" (the Apple logo: backboardd's early frames, which 0062-0068 sent as
         zeros). Asked afterwards what was on the screen from ~15 min: "Экран
-        блокировки" (the lock screen). Not asked or said: whether the swipes moved it,
-        whether the home screen came.
+        блокировки" (the lock screen). Not asked or said: whether the home screen came.
+        Later (with the OK for 0079): "в прошлый запуск довольно плавно работали
+        анимации. я сама ещё посвайпала по экрану": the animations ran fairly smoothly
+        and the user swiped the screen by hand as well (so 0078's frame rates are not
+        the autoswipe's alone; the log has `ASUS TOUCH: finger 0 down` lines from before
+        the unlock swipe on).
       - Observed in the log: `stage 7: CP_APRIV_CNTL 0x6e`. The kernel's middle pixel of
         the shown surface (every 300 shows) is no longer 00000000: `ffffffff` after
         submission 3 (the logo), then `ff000000`, once `80000000`, and through the swipe
