@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,3688 @@
+@@ -0,0 +1,3778 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21677,6 +21677,7 @@
 +#include <IOKit/IODeviceMemory.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <pexpert/pexpert.h>
++#include <kern/clock.h>
 +#include <sys/errno.h>
 +
 +extern "C" void sweet_hid_key(int key, int down);
@@ -25217,6 +25218,57 @@
 +	}
 +}
 +
++/*
++ * The wall clock. The PMK8350's RTC (SID 0, peripheral 0x61) counts seconds from its last
++ * reset in 0x6148..0x614b (Linux rtc-pm8xxx.c, pmk8350_regs). Android never writes it and
++ * keeps the difference to the real time in a file; here it is only read too. Boot-arg
++ * asusrtc=N is that difference (UTC seconds minus the counter), taken from Android right
++ * before the boot (`date +%s` minus /sys/class/rtc/rtc0/since_epoch: tools/asus-rtc-offset.sh);
++ * without it the time starts at 1970 as before. IOPlatformExpert::getGMTTimeOfDay asks
++ * asus_rtc_seconds() (bsd_init: IOKitInitializeTime -> clock_initialize_calendar), and
++ * start() publishes the resource IORTC that IOKitInitializeTime waits up to 30 s for
++ * (boot-arg asusrtcwait=1: not published, as it was). A time the system sets
++ * (settimeofday) is kept for later questions and logged with the asusrtc it stands for;
++ * nothing is stored.
++ */
++#define RTC_PPID        0x061           /* SID 0, peripheral 0x61 (rtc_rw) */
++#define RTC_RDATA0      0x6148
++static uint64_t gAsusRtcUtc;            /* UTC seconds at gAsusRtcAbs; 0 = not known */
++static uint64_t gAsusRtcAbs;
++static uint64_t gAsusRtcRaw;            /* the counter at gAsusRtcRawAbs */
++static uint64_t gAsusRtcRawAbs;
++
++static uint64_t
++asusRtcSince(uint64_t abs)
++{
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time() - abs, &ns);
++	return ns / 1000000000ull;
++}
++
++extern "C" long
++asus_rtc_seconds(void)
++{
++	static unsigned asked;
++	long secs = gAsusRtcUtc ? (long)(gAsusRtcUtc + asusRtcSince(gAsusRtcAbs)) : 0;
++	if (asked++ < 8) {
++		IOLog("ASUS RTC: the kernel asks for the time: %ld%s\n", secs, secs ? "" : " (not known)");
++	}
++	return secs;
++}
++
++extern "C" void
++asus_rtc_set(long secs)
++{
++	static unsigned told;
++	gAsusRtcAbs = mach_absolute_time();
++	gAsusRtcUtc = (uint64_t)secs;
++	if (told++ < 16) {
++		IOLog("ASUS RTC: the system sets the time: %ld (asusrtc=%lld)\n", secs,
++		    gAsusRtcRawAbs ? (long long)secs - (long long)(gAsusRtcRaw + asusRtcSince(gAsusRtcRawAbs)) : 0ll);
++	}
++}
++
 +bool
 +AsusPhoneInput::start(IOService *provider)
 +{
@@ -25251,6 +25303,38 @@
 +	bool sok = spmiRead(fVolUpApid, 0x8d05, &subtype);
 +	IOLog("ASUS INPUT: arb=%#x apids=%u pon-apid=%u volup-apid=%u pon=%#x/%d gpio6=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
 +	    version, count, fPonApid, fVolUpApid, pon, pok, gpio, gok, mode, mok, en, eok, subtype, sok);
++	/* the wall clock (see asus_rtc_seconds) */
++	{
++		uint16_t apid = findApid(RTC_PPID, count);
++		uint8_t b[4] = { 0, 0, 0, 0 }, again = 0;
++		bool ok = false;
++		for (unsigned tries = 0; tries < 3 && !ok; tries++) {
++			ok = true;
++			for (unsigned i = 0; i < 4; i++) {
++				ok = ok && spmiRead(apid, (uint16_t)(RTC_RDATA0 + i), &b[i]);
++			}
++			/* (as Linux: the low byte once more; smaller = a carry between the bytes) */
++			ok = ok && spmiRead(apid, RTC_RDATA0, &again) && again >= b[0];
++		}
++		uint32_t raw = b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
++		uint64_t offset = 0;
++		uint32_t rtcWait = 0;
++		PE_parse_boot_argn("asusrtc", &offset, sizeof(offset));
++		PE_parse_boot_argn("asusrtcwait", &rtcWait, sizeof(rtcWait));
++		if (ok) {
++			gAsusRtcRawAbs = mach_absolute_time();
++			gAsusRtcRaw = raw;
++			if (offset) {
++				gAsusRtcAbs = gAsusRtcRawAbs;
++				gAsusRtcUtc = offset + raw;
++			}
++		}
++		IOLog("ASUS RTC: apid %u, counter %u (%s, status %#x), asusrtc %llu: UTC %llu\n", apid, raw,
++		    ok ? "read" : "NOT read", fLastStatus, offset, gAsusRtcUtc);
++		if (!rtcWait) {
++			publishResource("IORTC");
++		}
++	}
 +	/* GPIO configuration belongs to firmware: diagnose, never repair it here. */
 +	unsigned dir = (subtype >= 0x10 && subtype <= 0x13) ? (mode & 3) : ((mode >> 4) & 7);
 +	if (!eok || !mok || !sok || !(en & 0x80) || (dir != 0 && dir != 2)) {
@@ -25296,6 +25380,12 @@
 +		return;
 +	}
 +	amark("ASUS TOUCH: flash log ready (waited %u s), starting bring-up\n", 2 * waits);
++	{
++		clock_sec_t secs = 0;
++		clock_usec_t usecs = 0;
++		clock_get_calendar_microtime(&secs, &usecs);
++		amark("ASUS RTC: the calendar reads %lu (UTC seconds)\n", (unsigned long)secs);
++	}
 +	((AsusPhoneInput *)owner)->cpuFreq();
 +	((AsusPhoneInput *)owner)->gpuProbe();
 +	((AsusPhoneInput *)owner)->touchBringup();
@@ -25333,6 +25423,36 @@
 +	sender->setTimeoutMS(POLL_MS);
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- a/iokit/Kernel/IOPlatformExpert.cpp
++++ b/iokit/Kernel/IOPlatformExpert.cpp
+@@ -390,15 +390,27 @@
+ #endif
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern "C" long asus_rtc_seconds(void);         /* ASUS: AsusPhoneInput.cpp (the PMK8350 RTC + boot-arg asusrtc) */
++extern "C" void asus_rtc_set(long secs);
++#endif
++
+ long
+ IOPlatformExpert::getGMTTimeOfDay(void)
+ {
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	return asus_rtc_seconds();
++#else
+ 	return 0;
++#endif
+ }
+ 
+ void
+ IOPlatformExpert::setGMTTimeOfDay(long secs)
+ {
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	asus_rtc_set(secs);
++#endif
+ }
+ 
+ 
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
 @@ -8,2 +8,10 @@
