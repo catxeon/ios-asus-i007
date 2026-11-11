@@ -99,6 +99,12 @@ if args.gpu:
     # DYLD_INSERT_LIBRARIES for named programs (boot-arg topaz_inject=LIBRARY,NAME,...):
     # how the OpenGL ES library gets into backboardd. Applies to the stock kern_exec.c.
     selected.append(repo / 'xnu/patches/0919-topaz-private-kern.exec_inject-boot-arg-topaz_inject.patch')
+    # Boot-arg applog_name=NAME[,NAME...]: these programs get OS_ACTIVITY_DT_MODE, so their
+    # os_log goes to standard error, and with the same names in sweetnull (0048) into the
+    # kernel log: what com.apple.datamigrator does for the 14 min SpringBoard waits for it
+    # on every boot (images 0052-0079). Both apply to kern_exec.c after 0919.
+    selected.append(repo / 'xnu/patches/0920-topaz-private-applog-applog_name-daemon-stdout-stder.patch')
+    selected.append(repo / 'xnu/patches/0921-topaz-private-applog_name-without-applog-1-os_log-to.patch')
 if args.smp:
     # git apply goes in name order: "zsmp" sorts after every other 9999-asus-i007 patch,
     # whose SweetCPU/SWEET.h edits it was generated against.
