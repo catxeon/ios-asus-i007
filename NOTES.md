@@ -209,8 +209,14 @@ history; its dated lines tell how it was found.
       and events' words) still reach ordinary memory; what the RB draws does not, without
       any fault. That is every symptom of 0062-0068, and probably the GMEM hang too (not
       tested yet).
-    - Fix: commit bb44ff1 (APRIV on by default, `asusgpuapriv=0` leaves it out), kernel CI
-      42949072293 started, result not seen yet.
+    - Fix: commit bb44ff1 (APRIV on by default, `asusgpuapriv=0` leaves it out). Kernel CI
+      42949072293 FAILED, my mistake: I added the comment's 8 lines to the input patch by
+      hand and left the hunk header at 3680 lines, so AsusPhoneInput.cpp was cut short
+      (`unterminated conditional directive`). Header fixed in 3b75897 (checked: `git
+      apply` of the input and zgpu patches in a scratch tree gives 3688 lines), kernel CI
+      42950765603 started, result not seen yet. When editing a file a patch creates in
+      full, change it through a script that rewrites `@@ -0,0 +1,N @@` (the scratchpad
+      edit_input_patch*.py did; a plain replace does not).
     - **iOS image 0076 built, NOT booted** (kernel 42945459177 + boot-arg
       `asusgpuapriv=1`, otherwise 0067's recipe; SHA256 0c39a1bd...6b5a; boot-args 503
       chars): the first iOS boot that should show a picture drawn by the GPU. Needs the
