@@ -72,6 +72,34 @@ USB network (medium), cellular and Wi-Fi (very large). The user chose the time f
   difference is baked into the image at build time (a hard reset of the PMIC or a few
   days' drift make it stale: rebuild); nothing stores a time set in iOS (later: where?).
 
+**ALSO WORKED ON (2026-11-11 late, user: "давай ещё время загрузки уменьшим"): the 15
+minutes from power-on to the lock screen.**
+- Observed (0079's log, the same in 0052/0066/0078; launchd's and SpringBoard's lines carry
+  the uptime as a 1969-12-31 16:MM:SS time): launchd says hello at 58.7 s, "Early boot
+  complete" at 62 s, backboardd shows the logo (frames 1-3) and SpringBoard (pid 24) is
+  started within the next seconds; the last program started is `com.apple.datamigrator`.
+  Then NOTHING is started and nothing drawn (`3 submissions in 791259 ms`) until
+  SpringBoard's first line at 16:15:03-06 = 903-906 s in every boot: `Error: Daemon
+  connection invalidated`, and the lock screen comes up at once. So about 840 s are one
+  wait, not slow work.
+- Guess (strong, from the sweet notes of 2026-10-17 below: backboardd calls
+  DMPerformMigrationIfNeeded and holds SpringBoard in checkInAndWaitForDataMigration):
+  the data migration service hangs or runs into a 14 min limit, then its connection is
+  invalidated and the boot goes on. Root v9+ has com.apple.migration.plist
+  {LastSystemVersion 20H392}, and no migration bar is seen, so it is probably not a real
+  migration. What datamigrator waits for is NOT known.
+- The first 58 s before launchd are not looked at yet (they held the 30 s IORTC wait that
+  cf8d431 removes; not measured).
+- Tooling, commit 5d3d88c: the ASUS profile (--gpu) now takes patches 0920 + 0921 (boot-arg
+  `applog_name=NAME[,NAME]`: os_log of those programs to stderr; checked: they apply to
+  the stock kern_exec.c after 0919, and 9998 after them), and tools/build-asus-image.sh
+  takes `ASUS_SWEETNULL=list` (the names whose stderr goes into the kernel log). Kernel CI
+  43075924885 started. Then: an iOS image with `applog_name=com.apple.datamigrator`,
+  `ASUS_SWEETNULL=backboardd,SpringBoard,Preferences,com.apple.datamigrator` and asusrtc
+  (one boot answers both the clock and this; user's OK needed).
+- If its log does not say: port sweet's process sampler (xnu/patches/0054: user pc/lr and
+  frame-pointer backtraces of named processes every 120 s; not in the ASUS profile).
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
