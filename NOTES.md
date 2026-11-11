@@ -109,9 +109,12 @@ minutes from power-on to the lock screen.**
   - THE CLOCK WORKS IN iOS: `ASUS RTC: ... UTC 1794422398` (boot sent at 21:39:54 local =
     1794422394), launchd's lines now `2026-11-11 10:39:59` (Pacific time), SpringBoard's
     `2026-11-11 10:54:08`. No `ASUS RTC: the system sets the time` line (nothing called
-    settimeofday). What the lock screen showed: not said by the user yet, ASK; Preferences
-    was opened at 11:01:35 (40 finger touches), so also ask whether the time zone was
-    changed.
+    settimeofday). The user confirmed the lock screen: 11 November, about 10:54 (her
+    time minus 11 h): "да". Preferences was opened at 11:01:35; the time zone was NOT
+    changed: "тапы по клавиатуре не работали при попытке вбить в поиске город" (NEW
+    PROBLEM: taps on the on-screen keyboard do nothing, seen in Settings' city search;
+    other taps and swipes work. Not looked into). So the time zone needs the keyboard
+    fixed or a write to the root.
   - The cycle took 1539 s, not 1568-1569: 30 s less, as the IORTC wait's removal would
     give (the asusreboot timer runs from after that point). launchd's hello comes ~1 s
     after AsusPhoneInput::start now.
@@ -124,6 +127,15 @@ minutes from power-on to the lock screen.**
   - `applog_name` gave NOTHING: not one `|com.apple.datamigrator|` line (0 of 3348), from
     either instance. Not known why (the name in sweetnull is compared with proc_selfname;
     or OS_ACTIVITY_DT_MODE does nothing here; or its stderr is not /dev/null).
+- The user asked whether the original repository has a patch for datamigrator. Looked
+  (this tree and origin/topaz = MakrSas/ios-topaz at e477291): NO kernel patch. Upstream
+  deals with it in the root image and the device tree only: tools/sweet-root-tweaks.py
+  (`com.apple.migration`: LastSystemVersion and DMUserDataDisposition {SyntheticDidUpgrade
+  false, buildVersion}; mobileactivationd's data ark with -DataMigrationCompleted) and
+  tools/mkadt.py (a synthetic ECID + chip-id so that IOPlatformUUID exists and ByHost
+  preferences can be written). Its notes do not have this 14 min wait with `Daemon
+  connection invalidated`. Not checked: what com.apple.migration.plist holds on the
+  phone's root NOW (iOS rewrites its preferences; 0046-0050 lost SetupDone that way).
 - Commit f21bcab: a process sampler in the zcrash patch (osfmk/kern/exception.c + a call
   in proc_prepareexit; made from the stock sources by the scratchpad's
   make_zcrash_sampler.py, `git apply --check` on stock OK, syntax checked with stubs).
