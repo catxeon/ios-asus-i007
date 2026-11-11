@@ -191,9 +191,18 @@ minutes from power-on to the lock screen.**
   - The sampler's one-line backtraces were cut at ~250 characters by the console
     (threads ran together on a line; the script copes). Commit 189efd1: 36 frames, six
     a line, up to 10 processes; tools/asus-sample-symbols.py added. Kernel CI
-    43095031178 started. Next: lab check, then an iOS image with
-    `asussample=lsd,containermanagerd,runningboardd,mobileactivationd,iconservicesagent,SpringBoard`
-    (user's OK): is lsd busy (stacks change) or waiting (on whom)?
+    43095031178 built and verified the kernel but both artifact uploads FAILED and the
+    run stays "in_progress" (GitHub Actions major outage, 2026-11-11 ~20:20-21:00 UTC; the
+    user noticed the long wait): nothing to download there. Run again as 43099356535:
+    succeeded (kernel b576f28a..., ../asus-ci-43099356535). When a run looks stuck, read
+    its steps (`gh api repos/.../actions/runs/RUN/jobs`), not its status.
+  - Lab image 0086 on it (00:17, `asussample=launchd asussampleevery=10`): the new
+    line format (`SMP launchd t0 pc .. lr .. sp ..`), clock and GPU self-test fine.
+  - **iOS image 0087 built, NOT booted** (kernel 43099356535; 0078's recipe with sysmem +
+    asusrtc + `asussample=lsd,containermanagerd,runningboardd,mobileactivationd,SpringBoard`;
+    SHA256 187a139b...e4fc; boot-args 586 chars of 608: no room for more
+    names). Needs the user's OK (iOS boot, 26 min, root is clean). To read: is lsd busy
+    (its stacks change from sample to sample) or waiting, and on whom.
   - Also in this log: `CRASH Preferences ... 0x8badf00d ... failed to terminate
     gracefully after 5.0s` (Settings killed when it was closed; not looked into).
 
