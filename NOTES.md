@@ -24,8 +24,8 @@ below is history; its dated lines tell how it was found.
 **UPDATE 2026-11-11 evening: THE SCREEN IS NOT BLACK ANY MORE.** iOS image 0078 (kernel
 42950765603, the fix by default) booted with the user's OK: the user saw the Apple logo
 ("уже не чёрный экран - горит яблоко!"), the first picture drawn by the GPU on the panel.
-What the screen showed after SpringBoard came up (from ~15 min) is NOT yet known: ask the
-user. Details under "iOS image 0078 BOOTED" below. Next: FD_MESA_DEBUG=sysmem off (GMEM),
+After SpringBoard came up the user saw the lock screen (answer to "what was on the screen
+after the logo": "Экран блокировки"). Details under "iOS image 0078 BOOTED" below. Next: FD_MESA_DEBUG=sysmem off (GMEM),
 then the cost per frame.
 
 **Open problem 1: black screen (the current blocker).**
@@ -233,8 +233,9 @@ then the cost per frame.
       ../phone-0078; full 1568 s, root clean before and after, Android back).
       - Observed by the user, a few minutes into the boot: "уже не чёрный экран - горит
         яблоко!" (the Apple logo: backboardd's early frames, which 0062-0068 sent as
-        zeros). What was on the screen after ~15 min (SpringBoard, the swipes) the user
-        has not said yet: ASK.
+        zeros). Asked afterwards what was on the screen from ~15 min: "Экран
+        блокировки" (the lock screen). Not asked or said: whether the swipes moved it,
+        whether the home screen came.
       - Observed in the log: `stage 7: CP_APRIV_CNTL 0x6e`. The kernel's middle pixel of
         the shown surface (every 300 shows) is no longer 00000000: `ffffffff` after
         submission 3 (the logo), then `ff000000`, once `80000000`, and through the swipe
@@ -254,8 +255,7 @@ then the cost per frame.
       chars). Image 0070 is superseded too.
     - **iOS image 0079 built, NOT booted** (kernel 42950765603, 0078's recipe without
       `glenv=FD_MESA_DEBUG=sysmem`: Mesa renders through GMEM; SHA256 a67cda16...eda5).
-      Needs the user's OK (iOS boot, 26 min, root is clean). First hear from the user
-      what 0078 showed after SpringBoard came up: a wrong picture comes before GMEM.
+      Needs the user's OK (iOS boot, 26 min, root is clean).
     - Next: FD_MESA_DEBUG=sysmem off (does GMEM still hang?), then the cost per
       frame (25 MB out of the cache a submission; the cache fix 6ca3832 stays: it is
       right, only it was not the cause).
