@@ -25,8 +25,10 @@ below is history; its dated lines tell how it was found.
 42950765603, the fix by default) booted with the user's OK: the user saw the Apple logo
 ("уже не чёрный экран - горит яблоко!"), the first picture drawn by the GPU on the panel.
 After SpringBoard came up the user saw the lock screen (answer to "what was on the screen
-after the logo": "Экран блокировки"). Details under "iOS image 0078 BOOTED" below. Next: FD_MESA_DEBUG=sysmem off (GMEM),
-then the cost per frame.
+after the logo": "Экран блокировки"). Details under "iOS image 0078 BOOTED" below.
+Image 0079 (the same without FD_MESA_DEBUG=sysmem) ran without the old GMEM hang, 18-21
+fps; what its picture looked like the user has not said yet. Next: that answer, then the
+cost per frame.
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
@@ -257,12 +259,28 @@ then the cost per frame.
     - iOS image 0076: superseded by 0078, never booted (kernel 42945459177 + boot-arg
       `asusgpuapriv=1`, otherwise 0067's recipe; SHA256 0c39a1bd...6b5a; boot-args 503
       chars). Image 0070 is superseded too.
-    - **iOS image 0079 built, NOT booted** (kernel 42950765603, 0078's recipe without
-      `glenv=FD_MESA_DEBUG=sysmem`: Mesa renders through GMEM; SHA256 a67cda16...eda5).
-      Needs the user's OK (iOS boot, 26 min, root is clean).
-    - Next: FD_MESA_DEBUG=sysmem off (does GMEM still hang?), then the cost per
-      frame (25 MB out of the cache a submission; the cache fix 6ca3832 stays: it is
-      right, only it was not the cause).
+    - **iOS image 0079 BOOTED: no hang without FD_MESA_DEBUG=sysmem** (2026-11-11
+      19:50-20:16, user's OK "запускай", ../phone-0079; kernel 42950765603, 0078's
+      recipe without `glenv=FD_MESA_DEBUG=sysmem`; SHA256 a67cda16...eda5; full 1569 s,
+      root clean before and after, Android back).
+      - Observed in the log: unlock swipe and rounds 1-30 all ran; all 8 `ASUS GPU:
+        shown:` lines RBBM_STATUS 0x1, INT0 0, CP_HW_FAULT 0, sGFSR 0 (0061/0062 without
+        sysmem: the CP stood still within the first frames). No panic. 1 finger touch.
+      - Frame rate through the rounds: 15.4-21.2, mostly 18-21 (0078 with sysmem:
+        20.0-29.6, but there the user swiped by hand as well, so the two are not a clean
+        comparison).
+      - Middle pixel: `ffffffff` (the logo), then `ff000100`/`ff000000` and
+        `c11f201f` in turn (three times the same). 0078 had `ff1c1c1e` in that place:
+        the same screen comes out with alpha 0xc1 and another colour without sysmem.
+        Guess: a difference of the GMEM path (a blend over a tile that was not loaded
+        from memory, or the like), or only another moment of an animation. Not looked
+        into. What the user saw on the screen in 0079: not said yet, ASK.
+      - Not shown by the log: that Mesa really took the GMEM path for its passes (it
+        chooses for each pass); the changed pixel and the lower rate speak for it.
+    - Next: hear what 0079 looked like; if the picture is right, the workaround
+      `glenv=FD_MESA_DEBUG=sysmem` is a speed choice only (measure both with the
+      autoswipe alone). Then the cost per frame (25 MB out of the cache a submission;
+      the cache fix 6ca3832 stays: it is right, only it was not the cause).
   - **iOS image 0070 built, NOT booted** (kernel 42907840162 = c8cefef, 0067's recipe, no
     trace; SHA256 a5f230cf...fa82). Needs the user's OK (26 min, root is clean). It is for
     the `ASUS GPU: shown: ...` state lines every 300 shows: does Mesa's rendering leave
@@ -270,8 +288,10 @@ then the cost per frame.
 
 **Open problem 2: GMEM (tiled + binning) hangs the CP** (0061/0062, decoded in "Image
 0062" below: CP waits at a CP_DRAW_INDX_OFFSET of the per-bin pass; only CP busy). Workaround
-FD_MESA_DEBUG=sysmem. Next: FD_MESA_DEBUG=nobin; Linux's a660 hwcg table (a6xx_set_hwcg,
-a660_hwcg, gmu_cgc_mode 0x00020200) which stage 7 never writes.
+FD_MESA_DEBUG=sysmem. **2026-11-11: gone with the CP_APRIV_CNTL fix**: image 0079 without
+the workaround ran its 26 min and 30 swipe rounds with a clean GPU (see "iOS image 0079
+BOOTED" above). Open: whether its picture is right (middle pixel c11f201f against
+0078's ff1c1c1e).
 
 **Perf notes:** ~25 MB pushed out of the CPU cache per submission (gpu_cached=1), one
 full-screen texture refilled from an IOSurface per frame (10.8 MB).
