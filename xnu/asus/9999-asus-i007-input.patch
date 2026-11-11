@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,3507 @@
+@@ -0,0 +1,3535 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -24399,11 +24399,26 @@
 +	bzero(va, (size_t)size);
 +	redwood_gpu_to_memory(va, size);
 +	n = 0;
-+	static const uint32_t events[] = { 0x1d, 0x1c, 0x19, 0x18 };   /* PC_CCU_FLUSH_COLOR_TS/_DEPTH_TS, _INVALIDATE_COLOR/_DEPTH */
-+	for (unsigned i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
-+		w[n++] = pkt7(0x46, 1);                 /* CP_EVENT_WRITE */
++	/*
++	 * The _TS events carry an address and a value the GPU writes there when it is done, as
++	 * the fence's CACHE_FLUSH_TS does. Image 0069 sent them bare: the SQE took the next two
++	 * words for the address (a write at 0x1c70460000 = a CP_EVENT_WRITE header and the next
++	 * event's number: a translation fault) and the GPU stood still. Their words go behind
++	 * the picture's rows, and are looked at afterwards.
++	 */
++	const uint64_t ts = gva + size - 64;
++	static const uint32_t events[] = { 0x1d, 0x1c };        /* PC_CCU_FLUSH_COLOR_TS, PC_CCU_FLUSH_DEPTH_TS */
++	for (uint32_t i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
++		w[n++] = pkt7(0x46, 4);                 /* CP_EVENT_WRITE */
 +		w[n++] = events[i];
++		w[n++] = (uint32_t)(ts + 4 * i);
++		w[n++] = (uint32_t)((ts + 4 * i) >> 32);
++		w[n++] = 0xcc000001u + i;
 +	}
++	w[n++] = pkt7(0x46, 1);
++	w[n++] = 0x19;                                  /* PC_CCU_INVALIDATE_COLOR */
++	w[n++] = pkt7(0x46, 1);
++	w[n++] = 0x18;                                  /* PC_CCU_INVALIDATE_DEPTH */
 +	w[n++] = pkt7(0x65, 1);                         /* CP_SET_MARKER */
 +	w[n++] = 12;                                    /* RM6_BLIT2DSCALE */
 +	w[n++] = pkt7(0x26, 0);                         /* CP_WAIT_FOR_IDLE */
@@ -24438,12 +24453,25 @@
 +	w[n++] = pkt7(0x2c, 1);                         /* CP_BLIT */
 +	w[n++] = 3;                                     /* BLIT_OP_SCALE */
 +	w[n++] = pkt7(0x26, 0);
-+	w[n++] = pkt7(0x46, 1);                         /* (CP_BLIT writes to the CCU: flushed to memory) */
++	w[n++] = pkt7(0x46, 4);                         /* (CP_BLIT writes to the CCU: flushed to memory) */
 +	w[n++] = 0x1d;
++	w[n++] = (uint32_t)(ts + 8);
++	w[n++] = (uint32_t)((ts + 8) >> 32);
++	w[n++] = 0xcc000003u;
 +	w[n++] = pkt7(0x26, 0);
 +	redwood_gpu_to_memory(ib.va, ib.size);
 +	done = gpuTestRun(iva, n, "b (2D solid fill)");
++	if (!done) {
++		redwood_gpu_report("stage 11 b");       /* (where the CP stands in the buffer) */
++	}
++	/* what the 2D registers hold now: the buffer's writes took, or did not */
++	amark("ASUS GPU: stage 11 b: RB_2D_BLIT_CNTL %#x RB_2D_DST %#x%08x pitch %#x RB_CCU_CNTL %#x GRAS_2D_DST_BR %#x "
++	    "SP_2D_DST_FORMAT %#x\n", gpuR(gGpuRegs, 0x8c00), gpuR(gGpuRegs, 0x8c19), gpuR(gGpuRegs, 0x8c18),
++	    gpuR(gGpuRegs, 0x8c1a), gpuR(gGpuRegs, 0x8e07), gpuR(gGpuRegs, 0x8406), gpuR(gGpuRegs, 0xacc0));
 +	redwood_gpu_to_memory(va, size);
++	amark("ASUS GPU: stage 11 b: the events' words: %#x %#x %#x (want 0xcc000001 0xcc000002 0xcc000003)\n",
++	    *(volatile uint32_t *)(va + size - 64), *(volatile uint32_t *)(va + size - 60),
++	    *(volatile uint32_t *)(va + size - 56));
 +	uint32_t lit = 0, other = 0;
 +	for (uint32_t y = 0; y < height; y++) {
 +		const volatile uint32_t *row = (const volatile uint32_t *)(va + (uint64_t)pitch * y);
