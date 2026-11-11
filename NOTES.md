@@ -151,7 +151,34 @@ backboardd and CoreAnimation renders with OpenGL ES 3.2 on `FD660`. With
   - Fixed: commit bb701bf, kernel CI 42942223681 (started 2026-11-11, result not seen
     yet): the _TS events carry an address behind the picture's rows and markers
     0xcc000001-3 (printed), the 2D registers are read back, redwood_gpu_report if the
-    fence does not come. Next: lab image 0071 = this kernel, same recipe.
+    fence does not come.
+  - **Lab image 0071 (kernel CI 42942223681 = bb701bf, ../asus-ci-42942223681, image
+    7eab678c...3983; 2026-11-11 05:08, Android back after 186 s), ../phone-0071/log.txt:
+    THE BLACK SCREEN REPRODUCED IN THE KERNEL, 3 minutes a run.**
+    - `stage 11 b (2D solid fill): 54 words, fence 4 done`; `RB_2D_BLIT_CNTL 0x10f03080
+      RB_2D_DST 020000000 pitch 0x47 RB_CCU_CNTL 0x18000000 GRAS_2D_DST_BR 0x9830464
+      SP_2D_DST_FORMAT 0xf180` (the buffer's register writes took); `the events' words:
+      0xcc000001 0xcc000002 0xcc000003` (all three CCU flushes completed); then `0 of
+      2740500 pixels written`; state after: `RBBM_STATUS 0x1 INT0 0 CP_HW_FAULT 0 sGFSR 0
+      CB FSR 0x400` (idle, no fault, no unmatched stream).
+    - So a well-formed CP_BLIT, the same Mesa's clears and frame copies use, runs and
+      leaves the (zeroed) buffer zero. Not known yet: nothing written, or zeroes written.
+    - Checked and fine: zap `authenticated`, `CP_SET_SECURE_MODE 0 DONE`; CP_ME_INIT's 8
+      words are Linux's; the A660 has ADRENO_QUIRK_HAS_HW_APRIV in Linux (CP_APRIV_CNTL
+      0x6e, never written here); gpucc 0x1508 (GX_DOMAIN_MISC: GMEM clamp bit 0, reset bit
+      4) read 0 before the GMU started (its row is absent from the dump = all zero).
+  - **Third round: commit 5485d65, kernel CI 42945459177 (started 2026-11-11 ~05:40,
+    result not seen yet).** Stage 11 b now: rows prefilled with 0x5a5a5a5a (untouched /
+    zero / colour counted), microseconds per run, RBBM_CLOCK_CNTL, CP_APRIV_CNTL,
+    RBBM_STATUS3, UCHE 0xe00-0xe3f and RB 0x8e00-0x8e0f rows; stage 6 prints
+    GX_DOMAIN_MISC after GPU_SET. Experiments without a rebuild (lab images, boot-args,
+    hexadecimal): `asusgpuw=REG:VAL,...` MMIO writes at the end of stage 7's settings
+    (before the CP starts), `asusgpuib=REG:VAL,...` register writes in the fill's buffer
+    just before CP_BLIT, `asusgpur=REG,...` read back after, `asusgpuhwcg=1` Linux's
+    a6xx_set_hwcg(true) with a660_hwcg, `asusgpuapriv=1` CP_APRIV_CNTL 0x6e,
+    `asusgpusecread=1` reads RBBM_SECVID_TRUST_CNTL last (may reset the phone).
+    Plan: 0072 plain; then by what it says: untouched -> hwcg, apriv; zeroes -> the CCU /
+    GMEM side (RB_CCU_CNTL offsets through asusgpuib).
   - **iOS image 0070 built, NOT booted** (kernel 42907840162 = c8cefef, 0067's recipe, no
     trace; SHA256 a5f230cf...fa82). Needs the user's OK (26 min, root is clean). It is for
     the `ASUS GPU: shown: ...` state lines every 300 shows: does Mesa's rendering leave
