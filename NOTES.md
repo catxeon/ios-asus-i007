@@ -156,6 +156,46 @@ minutes from power-on to the lock screen.**
   line at ~14 min, SpringBoard's and backboardd's threads meanwhile; symbolicate with
   tools/sweet-crash.py and the dyld cache (unslid = address - slide).
 
+- **iOS image 0085 BOOTED: THE WAIT IS FOR lsd, NOT datamigrator** (2026-11-11
+  22:41-23:07, user's OK "Да, запускай 0085", ../phone-0085; 1538 s, root clean before and
+  after). Symbols: `python3 tools/asus-sample-symbols.py ~/dsc/dyld_shared_cache_arm64
+  ../phone-0085/log.txt` (WSL; ~/dsc = the cache's 43 files taken out of
+  ~/asus-roots/iosroot-now.img with ~/asus-roots/hfsplus; output kept in
+  ~/dsc/smp-0085.txt).
+  - Observed: `SMP com.apple.datami[35] exits: status 0x0 ... by this thread` BEFORE sample
+    0 (so within 90 s): datamigrator ends by itself, exit() called from libxpc out of its
+    main run loop (an idle exit). The second instance (pid 36, at ~14 min) the same. The
+    earlier guess (it hangs) was WRONG.
+  - Observed: in samples 0-12 (90 s to 810 s) SpringBoard has 3 threads and they do not
+    move: t0 (main) in __ulock_wait under CoreServices <- ControlCenterServices (queue
+    `com.apple.ControlCenter.ModuleRepository`, a dispatch_once); t1 holds that lock and
+    sits in xpc_connection_send_message_with_reply_sync <- Foundation (NSXPC) <-
+    CoreServices +0x258e8 (function at +0x255d8), whose only string is "Database was
+    seeding; client will retry and block. This is not an error."; t2 an idle workqueue
+    thread. From sample 13 on it has its ~16 threads. backboardd: run loops, idle.
+  - So: SpringBoard waits for the LaunchServices database, which lsd is "seeding"
+    (building from scratch) for 14 min on EVERY boot.
+  - Observed in the root image of 2026-11-10 (~/asus-roots/iosroot-now.img): lsd's
+    system container (/private/var/containers/Data/System/A89D6305-..., MCM id
+    com.apple.lsd) has EMPTY Library/Caches and Library/Preferences (both mode 0000,
+    uid/gid -2: ACL-only directories), and /private/var/db/lsd is empty: no saved
+    database (.csstore) anywhere after many boots. SpringBoard's container, same kind of
+    directory, does hold a folder made by uid 501 at ~15 min of a boot.
+  - Guesses, in order: (1) lsd cannot write its database (the ACL-only directories:
+    sweet's patch 0057 dropped config_ext_resolver for exactly this, and 0057 is NOT in
+    the ASUS profile), so every boot seeds again; (2) the seeding itself waits for a
+    daemon that is not there (installd is not started before the gap) and ends by a
+    timeout: `Daemon connection invalidated` when it ends fits that; (3) it really takes
+    14 min of work. Not known which: lsd was not sampled.
+  - The sampler's one-line backtraces were cut at ~250 characters by the console
+    (threads ran together on a line; the script copes). Commit 189efd1: 36 frames, six
+    a line, up to 10 processes; tools/asus-sample-symbols.py added. Kernel CI
+    43095031178 started. Next: lab check, then an iOS image with
+    `asussample=lsd,containermanagerd,runningboardd,mobileactivationd,iconservicesagent,SpringBoard`
+    (user's OK): is lsd busy (stacks change) or waiting (on whom)?
+  - Also in this log: `CRASH Preferences ... 0x8badf00d ... failed to terminate
+    gracefully after 5.0s` (Settings killed when it was closed; not looked into).
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
