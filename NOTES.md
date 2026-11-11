@@ -252,6 +252,10 @@ then the cost per frame.
     - iOS image 0076: superseded by 0078, never booted (kernel 42945459177 + boot-arg
       `asusgpuapriv=1`, otherwise 0067's recipe; SHA256 0c39a1bd...6b5a; boot-args 503
       chars). Image 0070 is superseded too.
+    - **iOS image 0079 built, NOT booted** (kernel 42950765603, 0078's recipe without
+      `glenv=FD_MESA_DEBUG=sysmem`: Mesa renders through GMEM; SHA256 a67cda16...eda5).
+      Needs the user's OK (iOS boot, 26 min, root is clean). First hear from the user
+      what 0078 showed after SpringBoard came up: a wrong picture comes before GMEM.
     - Next: FD_MESA_DEBUG=sysmem off (does GMEM still hang?), then the cost per
       frame (25 MB out of the cache a submission; the cache fix 6ca3832 stays: it is
       right, only it was not the cause).
