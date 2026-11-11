@@ -94,9 +94,16 @@ minutes from power-on to the lock screen.**
   `applog_name=NAME[,NAME]`: os_log of those programs to stderr; checked: they apply to
   the stock kern_exec.c after 0919, and 9998 after them), and tools/build-asus-image.sh
   takes `ASUS_SWEETNULL=list` (the names whose stderr goes into the kernel log). Kernel CI
-  43075924885 started. Then: an iOS image with `applog_name=com.apple.datamigrator`,
-  `ASUS_SWEETNULL=backboardd,SpringBoard,Preferences,com.apple.datamigrator` and asusrtc
-  (one boot answers both the clock and this; user's OK needed).
+  43075924885 succeeded (kernel 74b426fb..., ../asus-ci-43075924885). Lab image 0082 on
+  it (21:33, `applog_name=asus,init,launchd` + asusrtc): boots, the clock and the GPU
+  self-test as in 0080.
+- **iOS image 0083 built, NOT booted** (kernel 43075924885; 0078's recipe with sysmem +
+  `asusrtc=1794343816 applog_name=com.apple.datamigrator` and
+  `ASUS_SWEETNULL=backboardd,SpringBoard,Preferences,com.apple.datamigrator`; SHA256
+  c8df4328...3b5a; boot-args 565 chars). One boot
+  for both questions: the lock screen's date (replaces 0081) and what datamigrator logs
+  during the wait (`|com.apple.datamigrator| ...` lines). Needs the user's OK (iOS boot,
+  26 min, root is clean).
 - If its log does not say: port sweet's process sampler (xnu/patches/0054: user pc/lr and
   frame-pointer backtraces of named processes every 120 s; not in the ASUS profile).
 
