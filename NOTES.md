@@ -611,7 +611,7 @@ re-pull before preparing any block patch. User permissions given 2026-11-10: lab
 unattended; the /asus/lib write and the GPU iOS boots; booting once on the dirty journaled
 root after the 0065 panic (journal replay worked). 2026-11-11: 0068 on the dirty root ("Да,
 запускай 0068"); lab images without asking each time, confirmed again ("Да, без спроса").
-Ask again for anything else that writes the root, and for every iOS boot. The auto-mode classifier refused asus-iosroot-blockpatch.py (even read-only) and
+Ask again for anything else that writes the root, and for every iOS boot. **2026-11-12: iOS boots no longer need asking**: when told an iOS image would be built and permission asked for its boot, the user answered "не спрашивай разрешение, действуй сам". Read here as covering the test boots (`fastboot boot` of an iOS image on a clean root: iOS mounts the root read-write, as in every boot so far); NOT read as covering block patches of the root from the PC, flashing, or anything AGENTS.md calls destructive: ask for those. The auto-mode classifier refused asus-iosroot-blockpatch.py (even read-only) and
 ASUS_ALLOW_DIRTY_ROOT=1 without an explicit user OK.
 
 **Tooling quirks:** Git Bash rewrites "/"-looking arguments (a jq filter `"/"` became
