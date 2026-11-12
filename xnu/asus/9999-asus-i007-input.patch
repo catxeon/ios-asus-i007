@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4060 @@
+@@ -0,0 +1,4095 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -25247,30 +25247,36 @@
 + *
 + * On this phone the state of charge is computed by the charger firmware on the ADSP
 + * (Android: power_supply "battery" under qcom,pmic_glink / qcom,battery_charger); that
-+ * processor does not run under XNU. What can be read without it is the PM8350B's battery
-+ * current limiting block (SID 3, peripheral 0x47, "qcom,bcl-v5"; ASUS's kernel,
-+ * drivers/thermal/qcom/bcl_pmic5.c): VBAT at 0x76 in steps of 49.827 mV (127 = no
-+ * reading) and IBAT at 0x86, two's complement in steps of 78.127 mA. Android showed
-+ * 4384 mV there (= 88 steps) with the pack of two cells in series at 8782 mV, so it is
-+ * one cell's voltage. Read only, every 30 s.
++ * processor does not run under XNU. What the PM8350B (SID 3) measures by itself can be
++ * read without it, and is, read only, every 30 s (ASUS's kernel source: qti-qbg.c,
++ * qbg-core.h, bcl_pmic5.c, smb5-reg.h; all seen on the phone with lab images 0089/0090):
++ *  - QBG, the battery gauge's front end (peripheral 0x4f, type 0x0d/5): status 0x08 bit 7
++ *    = it runs, 0x09 bit 2 = no battery; the last burst's average voltage at 0xa0 (16
++ *    bits, 194.63 uV a step) and current at 0xa4 (signed, 61.03 uA a step). Android's
++ *    8781 mV for the pack of two cells in series was 4390.4 mV here: one cell's voltage.
++ *  - BCL (peripheral 0x47): VBAT at 0x76 in steps of 49.827 mV (127 = no reading), the
++ *    fallback when the QBG's reading is not usable.
++ *  - the USB input (peripheral 0x29, type 2/0x83): real-time status 0x10 bit 4 = plugged
++ *    in (smb5-reg.h's USBIN_PLUGIN for the PM8150B; it read 0x11 with the cable in. NOT
++ *    yet seen with the cable out).
 + *
-+ * The percentage is an ESTIMATE from that voltage through a generic curve for a 4.45 V
-+ * cell: steps of about 5 %, moved by load, temperature and age. It never reports a
-+ * critical level and never goes below 5 %, so that a wrong estimate cannot make iOS shut
-+ * down. Taken as charging when the current reads negative (Linux counts current out of
-+ * the battery as positive: NOT yet checked on this phone), as on external power when
-+ * charging or at 4350 mV and more.
++ * The percentage is an ESTIMATE from the voltage through a generic curve for a 4.45 V
++ * cell; load, charging, temperature and age move it. It never reports a critical level
++ * and never goes below 5 %, so that a wrong estimate cannot make iOS shut down. On
++ * external power it counts as charging until the estimate reaches 100 %. The current is
++ * passed on with Linux's sign turned round (positive = into the battery), which is NOT
++ * checked on this phone; nothing depends on it.
 + *
 + * Boot-arg asusbattery: 1 (default) as above, with a fixed 100 % on external power when
-+ * the readings are not usable; 2 always that fixed answer; 0 no battery at all.
++ * no reading is usable; 2 always that fixed answer; 0 no battery at all.
 + */
 +#define BATT_SID        3u              /* PM8350B */
-+#define BCL_TYPE        0x4704
-+#define BCL_SUBTYPE     0x4705
-+#define BCL_MONITOR_EN  0x4746
-+#define BCL_CONV_REQ    0x4772
 +#define BCL_VBAT_READ   0x4776
-+#define BCL_IBAT_READ   0x4786
++#define QBG_STATUS1     0x4f08
++#define QBG_STATUS2     0x4f09
++#define QBG_VBAT_AVG    0x4fa0
++#define QBG_IBAT_AVG    0x4fa4
++#define USBIN_RT_STS    0x2910
 +#define BATT_DESIGN_MAH 3500u           /* Android: charge_full_design 3500000 uAh */
 +
 +class AsusBattery : public IOPMPowerSource {
@@ -25289,6 +25295,7 @@
 +	void poll(void);
 +	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
 +	static unsigned estimatePercent(unsigned mv);
++	static bool readWord(unsigned addr, uint16_t *value);
 +};
 +OSDefineMetaClassAndStructors(AsusBattery, IOPMPowerSource);
 +
@@ -25382,33 +25389,61 @@
 +	return 100;
 +}
 +
++/* Two bytes of a measurement, read until two readings agree (the gauge may write between them). */
++bool
++AsusBattery::readWord(unsigned addr, uint16_t *value)
++{
++	uint16_t previous = 0;
++
++	for (unsigned attempt = 0; attempt < 4; attempt++) {
++		uint8_t lo = 0, hi = 0;
++		if (!AsusPhoneInput::pmicRead(BATT_SID, addr, &lo) || !AsusPhoneInput::pmicRead(BATT_SID, addr + 1, &hi)) {
++			return false;
++		}
++		uint16_t next = (uint16_t)(lo | ((unsigned)hi << 8));
++		if (attempt != 0 && next == previous) {
++			*value = next;
++			return true;
++		}
++		previous = next;
++	}
++	return false;
++}
++
 +void
 +AsusBattery::poll(void)
 +{
-+	uint8_t type = 0, subtype = 0, en = 0, conv = 0, v = 0, i = 0;
-+	bool ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_TYPE, &type);
-+	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_SUBTYPE, &subtype) && ok;
-+	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_MONITOR_EN, &en) && ok;
-+	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_CONV_REQ, &conv) && ok;
-+	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_VBAT_READ, &v) && ok;
-+	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_IBAT_READ, &i) && ok;
-+	unsigned mv = (unsigned)v * 49827u / 1000u;
-+	int out = (int)(int8_t)i * 78127 / 1000;        /* mA out of the battery (Linux's sense) */
-+	bool measured = fMode == 1 && ok && v != 0 && v != 127 && mv >= 2800 && mv <= 4600;
-+	bool charging = measured && (int8_t)i < 0;
-+	bool external = !measured || charging || mv >= 4350;
++	uint8_t qbg1 = 0, qbg2 = 0, usb = 0, bcl = 0;
++	uint16_t rawV = 0, rawI = 0;
++	bool sok = AsusPhoneInput::pmicRead(BATT_SID, QBG_STATUS1, &qbg1) && AsusPhoneInput::pmicRead(BATT_SID, QBG_STATUS2, &qbg2);
++	bool vok = readWord(QBG_VBAT_AVG, &rawV);
++	bool iok = readWord(QBG_IBAT_AVG, &rawI);
++	bool uok = AsusPhoneInput::pmicRead(BATT_SID, USBIN_RT_STS, &usb);
++	bool bok = AsusPhoneInput::pmicRead(BATT_SID, BCL_VBAT_READ, &bcl);
++	unsigned qbgMv = (unsigned)(((uint64_t)rawV * 19463u) / 100000u);
++	unsigned bclMv = (unsigned)bcl * 49827u / 1000u;
++	int out = iok ? (int)(((int64_t)(int16_t)rawI * 6103) / 100000) : 0;    /* mA, Linux's sign */
++	bool qbg = sok && vok && (qbg1 & 0x80) && !(qbg2 & 0x04) && qbgMv >= 2800 && qbgMv <= 4600;
++	bool fallback = !qbg && bok && bcl != 0 && bcl != 127 && bclMv >= 2800 && bclMv <= 4600;
++	bool measured = fMode == 1 && (qbg || fallback);
++	unsigned mv = qbg ? qbgMv : bclMv;
 +	unsigned percent = measured ? estimatePercent(mv) : 100;
++	bool external = !measured || !uok || (usb & 0x10);
++	bool full = external && percent >= 100;
++	bool charging = measured && external && !full;
 +
-+	if (fPolls < 6 || (int)percent != fLastPercent) {
-+		IOLog("ASUS BATTERY: BCL type %#x/%#x monitor %#x conversion %#x VBAT %#x = %u mV, IBAT %#x = %d mA out%s: "
-+		    "%u %%%s%s%s\n", type, subtype, en, conv, v, mv, i, out, ok ? "" : " (a read failed)", percent,
-+		    measured ? " (estimated)" : " (fixed: no usable reading)", external ? ", external power" : ", on battery",
-+		    charging ? ", charging" : "");
++	/* (every reading for the first ten minutes, then the changes: the log is the only way to check this) */
++	if (fPolls < 20 || (int)percent != fLastPercent) {
++		IOLog("ASUS BATTERY: QBG status %#x %#x voltage %#x = %u mV current %#x = %d mA out%s, BCL %#x = %u mV, USB "
++		    "input %#x%s: %u %%%s%s%s\n", qbg1, qbg2, rawV, qbgMv, rawI, out, sok && vok && iok ? "" : " (a read failed)",
++		    bcl, bclMv, usb, uok ? "" : " (not read)", percent,
++		    !measured ? " (fixed: no usable reading)" : qbg ? " (estimated)" : " (estimated from the BCL)",
++		    external ? ", external power" : ", on battery", charging ? ", charging" : "");
 +	}
 +	fPolls++;
 +	fLastPercent = (int)percent;
 +	if (measured) {
-+		publish(percent, mv, -out, external, charging, external && !charging, true);
++		publish(percent, mv, -out, external, charging, full, true);
 +	} else {
 +		publish(100, 4200, 0, true, false, true, false);
 +	}
