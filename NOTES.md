@@ -241,6 +241,36 @@ minutes from power-on to the lock screen.**
     see: when SpringBoard's first line comes (was 849 s after launchd's hello), where lsd
     stands in sample 0, whether a .csstore appears in lsd's container afterwards.
 
+- **iOS image 0088 BOOTED: THE 14 MIN ARE GONE** (2026-11-12 03:02-03:28, user's OK "Да,
+  запускай 0088", ../phone-0088).
+  - Observed: launchd's hello at 16:02:33 (Pacific; = 03:02:33 local, 4 s after "boot
+    sent"), SpringBoard's first line at 16:03:19: **46 s after launchd, was 849 s**. Its
+    first line is still `Error: Daemon connection invalidated` (so that message never
+    meant the wait). Frames: `6 submissions in 5319 ms`, `42 submissions in 38795 ms`,
+    then the idle 2 a minute of a still lock screen; ASUS FPS 0.8, 6.2, then 0.2 until the
+    autoswipe at 900 s; rounds 1-30 at 17.8-20.8 fps. 18 samples; lsd (pid 32) idle in
+    its run loop at sample 0 (90 s). No panic, no crash but the shutdown's SIGKILLs. 0
+    finger touches: nobody was at the phone (03:00), so what the panel showed is NOT
+    confirmed by eye; middle pixels ffffffff, then ff000100/ff000000 in turn.
+  - So the inference of 0087 holds: /chosen mac-address-wifi0 (+ bluetooth0) in the
+    device tree (commit 69256a2) was all it took. From `fastboot boot` to the lock screen
+    is now about one minute.
+  - Note on speed: these rounds ran with sysmem and without a hand on the screen and
+    give 17.8-20.8 fps, the same as 0079 without sysmem (18-21). 0078's 20-29.6 fps came
+    with the user swiping: sysmem is NOT faster by this measure.
+  - The cycle script died after "boot sent" (exit 4, no message; the session was
+    interrupted and adb's daemon was gone when work resumed at 07:28). The phone had
+    reset itself as usual (Android up since ~03:28); the log and the root header were
+    pulled by hand with the script's own commands (dd of the last 1025 blocks of iosroot,
+    tools/sweet-log.py): root clean, 183628 files. If the script dies while waiting, do
+    exactly that: the log stays at the partition's end until the next boot.
+  - Not known: whether lsd now saves its database (no root image pulled since), whether
+    a second boot is faster still, what the 26 s before launchd are spent on.
+  - With the UI up after a minute the test boots need not last 26 min any more
+    (`asusautoswipe=900` and `ASUS_REBOOT=1500` were sized for the old wait): e.g.
+    `asusautoswipe=150` and `ASUS_REBOOT=600`. Not changed yet: ask the user, who may
+    want the long window to use the phone.
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
