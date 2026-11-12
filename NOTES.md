@@ -337,9 +337,20 @@ minutes from power-on to the lock screen.**
     failed)` / `BCL 0x10 = 797 mV`. 0x10 is the PON status the keys' poll reads every
     20 ms on another work loop: two SPMI transactions at once get each other's data.
     Fixed in 0651608 (an IOLock around the observer command, as Linux's spmi-pmic-arb
-    lock). Kernel CI 43166430931 started.
-- Next: lab check, iOS boot; the user to look at the battery icon and to pull the cable
-  for a minute (does USB input bit 4 clear, does iOS show "on battery").
+    lock). Kernel CI 43166430931 succeeded (kernel a1cd1a51..., ../asus-ci-43166430931).
+- Lab image 0093 (09:23): 5 good polls, keys running, no error. **iOS image 0094 BOOTED**
+  (09:26-09:42, 15 min as 0092, ../phone-0094; root clean before and after): 20 polls,
+  NOT ONE wrong reading (the lock works): 4379 -> 4375 mV, 17-23 mA out, USB input 0x11
+  all the time. 0 finger touches again: nobody at the phone, the icon and the
+  cable-out case are still unseen.
+  - The estimate was 99 % (4375-4379 mV is just under the curve's 4380) and the driver
+    said "charging" for it, which is wrong: the current goes OUT. Commit 63949a8:
+    charging only when 20 mA or more go INTO the battery. Under XNU that stays false, so
+    iOS should say "not charging" on external power. Kernel CI 43170261686 started.
+- Next: an iOS boot WITH THE USER AT THE PHONE (asked for it): the status bar's battery
+  icon, and the cable pulled for a minute (does USB input bit 4 clear, does iOS show "on
+  battery"). Not known either: whether a wall charger changes the 20 mA drain (a PC's
+  port gives 0.5 A at most; nobody negotiates more under XNU).
 - Open: the sign of IBAT; how to know external power properly; the curve is generic;
   nothing about charging is controlled or known under XNU (who charges the battery while
   iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
