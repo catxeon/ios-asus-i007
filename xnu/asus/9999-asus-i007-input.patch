@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4269 @@
+@@ -0,0 +1,4270 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21688,6 +21688,7 @@
 +#define TOUCH_POLL_MS   8u
 +extern "C" void asus_log_mark(const char *line);   /* bsd/dev/sweet_ufs.c; weak fallback below */
 +extern "C" bool asus_log_ready(void);
++extern "C" void asus_shot_request(void);        /* SweetFramebuffer.cpp; weak fallback below */
 +static void amark(const char *fmt, ...) __printflike(1, 2);
 +
 +#define SPMI_CORE_PA    0x0c440000ULL
