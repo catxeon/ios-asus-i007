@@ -388,7 +388,26 @@ watching the battery icon and pulling the cable; the user said "позже".
   swap took N us waiting for the GPU, N us reading its memory back, N us copying to the
   panel` (averages per shown frame). Kernel CI 43213903663; a background chain boots lab
   0097 and then iOS 0098 (15 min) on it.
-- Not explained yet either way: the frame is ~45-50 ms at 20 fps, GL + attach is ~15 ms.
+- Kernel CI 43213903663 succeeded; lab 0097 fine; **iOS image 0098 BOOTED** (15:21-15:37,
+  no asking, 15 min, ../phone-0098, root clean before and after). Through the swipe rounds
+  (17.8-21.6 fps) a shown frame cost the kernel **3.1-3.4 ms waiting for the GPU's fence,
+  0.55 ms pushing the surface out of the caches, 1.5-1.6 ms copying it to the panel**: ~5.5
+  ms. Not the bottleneck.
+- So per ~50 ms frame: ~6 ms GL, ~9 ms the CPU fill of the attached target, ~5.5 ms the
+  swap; the rest (~30 ms) is not measured: CoreAnimation's own work in backboardd, or its
+  pacing. Guess, not checked: frames go out on every 3rd 60 Hz vsync (50 ms = 20 fps), and
+  ~9 ms less work may let them go on every 2nd (30 fps).
+- tools/hfs-replace-inplace.py (new): finds a file in the catalog (whole catalog read, leaf
+  records scanned, exact names), checks the journal is empty and the volume clean, and makes
+  a patch for asus-iosroot-blockpatch.py that rewrites the file's blocks in place and its
+  logicalSize in its catalog node, when the new file fits its one extent. The new
+  libasus-gl.dylib (346832 bytes, sha256 72640fd4...) fits the old one's 85 blocks (346720,
+  b9fc8fff...; libasus-inject and libOSMesa of that CI are byte-identical to the deployed
+  ones). On the old WSL image (/asus/lib/libasus-gl.dylib = CNID 327378, blocks
+  10043..10127, catalog node 18523 at blocks 69399-69400): 87 blocks, ONE byte of the node
+  changes (logicalSize 0x54a60 -> 0x54ad0); applied to the image: fsck -n only "Volume
+  header needs minor repair" (as always for these journaled images), the file reads back
+  with the new sha256; the image was restored after (checked).
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
