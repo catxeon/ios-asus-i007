@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4120 @@
+@@ -0,0 +1,4127 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -25301,6 +25301,7 @@
 +#define QBG_IBAT_AVG    0x4fa4
 +#define USBIN_RT_STS    0x2910
 +#define BATT_DESIGN_MAH 3500u           /* Android: charge_full_design 3500000 uAh */
++#define BATT_FULL_MAH   3350u           /* Android: charge_full 3350000 uAh (cycle count 442) */
 +
 +class AsusBattery : public IOPMPowerSource {
 +	OSDeclareDefaultStructors(AsusBattery);
@@ -25348,12 +25349,17 @@
 +void
 +AsusBattery::publish(unsigned percent, unsigned mv, int ma, bool external, bool charging, bool full, bool measured)
 +{
-+	/* (mAh throughout: powerd computes current * 100 / max) */
-+	const unsigned capacity = (BATT_DESIGN_MAH * percent + 50u) / 100u;
++	/*
++	 * As an iPhone's charger driver does: CurrentCapacity in percent of MaxCapacity = 100, the
++	 * charge in mAh under AppleRawCurrentCapacity / AppleRawMaxCapacity / NominalChargeCapacity.
++	 * Published in mAh (3465 of 3500), iOS 16.7 showed "1 %" with the battery full (the user,
++	 * image 0099 or 0101), though powerd's source computes current * 100 / max.
++	 */
++	const unsigned capacity = (BATT_FULL_MAH * percent + 50u) / 100u;
 +
 +	setBatteryInstalled(true);
-+	setCurrentCapacity(capacity);
-+	setMaxCapacity(BATT_DESIGN_MAH);
++	setCurrentCapacity(percent);
++	setMaxCapacity(100);
 +	setExternalConnected(external);
 +	setExternalChargeCapable(external);
 +	setIsCharging(charging);
@@ -25366,7 +25372,8 @@
 +	putBool("FullyCharged", full);
 +	putBool("AppleRawExternalConnected", external);
 +	putNumber("AppleRawCurrentCapacity", capacity);
-+	putNumber("AppleRawMaxCapacity", BATT_DESIGN_MAH);
++	putNumber("AppleRawMaxCapacity", BATT_FULL_MAH);
++	putNumber("NominalChargeCapacity", BATT_FULL_MAH);
 +	putNumber("DesignCapacity", BATT_DESIGN_MAH);
 +	putNumber("InstantAmperage", (UInt32)ma);
 +	putNumber("Temperature", 2500);         /* (centidegrees; fixed, not measured) */
@@ -25378,7 +25385,7 @@
 +	if (legacy) {
 +		const char *keys[] = { kIOBatteryCurrentChargeKey, kIOBatteryCapacityKey, kIOBatteryVoltageKey,
 +			               kIOBatteryAmperageKey, kIOBatteryCycleCountKey, kIOBatteryFlagsKey };
-+		UInt32 values[] = { capacity, BATT_DESIGN_MAH, mv, (UInt32)ma, 0,
++		UInt32 values[] = { percent, 100, mv, (UInt32)ma, 0,
 +			            (UInt32)(kIOBatteryInstalled | (external ? kIOBatteryChargerConnect : 0) |
 +			            (charging ? kIOBatteryCharge : 0)) };
 +		for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
