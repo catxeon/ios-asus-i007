@@ -413,6 +413,21 @@ watching the battery icon and pulling the cable; the user said "позже".
   87 match new.hash; root header still 0x80002100 clean; read back through the catalog
   (hfs-replace-inplace.py --phone): 346832 bytes, sha256 72640fd4... = the new library.
   backup.bin kept: `--restore` undoes it.
+- **iOS image 0099 BOOTED: 19.2 -> 25.2 fps** (18:23-18:38, no asking needed; kernel
+  43213903663 as 0098, same boot-args, the new library on the root; ../phone-0099; root
+  clean before and after). Mean of the 22 busy ASUS FPS samples (the same autoswipe rounds):
+  0098 19.2, 0099 25.2 (+31 %), range 23.8-27.4. libasus-gl after 2800 frames: "before each"
+  1895 us (was 9080), GL 6275 us a frame (was 5855; glFlush 4.5 ms a frame, was 4.1); every
+  frame line `0 textures refilled from IOSurfaces (0 KB), 1 by the GPU`; the first fills
+  `filled from surface N by the GPU (1125 x 2436, storage was 0 x 0 0x1908): error 0`. Swap:
+  2.8-2.9 ms waiting for the GPU (was 3.1-3.4), 0.56 read-back, 1.6 copy. No panic, no
+  crash; middle pixels varied as before. Battery lines fine (99-100 %, external power, no
+  "charging", no read failed). NOT seen by eye: whether the picture is right.
+- What is left of "making textures" (1.9 ms) is glTexImage2D(NULL): every attach gets a new
+  texture with no storage (`storage was 0 x 0`). Not looked into further.
+- **The image to show the user next is 0099** (kernel 43213903663 has the battery driver
+  with the SPMI lock and the charging fix too): battery icon, cable out for a minute, and
+  whether the picture looks right with the GPU fill. Image 0096 is superseded.
 - Block patch ../asus-rootfix-gl-v2 made FROM THE PHONE (read only, after 0098): same file and blocks, but catalog node 18525 at blocks 69403-69404 (the old
   image's 18523 is stale: always make these from the phone). `asus-iosroot-blockpatch.py
   ../asus-rootfix-gl-v2` (no --write): phone vs old.hash all 87 match, backup.bin kept; of
