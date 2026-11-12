@@ -488,6 +488,24 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
     NOT known. The log is still on the partition tail until the next boot: pull it with the
     cycle script's own commands (dd of the last 1025 blocks, sweet-log.py) once Android
     is back. Ask the user what the screen shows.
+  - **Resolved: no hang.** The user then: "Android, кабель в ПК": Android had been up since
+    ~23:25 (asusreboot=900 worked); the cable was simply not in the PC. Log, header and 42
+    shots pulled by hand (../phone-0104): root clean (209632 free). powerd and kbd each
+    spawned once, never crashed; no `|powerd|` output. Only crash: Preferences SIGKILL.
+  - Battery readings (voltage/mA out/USB input): plugged, idle 4391-4397/0-35/0x11 ->
+    100 %; **unplugged 4268/362/0x4 -> 92 %, 4300/291/0x4 -> 95 %** (USB input bit 4
+    clears at once: cable detection works); plugged again 4289-4336/144-263/0x11 -> 94-97
+    %: **with the screen busy the battery DISCHARGES ~200 mA even on the cable** (nobody
+    enables the charger under XNU; the PC port cannot carry the load). iOS's "charging"
+    bolt then came from external power alone. So the counting of 37b3535 will show a slow
+    honest decline on the cable (~1 % / 10 min with the UI busy), no jumps.
+  - Screenshots (../phone-0104/shots): 94 s Settings ("Sign in to your **iPad**"), battery
+    icon "100" green; 115 s Settings' time zone search ("Cupertino") with, where the
+    keyboard should be, the **slide-to-type introduction card** ("Speed up your typing by
+    sliding your finger across the letters...", "Continue"); 136 s Spotlight with a Search
+    field and cursor and **no keyboard at all** below it (black), battery "99" with a
+    bolt. So the keyboard does not draw (beyond that card); kbd runs (AKS calls) but says
+    nothing. Not explained.
   - Commit 37b3535 (kernel CI 43298840323): AsusBattery counts the charge from the
     gauge's current (start from the voltage at rest = V + I x 120 mOhm; pulled 1/32 a poll
     towards it only when |I| < 40 mA; full when external, |I| < 50 mA and the estimate >=
