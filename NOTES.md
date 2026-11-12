@@ -271,6 +271,40 @@ minutes from power-on to the lock screen.**
     `asusautoswipe=150` and `ASUS_REBOOT=600`. Not changed yet: ask the user, who may
     want the long window to use the phone.
 
+**NOW WORKED ON (2026-11-12, user chose "Заряд батареи"): the battery level in iOS.**
+- Observed on Android (su): power_supply battery/usb/wireless all sit under
+  `soc:qcom,pmic_glink:qcom,battery_charger`: the state of charge is computed by the
+  charger firmware on the ADSP and comes over glink. That processor does not run under
+  XNU, so the real percentage is out of reach without an ADSP bring-up (large). Values now:
+  Full, 100 %, 8781 mV (two cells in series), 0 mA, charge_full_design 3500000 uAh, model
+  C21P2002-T-03, cycle count 442. USB id 0b05:7770 "EXP21 Smartphone".
+- Observed: Android's thermal zones `vbat` = 4384 and `pm8350b-ibat-lvl0` = 390 come from
+  the PM8350B's BCL block (SPMI SID 3, peripheral 0x47, DT `bcl@4700` "qcom,bcl-v5").
+  ASUS's kernel source (LineageOS/android_kernel_asus_sm8350,
+  drivers/thermal/qcom/bcl_pmic5.c; copy in the scratchpad): VBAT = register 0x76 x
+  49.827 mV (127 = no reading), IBAT = register 0x86, two's complement, x 78.127 mA;
+  plain reads. 4384 mV = 88 steps, 390 mA = 5 steps: the numbers fit. The driver writes
+  BCL_MONITOR_EN (0x46) bit 7 at probe; whether the block still measures after a warm
+  boot into XNU is NOT known yet (the lab run will say).
+- So the plan: an ESTIMATE of the percentage from one cell's voltage (steps of ~50 mV,
+  i.e. ~5 %), as sweet's SweetBattery did (patch 0062, read for the IOPMPowerSource
+  recipe). Not a fuel gauge.
+- Commit 87893d1: `AsusBattery` (IOPMPowerSource) in AsusPhoneInput.cpp, made and started
+  by AsusPhoneInput::start (no personality needed), polls the BCL every 30 s through the
+  new static `AsusPhoneInput::pmicRead(sid, addr, &out)`; never critical, never below
+  5 %; charging = IBAT negative (Linux's sign, NOT verified here), external power =
+  charging or >= 4350 mV; boot-arg `asusbattery` 1 (default) / 2 fixed 100 % on AC / 0
+  none. Log: `ASUS BATTERY: BCL type .. monitor .. VBAT .. IBAT ..: N %`. Also boot-args
+  `asuspmic=SID` (list a PMIC's peripherals) and `asuspmicdump=PPID,PPID` (print their
+  registers; hex, e.g. 347). Syntax checked with stubs; kernel CI 43159157646 started.
+- Next: lab image with `asuspmic=3 asuspmicdump=347,...` (compare with Android's 4384 mV
+  / 390 mA; look for charger and USB-presence registers among the PM8350B's
+  peripherals), then an iOS boot (user's OK) to see the battery icon.
+- Open: the sign of IBAT; how to know external power properly; the curve is generic;
+  nothing about charging is controlled or known under XNU (who charges the battery while
+  iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
+  own).
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
