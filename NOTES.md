@@ -360,6 +360,22 @@ minutes from power-on to the lock screen.**
   iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
   own).
 
+**NOW WORKED ON (2026-11-12 evening, user: "сделай пока что-нибудь без моего
+присутствия"): screenshots, so that what the screen shows can be checked with nobody at the
+phone** (the picture with the GPU fill, the battery icon, later the keyboard).
+- Commit 7065d4e. bsd/dev/sweet_ufs.c (ufs patch): `asus_shot_submit()` + a thread write a
+  third-size RGB565 frame into one of 64 slots of 145 blocks right before the firmware
+  area: partition blocks 8378234..8387513 (log 8387578.., firmware 8387514..); read from
+  Android before: all 9280 blocks zero. The area is written only if it begins behind the
+  HFS volume (volume header's totalBlocks x blockSize; else `ASUS SHOT: refused`).
+  SweetFramebuffer.cpp (display patch): boot-arg `asusshot=SECONDS`: from the vsync timer,
+  every third pixel of every third panel row (1080x2448 -> 360x816; rows read whole: the
+  panel is Normal-NC). `tools/asus-shot-pull.py OUTDIR` (read only) makes
+  shot-SEQ-UPTIMEs.png of the newest boot's slots. tools/edit-full-file-patch.py: edits a
+  file a patch creates in full and counts the hunk again (use it for every such edit).
+  C part syntax-checked with stubs. Kernel CI 43254897772; a background chain boots lab
+  0100 (asusshot=10) and then iOS 0101 (15 min, asusshot=20) and pulls the shots.
+
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
 watching the battery icon and pulling the cable; the user said "позже".
