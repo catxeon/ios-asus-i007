@@ -360,6 +360,36 @@ minutes from power-on to the lock screen.**
   iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
   own).
 
+**NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
+frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
+watching the battery icon and pulling the cable; the user said "позже".
+- Observed in image 0094's log (libasus-gl's own counters, 2000 frames): 5.9 ms a frame in
+  GL (2.7 handing on, 1.3 waiting) and **9.2 ms "before it for the IOSurfaces"**, 7 ms in
+  most frames and 17-21 ms in some. Profile: glTexImage2D 18.6 s of the run, glFlush 8.2 s,
+  glDeleteTextures 3.2 s. "2029 IOSurfaces were the textures' memory" over 2000 frames:
+  CoreAnimation attaches a screen-sized BGRA surface to draw into EVERY frame
+  (`-attachImage: texture N is IOSurface M ... a texture, copied into its memory by the GPU`;
+  backboardd made 58 such surfaces in 15 min). For each attach, my_attachImage made the
+  mirror and then filled CoreAnimation's texture BY THE PROCESSOR: surface_changed() adds up
+  the 11 MB (3-4 ms) and surface_to_texture() uploads them (`1 textures refilled from
+  IOSurfaces (10809 KB)` in every frame line), and those 11 MB are pushed out of the caches
+  again at the next submission (part of the ~21-25 MB a submission).
+- Commit 1844462 (userland/gpu/eagl.c): mirror_to_texture(): the GPU blits the mirror (the
+  surface's memory) into the texture, the way back of target_to_surface (turned over the
+  same way; scissor off for it; storage made with glTexImage2D(NULL) if the texture has none
+  of that size); no adding up (targets are never refilled). `glgpufill=0` (in boot-args,
+  as the other gl* switches) = as before. Frame line: `..., N by the GPU;`; first 8 fills
+  logged with glGetError. asus-gl CI 43214297602 (mesa_run 42145703219, wait 600, intel
+  runner). NOT tested. Deploying it means writing /asus/lib/libasus-gl.dylib on the iOS
+  root: a block patch (pull the root's first 12 GiB read-only AFTER the last iOS boot,
+  replace the file with tools/hfs-add-contiguous.py, tools/asus-iosroot-blockdiff.py,
+  read-only check, then `--write`) = ASK THE USER first.
+- Commit db5e339 (kernel, generated zgpu patch): next to each `ASUS FPS` line, `ASUS FB: a
+  swap took N us waiting for the GPU, N us reading its memory back, N us copying to the
+  panel` (averages per shown frame). Kernel CI 43213903663; a background chain boots lab
+  0097 and then iOS 0098 (15 min) on it.
+- Not explained yet either way: the frame is ~45-50 ms at 20 fps, GL + attach is ~15 ms.
+
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
   frame 1200: after each draw a 1x1 glReadPixels of the middle gives `0 0 135 255`, but a
