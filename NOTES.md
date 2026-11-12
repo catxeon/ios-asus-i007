@@ -435,6 +435,24 @@ minutes from power-on to the lock screen.**
   360x816 pt: key area 525..741 pt, rows at 552/606/660/714, top row pitch 36), then home
   gesture, Settings, pull its list down for the search field (540,700 -> 540,1300), tap it
   (540,504), Continue, h, i; 10 shots.
+- **iOS 0110 result** (01:23:20, Android back after 339 s, root clean; shots
+  ../phone-0110/sheet-0110a.png = Spotlight, sheet-0110b.png = Settings):
+  - Spotlight: field at the bottom for all 4 shots (141-151 s), tapping the field changes
+    nothing, no keyboard; Spotlight polls AKS sel 17 as before (45000 calls by ~155 s) and
+    once sel 35. Not looked into further (Spotlight seems stuck; sampled in 0111).
+  - **Settings: the search field (pull the list down, tap at 540,504) brings up a FULL
+    QWERTY KEYBOARD** (no slide-to-type card this time; dark keys, "123", "space",
+    "search"). The keyboard is laid out for 375 pt (iPhone X, the d22ap ADT) on the 360 pt
+    screen: Q and P are cut at the edges (row 1 centres at shot x ~ 12 + 37.5 n, row 2
+    30 + 37.5 n, rows at y 552/606/660/713 = panel x3).
+  - **Taps on "h" and "i" land exactly on the keys but nothing is typed** (field still
+    "Search", the shift key still lit 3 s later): the user's old symptom, reproduced.
+  - kbd spawned in this boot (~155 s, when the keyboard was first asked for), 2 AKS calls,
+    no crash, no output.
+- iOS 0111: Settings only; taps "h", then "123" (panel 117,2139: a keyplane switch, UIKit
+  alone), shift (51,1980), "Cancel" (972,213); `asussample=kbd,Preferences,Spotlight
+  asussampleevery=10` (samples 90..260 s): where kbd and Settings' main thread stand after
+  a key tap.
 - tools/asus-shot-pull.py --count N: only seq 0..N-1 (a boot with fewer shots than the last
   one leaves that one's later slots behind).
 - To fix: the shot puller mixes slots of an earlier boot when the new boot took fewer shots
