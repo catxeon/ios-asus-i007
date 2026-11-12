@@ -301,6 +301,7 @@ struct eagl {
 	} line;
 	/* a frame's worth */
 	unsigned calls, draws, triangles, uploads, clears, last_draws;
+	unsigned gpu_fills;             /* this frame's textures filled from their surfaces by the GPU (mirror_to_texture) */
 	uint64_t upload_bytes, began, attaching, flushing;
 	/* everything so far */
 	unsigned frames, shaders, programs, errors, shared, refused;
@@ -343,6 +344,18 @@ static int share_surfaces = 1;          /* boot-arg glcopy=1: 0 */
  * Boot-arg glblit=0: the surface's memory, as before.
  */
 static int blit_targets = 1;
+/*
+ * A surface attached to be drawn into (blit_targets: a texture of the library's own, copied
+ * into the surface's memory at the frame's end) starts with what the surface holds, since
+ * CoreAnimation draws only what has changed. That copy was made by the processor: the 11 MB of
+ * a screen added up (surface_changed) and filled into the texture (surface_to_texture), 7 to 21
+ * ms of every frame in image 0094 ("before it for the IOSurfaces"), and its 11 MB pushed out of
+ * the processor's caches again at the next submission. Now the GPU copies the surface's memory
+ * (the mirror) into the texture, the way back of target_to_surface. Boot-arg glgpufill=0: the
+ * processor's copy, as before.
+ */
+static int gpu_fill = 1;
+static void mirror_to_texture(struct eagl *e, struct image *image);
 /*
  * A frame that is handed to the display must have been drawn. The display's driver waits for
  * the GPU itself before it puts a surface on the panel, on a thread of its own, and says so in
@@ -878,6 +891,66 @@ target_to_surface(struct eagl *e, struct image *image)
 }
 
 /*
+ * What the surface holds, into the texture CoreAnimation is about to draw into (bound to
+ * GL_TEXTURE_2D), by the GPU: its memory is the mirror, and the copy goes the way back of the
+ * one target_to_surface makes (turned over again when the frame is drawn upside down). The
+ * texture gets storage of the surface's size if it has none of that size. The scissor test
+ * would cut the copy to CoreAnimation's last box: off for it. Bindings are put back.
+ */
+static void
+mirror_to_texture(struct eagl *e, struct image *image)
+{
+	static unsigned told;
+	GLint read = 0, draw = 0, unpack = 0, width = 0, height = 0, internal = 0;
+	GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, 0x1000, &width);
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, 0x1001, &height);
+	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, 0x1003, &internal);
+	if (width != image->width || height != image->height || internal != (GLint)internal_format(image->internal, image->format)) {
+		glGetIntegerv(0x88ef, &unpack);                 /* GL_PIXEL_UNPACK_BUFFER_BINDING: NULL is no offset in it */
+		if (unpack != 0) {
+			glBindBuffer(0x88ec, 0);
+		}
+		glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format(image->internal, image->format), image->width, image->height, 0,
+		    image->format, image->type, NULL);
+		if (unpack != 0) {
+			glBindBuffer(0x88ec, (GLuint)unpack);
+		}
+	}
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+	if (e->reader == 0) {
+		glGenFramebuffers(1, &e->reader);
+	}
+	if (e->writer == 0) {
+		glGenFramebuffers(1, &e->writer);
+	}
+	if (scissor) {
+		glDisable(GL_SCISSOR_TEST);
+	}
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, e->reader);
+	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->mirror, 0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, e->writer);
+	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->texture, 0);
+	glBlitFramebuffer(0, 0, image->width, image->height, 0, image->invert ? image->height : 0, image->width,
+	    image->invert ? 0 : image->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	if (told < 8) {
+		told++;
+		say("redwood-gl: texture %u filled from surface %u by the GPU (%d x %d%s, storage was %d x %d %#x): error %#x" "\n",
+		    image->texture, IOSurfaceGetID(image->surface), image->width, image->height, image->invert ? ", turned over" : "",
+		    width, height, internal, glGetError());
+	}
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
+	if (scissor) {
+		glEnable(GL_SCISSOR_TEST);
+	}
+	image->seed = IOSurfaceGetSeed(image->surface);
+	e->gpu_fills++;
+}
+
+/*
  * For looking at what is drawn on the way to the picture (boot-arg glshow=TEXTURE): that texture's
  * pixels are put over the top left corner of the picture as it goes out.
  */
@@ -1078,9 +1151,9 @@ frame_end(struct eagl *e, bool finished)
 	}
 	if (e->frames <= 40 || e->frames % 20 == 0) {
 		say("redwood-gl: frame %u: %u GL calls, %u draws, %u triangles, %u clears; %u textures refilled from IOSurfaces "
-		    "(%llu KB); %u picture%s copied out, %u drawn in place; %llu us (%llu handing on, %llu waiting, %llu copying "
+		    "(%llu KB), %u by the GPU; %u picture%s copied out, %u drawn in place; %llu us (%llu handing on, %llu waiting, %llu copying "
 		    "out), %llu before it for the IOSurfaces\n", e->frames, e->calls, e->draws, e->triangles, e->clears, e->uploads,
-		    e->upload_bytes >> 10, copied, copied == 1 ? "" : "s", in_place, after - e->began, e->flushing, waited - before,
+		    e->upload_bytes >> 10, e->gpu_fills, copied, copied == 1 ? "" : "s", in_place, after - e->began, e->flushing, waited - before,
 		    after - waited, e->attaching);
 	}
 	if (e->frames == 30 || e->frames % 200 == 0) {
@@ -1091,7 +1164,7 @@ frame_end(struct eagl *e, bool finished)
 		check_errors = 0;
 	}
 	e->last_draws = e->draws;
-	e->calls = e->draws = e->triangles = e->uploads = e->clears = 0;
+	e->calls = e->draws = e->triangles = e->uploads = e->clears = e->gpu_fills = 0;
 	e->upload_bytes = e->attaching = e->flushing = 0;
 }
 
@@ -3585,7 +3658,14 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 	 * around, to be shown): a texture that is not the surface's memory starts with what the surface holds.
 	 */
 	began = now_us();
-	if (surface_mirrored(e, image) || !surface_shared(e, image)) {
+	if (surface_mirrored(e, image)) {
+		if (gpu_fill) {
+			mirror_to_texture(e, image);    /* (by the GPU; nothing to add up: a target is never refilled) */
+		} else {
+			surface_changed(e, image);
+			surface_to_texture(e, image);
+		}
+	} else if (!surface_shared(e, image)) {
 		surface_changed(e, image);              /* (what it adds up to now) */
 		surface_to_texture(e, image);
 	}
@@ -3716,6 +3796,7 @@ install(void)
 		}
 		share_surfaces = strstr(arguments, "glcopy=1") == NULL;
 		blit_targets = strstr(arguments, "glblit=0") == NULL;
+		gpu_fill = strstr(arguments, "glgpufill=0") == NULL;
 		sync_frames = strstr(arguments, "glsync=0") == NULL;
 		if (strstr(arguments, "glwait=0") != NULL || (strstr(arguments, "glwait=1") == NULL && display_waits())) {
 			wait_for_frames = 0;
