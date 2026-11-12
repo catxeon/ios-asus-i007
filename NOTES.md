@@ -373,8 +373,21 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
   panel is Normal-NC). `tools/asus-shot-pull.py OUTDIR` (read only) makes
   shot-SEQ-UPTIMEs.png of the newest boot's slots. tools/edit-full-file-patch.py: edits a
   file a patch creates in full and counts the hunk again (use it for every such edit).
-  C part syntax-checked with stubs. Kernel CI 43254897772; a background chain boots lab
-  0100 (asusshot=10) and then iOS 0101 (15 min, asusshot=20) and pulls the shots.
+  C part syntax-checked with stubs. Kernel CI 43254897772 succeeded.
+  - Lab 0100 gave no shots and no `ASUS SHOT` line: lab images have no display driver
+    (no ASUS_DISPLAY=1). **Lab 0102 = ASUS_UFS=1 ASUS_TOUCH_LAB=1 ASUS_DISPLAY=1** +
+    `asusshot=10`: `ASUS SHOT: 360x816 handed over: yes`, 11 shots (37..144 s uptime) in
+    ../phone-0102/shots, the kernel console legible on them, colours right. **SCREENSHOTS
+    WORK.** Then iOS 0101 (19:41, 15 min, asusshot=20) on the same kernel.
+- **The user (2026-11-12 ~19:45, looking at the phone): "на экране 1 процент аккумулятора
+  кстати горит, но на самом деле телефон заряжен".** So iOS takes our battery, but shows
+  1 %. powerd's open source (apple-oss-distributions/PowerManagement,
+  pmconfigd/BatteryTimeRemaining.m, newer than 16.7): percent = lround(CurrentCapacity *
+  100 / MaxCapacity), at least 1; with our 3465 of 3500 mAh that is 99. Not explained;
+  guess: 16.7 expects what an iPhone's charger driver publishes, CurrentCapacity in
+  percent and MaxCapacity 100 (mAh under AppleRaw*). Commit 5f1492e does that (+
+  NominalChargeCapacity 3350 = Android's charge_full, AppleRawMaxCapacity 3350). Kernel CI
+  43263131635. To check with a screenshot (asusshot) of the status bar.
 
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
