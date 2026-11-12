@@ -297,9 +297,31 @@ minutes from power-on to the lock screen.**
   none. Log: `ASUS BATTERY: BCL type .. monitor .. VBAT .. IBAT ..: N %`. Also boot-args
   `asuspmic=SID` (list a PMIC's peripherals) and `asuspmicdump=PPID,PPID` (print their
   registers; hex, e.g. 347). Syntax checked with stubs; kernel CI 43159157646 started.
-- Next: lab image with `asuspmic=3 asuspmicdump=347,...` (compare with Android's 4384 mV
-  / 390 mA; look for charger and USB-presence registers among the PM8350B's
-  peripherals), then an iOS boot (user's OK) to see the battery icon.
+  CI 43159157646 succeeded (kernel 7d110ad6..., ../asus-ci-43159157646).
+- Lab image 0089 (08:22, `asuspmic=3 asuspmicdump=347`, ../phone-0089): the BCL block
+  measures under XNU: `BCL type 0x9/0x2 monitor 0x80 conversion 0x1 VBAT 0x57 = 4334 mV,
+  IBAT 0`, power source registered. IBAT read 0 in every poll (Linux notes that it
+  sometimes does; here always): no use. The list of the PM8350B's 56 peripherals with
+  owners and types is in that log (`ASUS PMIC: sid 3 peripheral ..`); the dump printed
+  nothing: `asuspmicdump=347` is a number to PE_parse_boot_argn, not a string. WRITE
+  `347:0` (a pair) so that it stays text.
+- Lab image 0090 (08:27, `asuspmicdump=347:0,326:0,327:0,328:0,329:0,32b:0,34e:0,34f:0`,
+  ../phone-0090): all eight blocks printed. Found:
+  - **0x4f00 = QBG main** (type 0x0d/5; ASUS's qti-qbg.c / qbg-core.h): status1 0x08 =
+    0x80 (QBG_OK), status2 0x09 = 0x01 (battery present), EN_CTL 0x46 = 0x80; PON OCV
+    0x70 = 0x58d3 (4425.7 mV); last ADC 0x9a = 0x5824; **last burst average voltage 0xa0
+    = 0x581d = 4390.4 mV** (x 194.63 uV; Android at that time: 8781 mV for the two cells
+    = 4390.5 a cell) and **current 0xa4 = 0** (signed, x 61.03 uA; Android: 0). So the
+    gauge's front end keeps measuring under XNU with 0.2 mV steps.
+  - 0x2900 = USB input (type 2/0x83): real-time status 0x10 = 0x11 with the cable in;
+    bit 4 is USBIN_PLUGIN in smb5-reg.h (written for the PM8150B, whose blocks sit at
+    0x10xx-0x16xx; here the same kinds of block sit at 0x26xx-0x2cxx). NOT seen with the
+    cable out. 0x2600 = charger: 0x06 = 0x87, 0x08..0x0b = 06 0a 05 4b: not decoded.
+- Commit af4c326: AsusBattery reads the QBG's averages (two matching reads of each word),
+  the BCL only as a fallback, external power from 0x2910 bit 4; charging = external and
+  below 100 %; logs every reading for the first 20 polls. Kernel CI 43162097360 started.
+- Next: lab check, then an iOS boot to see the battery icon (no asking any more, see
+  "Root and permissions").
 - Open: the sign of IBAT; how to know external power properly; the curve is generic;
   nothing about charging is controlled or known under XNU (who charges the battery while
   iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
