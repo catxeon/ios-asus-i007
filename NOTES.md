@@ -409,7 +409,32 @@ minutes from power-on to the lock screen.**
   --phone, the phone's file = the pull's, sha256 633dfefd...): binary plist + AppleKeyboards
   = [en_US@sw=QWERTY;hw=Automatic, emoji@sw=Emoji], AppleKeyboardsExpanded = 1 (89 -> 190
   bytes, sha256 08aca86d..., same block 2883219; catalog node 18500 at 69353-69354): 3
-  blocks, read-only check passed, backup kept. NOT written: needs the user's OK.
+  blocks, read-only check passed, backup kept. **Written** after the user's "Да, записывай"
+  (2026-11-13 01:11:58): all 3 blocks match the new hashes, the catalog reads back the 190
+  bytes (sha256 08aca86d...), root clean. Undo: `asus-iosroot-blockpatch.py
+  ../asus-rootfix-keyboards-v1 --restore`.
+- **iOS 0109** (01:12:40, kernel 43310691661, script w90/p/u/w4/s540,900,540,1600,300/w4/p/
+  t600,1990/m700/t790,1820/w2/p/s540,2440,540,1600,300/w3/t669,900/w6/p/t300,1941/w4/p/
+  t540,1944/w4/p; Android back after 336 s, root clean, 6 shots, sheet ../phone-0109/
+  sheet-0109.png): Spotlight 4 s after the swipe: field at the very bottom, no Siri
+  Suggestions yet, **no keyboard** (Spotlight was probably still starting: in 0104 it showed
+  the field raised with a black keyboard area below); the two "key" taps closed it. Keyboard
+  settings: the same raw keys (KEYBOARDS KEYBOARD_COUNT, USER_DICTIONARY, ...), so those come
+  from KeyboardSettings' strings, not from the missing AppleKeyboards. Log: kbd never spawned
+  in 0109 (on demand only: nobody asked for it), no pkd at all (`|Preferences| Failed to load
+  keyboard extensions` = third-party extension discovery), Spotlight calls AKS sel 17 ~470
+  times a second (175 log lines at every 1000th call).
+- **New reading of 0104's shot at 115 s** (../phone-0104/kbd-0104.png, Settings' time zone
+  search): the keyboard IS presented there, but covered by the one-time **slide-to-type
+  introduction card** ("Speed up your typing by sliding your finger across the letters...",
+  "Continue" at shot 180,769 = panel 540,2307; its video area is a dark rectangle). Taps on
+  "keys" land on that card, which would explain the user's "taps on the keyboard do nothing"
+  (0083). Guess, to be checked: "Continue" dismisses it and the keys work.
+- iOS 0110: the same kernel, script: Spotlight (w8, shot), tap its field (300,2361), tap
+  Continue (540,2307), tap "h" (648,1818) and "i" (810,1656) (iPhone layout guessed for
+  360x816 pt: key area 525..741 pt, rows at 552/606/660/714, top row pitch 36), then home
+  gesture, Settings, pull its list down for the search field (540,700 -> 540,1300), tap it
+  (540,504), Continue, h, i; 10 shots.
 - tools/asus-shot-pull.py --count N: only seq 0..N-1 (a boot with fewer shots than the last
   one leaves that one's later slots behind).
 - To fix: the shot puller mixes slots of an earlier boot when the new boot took fewer shots
