@@ -403,6 +403,30 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
     icon rendering?).
   - Screenshot timing: the first at 51 s, then every ~21 s (asusshot=20 counts vsyncs of a
     60 Hz timer).
+- Kernel CI 43263131635 (5f1492e, battery in percent) succeeded; **iOS 0103** (20:06-20:22,
+  ../phone-0103, 42 shots): driver says `100 % (estimated), external power` in all 20
+  polls, but the lock screen's battery icon is STILL "1" with a red sliver (enlarged crop
+  ../phone-0103/shots/battery-zoom.png, same in 0101).
+- **ROOT CAUSE (battery): powerd never runs.** No `platform binary powerd` in any log. The
+  root's /System/Library/xpc/launchd.plist (root v14, make_springboard_v14.py) holds
+  exactly the 11 jobs of this root's /System/Library/LaunchDaemons: SpringBoard,
+  backboardd (dev.asus.launchd-probe.plist), cfprefsd, containermanagerd,
+  iconservicesagent, lsd, usermanagerd, mobileactivationd, mobilegestalt, notifyd,
+  runningboardd. The binaries of the others are there (checked on the old image:
+  /System/Library/CoreServices/powerd.bundle/powerd, /System/Library/TextInput/kbd,
+  /usr/libexec/thermalmonitord), their job files are not. Without powerd nothing
+  publishes the battery to userland (powerd matches IOPMPowerSource, reads its registry
+  properties: pmconfigd/BatteryTimeRemaining.m) and the status bar shows "no battery".
+- Guess, same cause: the keyboard taps that do nothing (0083) = no kbd (TextInput's input
+  manager runs in kbd); widgets "Waiting..." = no chronod; maybe the blank app icons too.
+- Adding powerd (and kbd) = new job entries in launchd.plist = a root write (user's OK).
+  Needed first: (1) their stock job definitions (the 20H392 OS launchd.plist; the root was
+  built from apple-20H392/os-mount/root, which is not mounted any more: the OS image is
+  read remotely from the IPSW URL); (2) a kernel guard so that powerd cannot put the system
+  to sleep (this port has no sleep): e.g. IOPMrootDomain::setProperties({SleepDisabled:
+  true}) at boot; (3) launchd.plist (498749 bytes, 122 blocks) may outgrow its extent:
+  hfs-replace-inplace.py would need to grow a file into free blocks, or use the offline
+  method (pull 12 GiB, hfs-add-contiguous.py, blockdiff).
 
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
