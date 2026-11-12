@@ -408,8 +408,12 @@ watching the battery icon and pulling the cable; the user said "позже".
   changes (logicalSize 0x54a60 -> 0x54ad0); applied to the image: fsck -n only "Volume
   header needs minor repair" (as always for these journaled images), the file reads back
   with the new sha256; the image was restored after (checked).
-- **Block patch ../asus-rootfix-gl-v2 made FROM THE PHONE (read only, after 0098), NOT
-  written**: same file and blocks, but catalog node 18525 at blocks 69403-69404 (the old
+- **WRITTEN 2026-11-12 18:21 with the user's OK ("да")**: `asus-iosroot-blockpatch.py
+  ../asus-rootfix-gl-v2 --write`: phone vs old.hash all 87 match, WRITE-DONE, after write all
+  87 match new.hash; root header still 0x80002100 clean; read back through the catalog
+  (hfs-replace-inplace.py --phone): 346832 bytes, sha256 72640fd4... = the new library.
+  backup.bin kept: `--restore` undoes it.
+- Block patch ../asus-rootfix-gl-v2 made FROM THE PHONE (read only, after 0098): same file and blocks, but catalog node 18525 at blocks 69403-69404 (the old
   image's 18523 is stale: always make these from the phone). `asus-iosroot-blockpatch.py
   ../asus-rootfix-gl-v2` (no --write): phone vs old.hash all 87 match, backup.bin kept; of
   the 87 blocks 70 differ (data) and one byte of block 69404. Needs the user's OK to write:
