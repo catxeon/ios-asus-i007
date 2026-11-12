@@ -427,6 +427,19 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
   true}) at boot; (3) launchd.plist (498749 bytes, 122 blocks) may outgrow its extent:
   hfs-replace-inplace.py would need to grow a file into free blocks, or use the offline
   method (pull 12 GiB, hfs-add-contiguous.py, blockdiff).
+- The user said "Да, готовь" (prepare adding powerd and kbd; the root write itself to be
+  asked for separately).
+  - Sleep guard, no kernel change: XNU's IOPMrootDomain reads /defaults/sleep-disabled
+    (PE_get_default) at kPowerEventSystemBootCompleted and then refuses every system
+    sleep (gSleepDisabledFlag, checked first in the sleep-allowed test; before boot
+    completes, systemBooting refuses sleep anyway). tools/mkadt-asus.py now sets
+    /defaults sleep-disabled = 1 in every image (checked in a built tree: 04000000
+    01000000). Takes effect only when something says "System Boot Complete" (powerd).
+  - Stock job definitions: nowhere local (no copy on the root, ~/asus-roots, the old
+    staging dirs). Source: the OS image in the IPSW (apple-20H392/URL.txt), zip member
+    087-86698-044.dmg, stored (not deflated), 4730814044 bytes at offset 1191497236; raw
+    APFS, mounted read-only with work/apfs-fuse as WSL root before. Downloading it needs
+    the user's OK (4.7 GB from updates.cdn-apple.com).
 
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user

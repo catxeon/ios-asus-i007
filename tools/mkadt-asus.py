@@ -165,7 +165,10 @@ def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM
     ])
     # Phone (disk root): keybagd's boot task reads /private/var/keybags/systembag.kb as a
     # plain plist only with /defaults/no-effaceable-storage (as tools/mkadt.py, sweet).
-    defaults = node('defaults', [('no-effaceable-storage', u32(1))] if ufs else [])
+    # sleep-disabled: IOPMrootDomain reads /defaults/sleep-disabled when userland says the boot
+    # is complete and then refuses every system sleep (gSleepDisabledFlag). This port has no
+    # sleep and wake: a powerd in the job set must not be able to try one.
+    defaults = node('defaults', ([('no-effaceable-storage', u32(1))] if ufs else []) + [('sleep-disabled', u32(1))])
     return node('device-tree', [
         ('compatible', cstr('asus,picasso') + cstr('qcom,lahaina') + cstr('AppleARM')),
         ('model', cstr('ASUS_I007D')), ('target-type', cstr('PICASSO')),
