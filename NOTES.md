@@ -346,7 +346,11 @@ minutes from power-on to the lock screen.**
   - The estimate was 99 % (4375-4379 mV is just under the curve's 4380) and the driver
     said "charging" for it, which is wrong: the current goes OUT. Commit 63949a8:
     charging only when 20 mA or more go INTO the battery. Under XNU that stays false, so
-    iOS should say "not charging" on external power. Kernel CI 43170261686 started.
+    iOS should say "not charging" on external power. Kernel CI 43170261686 succeeded
+    (kernel 7f4ea2b5..., ../asus-ci-43170261686); lab image 0095 (10:09) fine (`... 4384
+    mV current 0x6d = 6 mA out ... 100 % (estimated), external power`). **iOS image 0096
+    built on it, NOT booted** (0092's recipe: 15 min, `ASUS_REBOOT=900
+    asusautoswipe=600`; SHA256 03e1f0df...0c70): kept for a boot with the user at the phone.
 - Next: an iOS boot WITH THE USER AT THE PHONE (asked for it): the status bar's battery
   icon, and the cable pulled for a minute (does USB input bit 4 clear, does iOS show "on
   battery"). Not known either: whether a wall charger changes the 20 mA drain (a PC's
