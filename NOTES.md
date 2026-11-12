@@ -469,6 +469,29 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
   - After the write: an iOS boot with the new device tree (sleep-disabled) and
     asusshot: is powerd spawned, battery icon, any crash loop (powerd is KeepAlive), does
     the screen still turn off/lock as before; kbd shows only when a text field asks for it.
+  - **WRITTEN 2026-11-12 23:08 with the user's OK ("Да, записывай")**: all 131 matched
+    old.hash, WRITE-DONE, after write all match new.hash; header clean, 211002 free.
+    Undo: `asus-iosroot-blockpatch.py ../asus-rootfix-jobs-v1 --restore`.
+  - **iOS image 0104** (23:08:56, kernel 43263131635, sleep-disabled in the ADT checked,
+    `ASUS_SWEETNULL=backboardd,SpringBoard,Preferences,powerd`, asusshot=20, 15 min). The
+    user, looking at it: "клавиатура всё так же не работает. заряд аккумулятора теперь
+    показывается, но: при отключении кабеля на 100% заряд падает до 92%, подключаешь кабель
+    обратно - статус 'заряжается' появляется с задержкой, процент прыгает на 95%". So
+    **powerd runs and the battery shows**; the voltage estimate jumps (sag under load,
+    rise under charge); "charging" shows, i.e. current INTO the battery under XNU (the
+    PMIC charges on its own at least on that charger: not seen before, 0092/0094 on the PC
+    showed ~25 mA out). Keyboard taps still dead with kbd in the job set.
+  - **The cycle got no Android back within 1800 s** (23:38): no USB device of the phone at
+    all (usbipd: only the persisted "Android" entry). Either the cable is not in the PC
+    (the user unplugged it for the battery test) or the phone did not reset (asusreboot=900
+    should have reset it at ~23:24: did powerd or the sleep guard stop the reset path?).
+    NOT known. The log is still on the partition tail until the next boot: pull it with the
+    cycle script's own commands (dd of the last 1025 blocks, sweet-log.py) once Android
+    is back. Ask the user what the screen shows.
+  - Commit 37b3535 (kernel CI 43298840323): AsusBattery counts the charge from the
+    gauge's current (start from the voltage at rest = V + I x 120 mOhm; pulled 1/32 a poll
+    towards it only when |I| < 40 mA; full when external, |I| < 50 mA and the estimate >=
+    99 %), polls every 5 s, logs cable and charging changes.
 
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
