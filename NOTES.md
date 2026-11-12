@@ -393,6 +393,25 @@ minutes from power-on to the lock screen.**
     Storage" (0101): the device class answers are odd too.
 - iOS 0107: the same Spotlight steps with `applog_name=SpringBoard` (os_log of SpringBoard
   to stderr = into the kernel log through sweetnull), to read why the keyboard stays down.
+  Result: script fine (lock screen 123 s, home, Spotlight with the field at the bottom and
+  no keyboard, a tap above it closes Spotlight), but **applog_name gives nothing** (3
+  `|SpringBoard|` lines, all objc warnings; as with datamigrator in 0083): that route does
+  not work here, cause unknown.
+- **iOS 0108** (script w90/p/u/w4/t669,900/w6/p/t300,1941/w4/p/t540,1944/w4/p/w3/p: Settings
+  -> General -> Keyboard; shots ../phone-0108/shots/sheet-0108.png): the Keyboard page has
+  **no "Hardware Keyboard" row** (so iOS does not think one is attached) and shows raw
+  localization keys: "KEYBOARDS  KEYBOARD_COUNT", "USER_DICTIONARY", "REACHABLE_KEYBOARD",
+  "Continuous_Path", "PERIOD_SHORTCUT".
+- **Likely cause found:** /private/var/mobile/Library/Preferences/.GlobalPreferences.plist (in
+  the 2026-11-12 pull) holds only AppleLanguages = [en] and AppleLocale = en_US: **no
+  AppleKeyboards** (Setup Assistant writes it; we skip Setup), so there is no input mode
+  for UIKit to show. Patch **../asus-rootfix-keyboards-v1** (tools/hfs-replace-inplace.py
+  --phone, the phone's file = the pull's, sha256 633dfefd...): binary plist + AppleKeyboards
+  = [en_US@sw=QWERTY;hw=Automatic, emoji@sw=Emoji], AppleKeyboardsExpanded = 1 (89 -> 190
+  bytes, sha256 08aca86d..., same block 2883219; catalog node 18500 at 69353-69354): 3
+  blocks, read-only check passed, backup kept. NOT written: needs the user's OK.
+- tools/asus-shot-pull.py --count N: only seq 0..N-1 (a boot with fewer shots than the last
+  one leaves that one's later slots behind).
 - To fix: the shot puller mixes slots of an earlier boot when the new boot took fewer shots
   (seq restarts at 0): clear the slot headers at a boot's first shot, or put a boot id in
   the header.

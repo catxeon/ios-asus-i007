@@ -44,6 +44,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('outdir')
     ap.add_argument('--since-seq', type=int, default=None)
+    ap.add_argument('--count', type=int, default=None,
+                    help="only seq 0..COUNT-1: a boot that took fewer shots than the last one leaves that one's "
+                         "later slots behind, which look like its continuation")
     a = ap.parse_args()
     size = int(adb('shell', f"su -c 'blockdev --getsize64 {PART}'").decode().strip())
     base = size // BS - LOG_BLOCKS - FW_BLOCKS - SLOTS * SLOT_BLOCKS
@@ -70,7 +73,8 @@ def main():
             newest.append(s)
         else:
             break
-    keep = [s for s in reversed(newest) if a.since_seq is None or s[0] >= a.since_seq]
+    keep = [s for s in reversed(newest) if (a.since_seq is None or s[0] >= a.since_seq) and
+            (a.count is None or s[0] < a.count)]
     os.makedirs(a.outdir, exist_ok=True)
     for seq, ns, w, h, px in keep:
         rgb = bytearray(w * h * 3)
