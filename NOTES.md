@@ -319,9 +319,27 @@ minutes from power-on to the lock screen.**
     cable out. 0x2600 = charger: 0x06 = 0x87, 0x08..0x0b = 06 0a 05 4b: not decoded.
 - Commit af4c326: AsusBattery reads the QBG's averages (two matching reads of each word),
   the BCL only as a fallback, external power from 0x2910 bit 4; charging = external and
-  below 100 %; logs every reading for the first 20 polls. Kernel CI 43162097360 started.
-- Next: lab check, then an iOS boot to see the battery icon (no asking any more, see
-  "Root and permissions").
+  below 100 %; logs every reading for the first 20 polls. Kernel CI 43162097360 succeeded
+  (kernel d1b2287d..., ../asus-ci-43162097360).
+- Lab image 0091 (08:48): `QBG status 0x80 0x1 voltage 0x5822 = 4391 mV current 0 = 0 mA
+  out, BCL 0x58 = 4384 mV, USB input 0x11: 100 % (estimated), external power` in all
+  five polls (Android just before: 8777 mV, 0 mA, Full).
+- **iOS image 0092 BOOTED** (08:54-09:09, no asking; kernel 43162097360, 0078's recipe
+  with sysmem + asusrtc, but `ASUS_REBOOT=900 asusautoswipe=600`: 15 min instead of 26;
+  ../phone-0092; root clean before and after). SpringBoard 43 s after launchd. Rounds
+  1-30 at 16.8-21.0 fps. 0 finger touches: nobody looked, so whether the status bar's
+  battery icon is right is NOT known; the log has no word from powerd either way.
+  - Battery readings every 30 s: 4391 -> 4383 mV over the 15 min with 29 -> 24 mA "out"
+    and USB input 0x11 throughout. So on a PC's USB port with iOS idle the battery gives
+    ~27 mA and its voltage falls ~0.5 mV a minute: the sign (positive = out of the
+    battery) fits, and the battery is NOT charged under XNU (nobody runs the charger).
+  - BUG seen: 3 of 24 polls were wrong: `QBG status 0x10 0` / `voltage 0 ... (a read
+    failed)` / `BCL 0x10 = 797 mV`. 0x10 is the PON status the keys' poll reads every
+    20 ms on another work loop: two SPMI transactions at once get each other's data.
+    Fixed in 0651608 (an IOLock around the observer command, as Linux's spmi-pmic-arb
+    lock). Kernel CI 43166430931 started.
+- Next: lab check, iOS boot; the user to look at the battery icon and to pull the cable
+  for a minute (does USB input bit 4 clear, does iOS show "on battery").
 - Open: the sign of IBAT; how to know external power properly; the curve is generic;
   nothing about charging is controlled or known under XNU (who charges the battery while
   iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
