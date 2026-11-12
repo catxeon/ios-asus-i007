@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,3778 @@
+@@ -0,0 +1,4060 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21676,6 +21676,7 @@
 +#include <IOKit/IOTimerEventSource.h>
 +#include <IOKit/IODeviceMemory.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <IOKit/pwr_mgt/IOPMPowerSource.h>
 +#include <pexpert/pexpert.h>
 +#include <kern/clock.h>
 +#include <sys/errno.h>
@@ -21709,7 +21710,10 @@
 +	OSDeclareDefaultStructors(AsusPhoneInput);
 +public:
 +	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	/* one PMIC register, read only (SID 0-15, 16-bit address); for AsusBattery */
++	static bool pmicRead(unsigned sid, unsigned addr, uint8_t *out);
 +private:
++	uint32_t fApids;
 +	IOMemoryMap *map(uint64_t pa, uint64_t size);
 +	uint32_t rd(IOMemoryMap *m, uint32_t off);
 +	uint16_t findApid(uint16_t ppid, uint32_t count);
@@ -21822,6 +21826,25 @@
 +		IODelay(1);
 +	}
 +	return false;
++}
++
++static AsusPhoneInput *gAsusInput;      /* set by start(), once the SPMI arbiter is mapped */
++
++bool
++AsusPhoneInput::pmicRead(unsigned sid, unsigned addr, uint8_t *out)
++{
++	static uint16_t lastPpid = 0xffff, lastApid = NO_APID;
++	AsusPhoneInput *self = gAsusInput;
++	uint16_t ppid = (uint16_t)(((sid & 0xf) << 8) | ((addr >> 8) & 0xff));
++
++	if (self == NULL) {
++		return false;
++	}
++	if (ppid != lastPpid) {
++		lastApid = self->findApid(ppid, self->fApids);
++		lastPpid = ppid;
++	}
++	return self->spmiRead(lastApid, (uint16_t)addr, out);
 +}
 +
 +void
@@ -25219,6 +25242,210 @@
 +}
 +
 +/*
++ * The battery for iOS: an IOPMPowerSource, as sweet's SweetBattery (patch 0062), which
++ * powerd and SpringBoard read (without one the status bar shows an empty red battery).
++ *
++ * On this phone the state of charge is computed by the charger firmware on the ADSP
++ * (Android: power_supply "battery" under qcom,pmic_glink / qcom,battery_charger); that
++ * processor does not run under XNU. What can be read without it is the PM8350B's battery
++ * current limiting block (SID 3, peripheral 0x47, "qcom,bcl-v5"; ASUS's kernel,
++ * drivers/thermal/qcom/bcl_pmic5.c): VBAT at 0x76 in steps of 49.827 mV (127 = no
++ * reading) and IBAT at 0x86, two's complement in steps of 78.127 mA. Android showed
++ * 4384 mV there (= 88 steps) with the pack of two cells in series at 8782 mV, so it is
++ * one cell's voltage. Read only, every 30 s.
++ *
++ * The percentage is an ESTIMATE from that voltage through a generic curve for a 4.45 V
++ * cell: steps of about 5 %, moved by load, temperature and age. It never reports a
++ * critical level and never goes below 5 %, so that a wrong estimate cannot make iOS shut
++ * down. Taken as charging when the current reads negative (Linux counts current out of
++ * the battery as positive: NOT yet checked on this phone), as on external power when
++ * charging or at 4350 mV and more.
++ *
++ * Boot-arg asusbattery: 1 (default) as above, with a fixed 100 % on external power when
++ * the readings are not usable; 2 always that fixed answer; 0 no battery at all.
++ */
++#define BATT_SID        3u              /* PM8350B */
++#define BCL_TYPE        0x4704
++#define BCL_SUBTYPE     0x4705
++#define BCL_MONITOR_EN  0x4746
++#define BCL_CONV_REQ    0x4772
++#define BCL_VBAT_READ   0x4776
++#define BCL_IBAT_READ   0x4786
++#define BATT_DESIGN_MAH 3500u           /* Android: charge_full_design 3500000 uAh */
++
++class AsusBattery : public IOPMPowerSource {
++	OSDeclareDefaultStructors(AsusBattery);
++public:
++	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++private:
++	IOWorkLoop *fLoop;
++	IOTimerEventSource *fTimer;
++	uint32_t fMode;
++	unsigned fPolls;
++	int fLastPercent;
++	void putNumber(const char *key, UInt32 value);
++	void putBool(const char *key, bool value);
++	void publish(unsigned percent, unsigned mv, int ma, bool external, bool charging, bool full, bool measured);
++	void poll(void);
++	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
++	static unsigned estimatePercent(unsigned mv);
++};
++OSDefineMetaClassAndStructors(AsusBattery, IOPMPowerSource);
++
++void
++AsusBattery::putNumber(const char *key, UInt32 value)
++{
++	const OSSymbol *symbol = OSSymbol::withCString(key);
++	OSNumber *number = OSNumber::withNumber(value, 32);
++	if (symbol && number) {
++		setPSProperty(symbol, number);
++	}
++	OSSafeReleaseNULL(number);
++	OSSafeReleaseNULL(symbol);
++}
++
++void
++AsusBattery::putBool(const char *key, bool value)
++{
++	const OSSymbol *symbol = OSSymbol::withCString(key);
++	if (symbol) {
++		setPSProperty(symbol, value ? kOSBooleanTrue : kOSBooleanFalse);
++		symbol->release();
++	}
++}
++
++/* ma: positive = into the battery (IOPMPowerSource's sense). */
++void
++AsusBattery::publish(unsigned percent, unsigned mv, int ma, bool external, bool charging, bool full, bool measured)
++{
++	/* (mAh throughout: powerd computes current * 100 / max) */
++	const unsigned capacity = (BATT_DESIGN_MAH * percent + 50u) / 100u;
++
++	setBatteryInstalled(true);
++	setCurrentCapacity(capacity);
++	setMaxCapacity(BATT_DESIGN_MAH);
++	setExternalConnected(external);
++	setExternalChargeCapable(external);
++	setIsCharging(charging);
++	setAtWarnLevel(false);
++	setAtCriticalLevel(false);              /* (an estimate must not shut the phone down) */
++	setVoltage(mv);
++	setAmperage(ma);
++	setTimeRemaining(-1);                   /* (not known) */
++	setCycleCount(0);
++	putBool("FullyCharged", full);
++	putBool("AppleRawExternalConnected", external);
++	putNumber("AppleRawCurrentCapacity", capacity);
++	putNumber("AppleRawMaxCapacity", BATT_DESIGN_MAH);
++	putNumber("DesignCapacity", BATT_DESIGN_MAH);
++	putNumber("InstantAmperage", (UInt32)ma);
++	putNumber("Temperature", 2500);         /* (centidegrees; fixed, not measured) */
++	putBool("AsusBatteryMeasured", measured);
++	putNumber("AsusBatteryPercent", percent);
++
++	/* IOPMCopyBatteryInfo's dictionary, as sweet */
++	OSDictionary *legacy = OSDictionary::withCapacity(7);
++	if (legacy) {
++		const char *keys[] = { kIOBatteryCurrentChargeKey, kIOBatteryCapacityKey, kIOBatteryVoltageKey,
++			               kIOBatteryAmperageKey, kIOBatteryCycleCountKey, kIOBatteryFlagsKey };
++		UInt32 values[] = { capacity, BATT_DESIGN_MAH, mv, (UInt32)ma, 0,
++			            (UInt32)(kIOBatteryInstalled | (external ? kIOBatteryChargerConnect : 0) |
++			            (charging ? kIOBatteryCharge : 0)) };
++		for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
++			OSNumber *number = OSNumber::withNumber(values[i], 32);
++			if (number) {
++				legacy->setObject(keys[i], number);
++				number->release();
++			}
++		}
++		setLegacyIOBatteryInfo(legacy);
++		legacy->release();
++	}
++	updateStatus();
++}
++
++unsigned
++AsusBattery::estimatePercent(unsigned mv)
++{
++	/* A generic curve for one 4.45 V cell at rest; not this battery's own. */
++	static const unsigned volts[] = { 3400, 3500, 3600, 3700, 3800, 3900, 4000, 4100, 4200, 4300, 4380 };
++	static const unsigned soc[] = { 5, 6, 9, 18, 35, 52, 65, 77, 87, 95, 100 };
++
++	if (mv <= volts[0]) {
++		return soc[0];
++	}
++	for (unsigned i = 1; i < sizeof(volts) / sizeof(volts[0]); i++) {
++		if (mv < volts[i]) {
++			return soc[i - 1] + (mv - volts[i - 1]) * (soc[i] - soc[i - 1]) / (volts[i] - volts[i - 1]);
++		}
++	}
++	return 100;
++}
++
++void
++AsusBattery::poll(void)
++{
++	uint8_t type = 0, subtype = 0, en = 0, conv = 0, v = 0, i = 0;
++	bool ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_TYPE, &type);
++	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_SUBTYPE, &subtype) && ok;
++	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_MONITOR_EN, &en) && ok;
++	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_CONV_REQ, &conv) && ok;
++	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_VBAT_READ, &v) && ok;
++	ok = AsusPhoneInput::pmicRead(BATT_SID, BCL_IBAT_READ, &i) && ok;
++	unsigned mv = (unsigned)v * 49827u / 1000u;
++	int out = (int)(int8_t)i * 78127 / 1000;        /* mA out of the battery (Linux's sense) */
++	bool measured = fMode == 1 && ok && v != 0 && v != 127 && mv >= 2800 && mv <= 4600;
++	bool charging = measured && (int8_t)i < 0;
++	bool external = !measured || charging || mv >= 4350;
++	unsigned percent = measured ? estimatePercent(mv) : 100;
++
++	if (fPolls < 6 || (int)percent != fLastPercent) {
++		IOLog("ASUS BATTERY: BCL type %#x/%#x monitor %#x conversion %#x VBAT %#x = %u mV, IBAT %#x = %d mA out%s: "
++		    "%u %%%s%s%s\n", type, subtype, en, conv, v, mv, i, out, ok ? "" : " (a read failed)", percent,
++		    measured ? " (estimated)" : " (fixed: no usable reading)", external ? ", external power" : ", on battery",
++		    charging ? ", charging" : "");
++	}
++	fPolls++;
++	fLastPercent = (int)percent;
++	if (measured) {
++		publish(percent, mv, -out, external, charging, external && !charging, true);
++	} else {
++		publish(100, 4200, 0, true, false, true, false);
++	}
++}
++
++void
++AsusBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
++{
++	AsusBattery *self = OSDynamicCast(AsusBattery, owner);
++	if (self) {
++		self->poll();
++		sender->setTimeoutMS(30000);
++	}
++}
++
++bool
++AsusBattery::start(IOService *provider)
++{
++	if (!IOPMPowerSource::start(provider)) {
++		return false;
++	}
++	fMode = 1;
++	fLastPercent = -1;
++	PE_parse_boot_argn("asusbattery", &fMode, sizeof(fMode));
++	poll();                                 /* (a complete source before registerService wakes powerd) */
++	fLoop = IOWorkLoop::workLoop();
++	fTimer = IOTimerEventSource::timerEventSource(this, &AsusBattery::timerFired);
++	if (fLoop && fTimer && fLoop->addEventSource(fTimer) == kIOReturnSuccess) {
++		fTimer->setTimeoutMS(30000);
++	} else {
++		IOLog("ASUS BATTERY: no timer: the first reading stays\n");
++	}
++	registerService();
++	return true;
++}
++
++/*
 + * The wall clock. The PMK8350's RTC (SID 0, peripheral 0x61) counts seconds from its last
 + * reset in 0x6148..0x614b (Linux rtc-pm8xxx.c, pmk8350_regs). Android never writes it and
 + * keeps the difference to the real time in a file; here it is only read too. Boot-arg
@@ -25335,6 +25562,47 @@
 +			publishResource("IORTC");
 +		}
 +	}
++	fApids = count;
++	gAsusInput = this;
++	/*
++	 * A look around a PMIC, read only: boot-arg asuspmic=SID lists that PMIC's peripherals
++	 * (the arbiter's channel, its owner, type and subtype registers 4 and 5), and
++	 * asuspmicdump=PPID,PPID,... (hexadecimal SID and peripheral, e.g. 347) prints all 256
++	 * registers of up to 8 peripherals.
++	 */
++	{
++		uint32_t sid = 0xff, pairs[8][2];
++		if (PE_parse_boot_argn("asuspmic", &sid, sizeof(sid)) && sid < 16) {
++			for (uint32_t per = 0; per < 256; per++) {
++				uint16_t apid = findApid((uint16_t)((sid << 8) | per), count);
++				if (apid == NO_APID) {
++					continue;
++				}
++				uint8_t type = 0, subtype = 0;
++				bool tok = spmiRead(apid, (uint16_t)((per << 8) | 4), &type);
++				bool sok = spmiRead(apid, (uint16_t)((per << 8) | 5), &subtype);
++				IOLog("ASUS PMIC: sid %u peripheral %#04x: channel %u owner %u type %#x subtype %#x%s\n", sid, per,
++				    apid, rd(fCnfg, 0x700 + 4 * apid) & 7, type, subtype, tok && sok ? "" : " (NOT read)");
++			}
++		}
++		unsigned dumps = gpuArgPairs("asuspmicdump", pairs, 8);
++		for (unsigned k = 0; k < dumps; k++) {
++			uint32_t ppid = pairs[k][0] & 0xfff;
++			for (uint32_t row = 0; row < 16; row++) {
++				char line[80];
++				int len = 0;
++				for (uint32_t col = 0; col < 16; col++) {
++					uint8_t b = 0;
++					if (pmicRead(ppid >> 8, ((ppid & 0xff) << 8) | (row * 16 + col), &b)) {
++						len += snprintf(line + len, sizeof(line) - (size_t)len, " %02x", b);
++					} else {
++						len += snprintf(line + len, sizeof(line) - (size_t)len, " --");
++					}
++				}
++				IOLog("ASUS PMIC: %03x %02x:%s\n", ppid, row * 16, line);
++			}
++		}
++	}
 +	/* GPIO configuration belongs to firmware: diagnose, never repair it here. */
 +	unsigned dir = (subtype >= 0x10 && subtype <= 0x13) ? (mode & 3) : ((mode >> 4) & 7);
 +	if (!eok || !mok || !sok || !(en & 0x80) || (dir != 0 && dir != 2)) {
@@ -25359,6 +25627,20 @@
 +	}
 +	registerService();
 +	IOLog("ASUS INPUT: buttons polled every %d ms (volume up + down = Home)\n", POLL_MS);
++	/* the battery for iOS (see AsusBattery) */
++	{
++		uint32_t mode = 1;
++		PE_parse_boot_argn("asusbattery", &mode, sizeof(mode));
++		if (mode) {
++			AsusBattery *battery = OSTypeAlloc(AsusBattery);
++			if (battery && battery->init() && battery->attach(this) && battery->start(this)) {
++				IOLog("ASUS BATTERY: power source registered\n");
++			} else {
++				IOLog("ASUS BATTERY: not started\n");
++				OSSafeReleaseNULL(battery);
++			}
++		}
++	}
 +	return true;
 +}
 +
