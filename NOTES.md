@@ -360,6 +360,43 @@ minutes from power-on to the lock screen.**
   iOS runs? the ADSP firmware is not running: NOT known whether the PMIC charges on its
   own).
 
+**NOW WORKED ON (2026-11-13 ~01:00): the keyboard, with touch scripts ("hands").**
+- iOS 0105 (kernel 43298840323, charge counting; 23:43-~23:59, ../phone-0105): the scheduled
+  reset worked, but Windows then showed the phone as "Unknown USB Device (Port Reset
+  Failed)" until the user re-plugged it (00:12): adb sees nothing in that state. Battery:
+  24 polls, plugged, ~35-40 mA out at rest, counted 100 % throughout, one single poll
+  "on battery" (USB input bit flicker or a real short unplug). No jumps.
+- User: "Да, добавляй нажатия по сценарию". Commits 7610def + a08b27d (+ 30ffe22 mkadt
+  fix): **touch scripts**: `ASUS_SCRIPT='w90/p/u/...'` for tools/build-asus-image.sh puts
+  the script into the device tree (/chosen asus-script, mkadt-asus.py --script: the
+  boot-args are full); AsusPhoneInput runs it once the touch screen is up. Steps: wN wait s,
+  mN wait ms, tX,Y tap, lX,Y long press 1.2 s, sX0,Y0,X1,Y1[,MS] swipe, u unlock swipe, p
+  screenshot now (asus_shot_request -> SweetFramebuffer takes one at the next vsync, with
+  or without asusshot). Coordinates: panel pixels = screenshot (360x816) x 3. Every step
+  logged `ASUS SCRIPT: 180.1 s: step 2: p ...`. Kernel CI 43310691661.
+  - CI 43307492888 failed: asus_shot_request used before its declaration (fixed a08b27d).
+    The first 0106 try: mkadt-asus.py appended a 2-tuple to /chosen (props are (name,
+    flags, value)): the image was not built, the cycle left the phone in fastboot (0b05:4daf
+    attached to WSL); the cycle script starts from there by itself on the next run.
+- **iOS 0106** (00:48, ASUS_REBOOT=300: 5 min; script w90/p/u/w4/p/s540,900,540,1600,300/
+  w4/p/t540,2200/w2/p/t150,2000/w2/p/w10/p/s540,2440,540,1600,300/w3/p/t669,960/w4/p): all
+  22 steps ran (touch up at ~90 s: the first p at 180 s). Shots (../phone-0106/shots,
+  sheet-0106.png; only seq 0-7 are this boot's, the puller mixed in 0105's older slots):
+  home screen already at 180 s; the swipe down opened **Spotlight with its search field at
+  the very bottom and NO keyboard** (the field would sit above a keyboard that is shown but
+  not drawn: so UIKit does not bring the keyboard up at all); taps there change nothing;
+  tapping Settings starts it. Battery "100" green throughout.
+  - Not the buttons: SweetHIDButtons is Consumer/ConsumerControl, SweetHIDTouch
+    Digitizer/TouchScreen (SweetHID.cpp), not a keyboard. Guesses left: iOS thinks a
+    hardware keyboard is there for another reason, or the keyboard arbiter/input UI does
+    not come up. Settings says "Sign in to your **iPad**" (0104) and "**iPod touch**
+    Storage" (0101): the device class answers are odd too.
+- iOS 0107: the same Spotlight steps with `applog_name=SpringBoard` (os_log of SpringBoard
+  to stderr = into the kernel log through sweetnull), to read why the keyboard stays down.
+- To fix: the shot puller mixes slots of an earlier boot when the new boot took fewer shots
+  (seq restarts at 0): clear the slot headers at a boot's first shot, or put a boot id in
+  the header.
+
 **NOW WORKED ON (2026-11-12 evening, user: "сделай пока что-нибудь без моего
 присутствия"): screenshots, so that what the screen shows can be checked with nobody at the
 phone** (the picture with the GPU fill, the battery icon, later the keyboard).
