@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4095 @@
+@@ -0,0 +1,4117 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21718,6 +21718,8 @@
 +	uint32_t rd(IOMemoryMap *m, uint32_t off);
 +	uint16_t findApid(uint16_t ppid, uint32_t count);
 +	bool spmiRead(uint16_t apid, uint16_t addr, uint8_t *out);
++	bool spmiReadOne(uint16_t apid, uint16_t addr, uint8_t *out);
++	IOLock *fSpmiLock;
 +	void touchDiagnostics();
 +	void cpuFreq();
 +	void gpuProbe();
@@ -21803,8 +21805,27 @@
 +	return found;
 +}
 +
++/*
++ * One transaction at a time, as Linux's spmi-pmic-arb does under its lock. Image 0092: the
++ * battery's poll (its own work loop) and the keys' poll (every 20 ms) met a few times in
++ * 15 minutes, and a battery register then read as 0x10, the PON status the keys had asked
++ * for, or as 0 with an error.
++ */
 +bool
 +AsusPhoneInput::spmiRead(uint16_t apid, uint16_t addr, uint8_t *out)
++{
++	if (fSpmiLock) {
++		IOLockLock(fSpmiLock);
++	}
++	bool ok = spmiReadOne(apid, addr, out);
++	if (fSpmiLock) {
++		IOLockUnlock(fSpmiLock);
++	}
++	return ok;
++}
++
++bool
++AsusPhoneInput::spmiReadOne(uint16_t apid, uint16_t addr, uint8_t *out)
 +{
 +	if (apid == NO_APID) {
 +		return false;
@@ -25541,6 +25562,7 @@
 +	if (!IOService::start(provider)) {
 +		return false;
 +	}
++	fSpmiLock = IOLockAlloc();
 +	/* cpuFreq() runs from touchFired, once the flash log works (EPSS experiments). */
 +	touchDiagnostics();
 +	fCore = map(SPMI_CORE_PA, 0x2000);

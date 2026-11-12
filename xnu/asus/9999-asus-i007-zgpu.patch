@@ -1497,7 +1497,7 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
 diff --git a/iokit/Kernel/arm/AsusPhoneInput.cpp b/iokit/Kernel/arm/AsusPhoneInput.cpp
 --- a/iokit/Kernel/arm/AsusPhoneInput.cpp
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -2293,6 +2293,7 @@
+@@ -2314,6 +2314,7 @@
  void redwood_gpu_stop(void);
  void redwood_tl(const char *format, ...) __printflike(1, 2);
  uint32_t gpu_log;
@@ -1505,7 +1505,7 @@ diff --git a/iokit/Kernel/arm/AsusPhoneInput.cpp b/iokit/Kernel/arm/AsusPhoneInp
  }
  
  namespace {
-@@ -3057,6 +3058,10 @@
+@@ -3078,6 +3079,10 @@
  		}
  	}
  	gGpuReady = done && got == 0x0badcafe;
