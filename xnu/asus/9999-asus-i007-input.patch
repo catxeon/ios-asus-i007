@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4127 @@
+@@ -0,0 +1,4171 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -25313,6 +25313,9 @@
 +	uint32_t fMode;
 +	unsigned fPolls;
 +	int fLastPercent;
++	int64_t fChargeUAh;             /* the charge counted from the measured current; < 0: not started */
++	uint64_t fLastAbs;              /* when it was counted last */
++	bool fLastExternal, fLastCharging;
 +	void putNumber(const char *key, UInt32 value);
 +	void putBool(const char *key, bool value);
 +	void publish(unsigned percent, unsigned mv, int ma, bool external, bool charging, bool full, bool measured);
@@ -25401,6 +25404,20 @@
 +	updateStatus();
 +}
 +
++/*
++ * The charge is COUNTED (image 0104, the user: unplugged at 100 % it fell to 92 %; plugged in
++ * again it jumped to 95 %, "charging" late): a percentage straight from the voltage follows the
++ * voltage's sag under load and its rise under charge. Now the voltage, taken back to its value
++ * at rest (+ current x BATT_R_MOHM), gives the starting charge only; from then on every poll
++ * adds what the gauge's current carried in or out since the last one, and only while the
++ * battery is nearly at rest (|current| < 40 mA) is the count pulled gently (1/32 a poll)
++ * towards the voltage's estimate, so that it cannot drift away for good. On external power
++ * with the voltage at the top and little current the battery counts as full. Polled every
++ * BATT_POLL_MS: a cable plugged in or out shows within that.
++ */
++#define BATT_R_MOHM     120             /* cell + path resistance, a guess for one 4.45 V cell */
++#define BATT_POLL_MS    5000
++
 +unsigned
 +AsusBattery::estimatePercent(unsigned mv)
 +{
@@ -25457,22 +25474,48 @@
 +	bool fallback = !qbg && bok && bcl != 0 && bcl != 127 && bclMv >= 2800 && bclMv <= 4600;
 +	bool measured = fMode == 1 && (qbg || fallback);
 +	unsigned mv = qbg ? qbgMv : bclMv;
-+	unsigned percent = measured ? estimatePercent(mv) : 100;
++	int rest = (int)mv + (iok ? out * BATT_R_MOHM / 1000 : 0);     /* the voltage at rest */
++	unsigned estimate = estimatePercent(rest > 0 ? (unsigned)rest : 0);
++	const int64_t fullUAh = (int64_t)BATT_FULL_MAH * 1000;
++	uint64_t now = mach_absolute_time(), ns = 0;
 +	bool external = !measured || !uok || (usb & 0x10);
-+	bool full = external && percent >= 100;
-+	/* (current into the battery, 20 mA and more; under XNU nobody runs the charger, so this stays false) */
++	/* (current into the battery, 20 mA and more) */
 +	bool charging = measured && external && iok && out <= -20;
 +
-+	/* (every reading for the first ten minutes, then the changes: the log is the only way to check this) */
-+	if (fPolls < 20 || (int)percent != fLastPercent) {
++	if (measured && fChargeUAh < 0) {
++		fChargeUAh = fullUAh * estimate / 100;
++	} else if (measured && iok) {
++		absolutetime_to_nanoseconds(now - fLastAbs, &ns);
++		fChargeUAh -= (int64_t)out * (int64_t)(ns / 1000000) / 3600;      /* mA x ms / 3600 = uAh */
++		if (out > -40 && out < 40) {
++			fChargeUAh += (fullUAh * estimate / 100 - fChargeUAh) / 32;
++		}
++		if (external && out > -50 && out < 50 && estimate >= 99) {
++			fChargeUAh = fullUAh;                   /* (charged: the charger has stopped) */
++		}
++	}
++	fLastAbs = now;
++	if (fChargeUAh > fullUAh) {
++		fChargeUAh = fullUAh;
++	}
++	if (measured && fChargeUAh < fullUAh * 3 / 100) {
++		fChargeUAh = fullUAh * 3 / 100;                 /* (never below 3 %: an estimate must not shut iOS down) */
++	}
++	unsigned percent = measured ? (unsigned)((fChargeUAh * 100 + fullUAh / 2) / fullUAh) : 100;
++	bool full = external && percent >= 100 && !charging;
++
++	/* (every reading for the first two minutes, then changes of the percentage, the cable or the charging) */
++	if (fPolls < 24 || (int)percent != fLastPercent || external != fLastExternal || charging != fLastCharging) {
 +		IOLog("ASUS BATTERY: QBG status %#x %#x voltage %#x = %u mV current %#x = %d mA out%s, BCL %#x = %u mV, USB "
-+		    "input %#x%s: %u %%%s%s%s\n", qbg1, qbg2, rawV, qbgMv, rawI, out, sok && vok && iok ? "" : " (a read failed)",
-+		    bcl, bclMv, usb, uok ? "" : " (not read)", percent,
-+		    !measured ? " (fixed: no usable reading)" : qbg ? " (estimated)" : " (estimated from the BCL)",
++		    "input %#x%s: at rest %d mV = %u %%, counted %lld uAh = %u %%%s%s%s\n", qbg1, qbg2, rawV, qbgMv, rawI, out,
++		    sok && vok && iok ? "" : " (a read failed)", bcl, bclMv, usb, uok ? "" : " (not read)", rest, estimate,
++		    (long long)fChargeUAh, percent, !measured ? " (fixed: no usable reading)" : qbg ? "" : " (from the BCL)",
 +		    external ? ", external power" : ", on battery", charging ? ", charging" : "");
 +	}
 +	fPolls++;
 +	fLastPercent = (int)percent;
++	fLastExternal = external;
++	fLastCharging = charging;
 +	if (measured) {
 +		publish(percent, mv, -out, external, charging, full, true);
 +	} else {
@@ -25486,7 +25529,7 @@
 +	AsusBattery *self = OSDynamicCast(AsusBattery, owner);
 +	if (self) {
 +		self->poll();
-+		sender->setTimeoutMS(30000);
++		sender->setTimeoutMS(BATT_POLL_MS);
 +	}
 +}
 +
@@ -25498,12 +25541,13 @@
 +	}
 +	fMode = 1;
 +	fLastPercent = -1;
++	fChargeUAh = -1;
 +	PE_parse_boot_argn("asusbattery", &fMode, sizeof(fMode));
 +	poll();                                 /* (a complete source before registerService wakes powerd) */
 +	fLoop = IOWorkLoop::workLoop();
 +	fTimer = IOTimerEventSource::timerEventSource(this, &AsusBattery::timerFired);
 +	if (fLoop && fTimer && fLoop->addEventSource(fTimer) == kIOReturnSuccess) {
-+		fTimer->setTimeoutMS(30000);
++		fTimer->setTimeoutMS(BATT_POLL_MS);
 +	} else {
 +		IOLog("ASUS BATTERY: no timer: the first reading stays\n");
 +	}
