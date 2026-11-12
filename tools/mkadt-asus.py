@@ -113,7 +113,7 @@ def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM
     if script:
         # a touch script for AsusPhoneInput (tools/build-asus-image.sh ASUS_SCRIPT): no
         # room for it in the boot-args (608 characters)
-        chosen.props.append(('asus-script', cstr(script)))
+        chosen.props.append(('asus-script', 0, cstr(script)))
     # SM8350: cores 0-3 Cortex-A55, 4-6 Cortex-A78, 7 Cortex-X1; MPIDR Aff1 = core (DynamIQ),
     # all ARMv8.2 with the 16K granule. ncpus > 1 lists them for the SMP patch (cpus=N boot-arg
     # starts the first N via PSCI CPU_ON); ncpus=1 keeps the single boot CPU node as before.
