@@ -408,6 +408,16 @@ watching the battery icon and pulling the cable; the user said "позже".
   changes (logicalSize 0x54a60 -> 0x54ad0); applied to the image: fsck -n only "Volume
   header needs minor repair" (as always for these journaled images), the file reads back
   with the new sha256; the image was restored after (checked).
+- **Block patch ../asus-rootfix-gl-v2 made FROM THE PHONE (read only, after 0098), NOT
+  written**: same file and blocks, but catalog node 18525 at blocks 69403-69404 (the old
+  image's 18523 is stale: always make these from the phone). `asus-iosroot-blockpatch.py
+  ../asus-rootfix-gl-v2` (no --write): phone vs old.hash all 87 match, backup.bin kept; of
+  the 87 blocks 70 differ (data) and one byte of block 69404. Needs the user's OK to write:
+  `MSYS_NO_PATHCONV=1 python tools/asus-iosroot-blockpatch.py ../asus-rootfix-gl-v2
+  --write` (undo: `--restore`; any iOS boot before the write makes old.hash fail, then
+  make the patch again with tools/hfs-replace-inplace.py --phone). Then an iOS boot on
+  kernel 43213903663 (the swap timing) to compare with 0098; `glgpufill=0` in boot-args
+  turns the change off without touching the root again.
 
 **Open problem 1: black screen (the current blocker).**
 - Observed: display swaps of the BGRA screen surfaces happen (~20/s); 0066's trace of
