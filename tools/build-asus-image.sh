@@ -67,6 +67,10 @@ fi
 if [ "${ASUS_AMP:-0}" = 1 ]; then
     adt_flags+=(--amp)
 fi
+# ASUS_SCRIPT='w60/u/w3/t669,960/w3/p': a touch script in /chosen asus-script (AsusPhoneInput.cpp:
+# wN wait s, mN wait ms, tX,Y tap, lX,Y long press, sX0,Y0,X1,Y1[,MS] swipe, u unlock, p screenshot;
+# panel pixels = a screenshot's times 3)
+[ -n "${ASUS_SCRIPT:-}" ] && adt_flags+=(--script "$ASUS_SCRIPT")
 python3 "$repo/tools/mkadt-asus.py" "$out/asus.adt" "${adt_flags[@]}"
 cmdline="debug=0xc serial=3 cpus=$cpus keepsyms=1 -enable_kprintf_spam -noprogress rd=md0"
 if [ "${ASUS_UFS:-0}" = 1 ]; then

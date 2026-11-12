@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4171 @@
+@@ -0,0 +1,4269 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -21677,6 +21677,7 @@
 +#include <IOKit/IODeviceMemory.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <IOKit/pwr_mgt/IOPMPowerSource.h>
++#include <IOKit/IODeviceTreeSupport.h>
 +#include <pexpert/pexpert.h>
 +#include <kern/clock.h>
 +#include <sys/errno.h>
@@ -22410,6 +22411,7 @@
 +}
 +
 +static void asus_autoswipe(void *arg, wait_result_t wr);
++static void asus_script(void *arg, wait_result_t wr);
 +
 +void
 +AsusPhoneInput::touchBitbang(IOMemoryMap *tlmm)
@@ -22484,6 +22486,21 @@
 +			thread_deallocate(th);
 +		}
 +	}
++	/* a touch script from the device tree (/chosen asus-script: tools/build-asus-image.sh ASUS_SCRIPT) */
++	IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
++	OSData *script = chosen != NULL ? OSDynamicCast(OSData, chosen->getProperty("asus-script")) : NULL;
++	if (script != NULL && script->getLength() > 1 && script->getLength() < 4096) {
++		char *text = (char *)IOMalloc(script->getLength() + 1);
++		thread_t th;
++		if (text != NULL) {
++			memcpy(text, script->getBytesNoCopy(), script->getLength());
++			text[script->getLength()] = 0;
++			if (kernel_thread_start(asus_script, text, &th) == KERN_SUCCESS) {
++				thread_deallocate(th);
++			}
++		}
++	}
++	OSSafeReleaseNULL(chosen);
 +}
 +
 +/*
@@ -22522,6 +22539,81 @@
 +		IOSleep(1500);
 +	}
 +	IOLog("ASUS AUTOSWIPE: done\n");
++}
++
++/*
++ * A touch script, so that the screen can be driven with nobody at the phone (with asusshot's
++ * screenshots to see what came of it). Steps separated by '/', counted from the moment the
++ * touch screen is up: wN wait N s, mN wait N ms, tX,Y tap, lX,Y long press (1.2 s),
++ * sX0,Y0,X1,Y1[,MS] swipe, u unlock swipe, p screenshot now. Coordinates are native panel
++ * pixels (1080x2448): a screenshot's (360x816) times 3. Every step is logged with the uptime.
++ */
++static void
++asus_script(void *arg, __unused wait_result_t wr)
++{
++	char *p = (char *)arg;
++	unsigned step = 0;
++
++	IOLog("ASUS SCRIPT: %.200s\n", p);
++	while (*p != 0) {
++		char op = *p++;
++		int v[5] = { 0, 0, 0, 0, 0 };
++		unsigned n = 0;
++		while (n < 5 && *p >= '0' && *p <= '9') {
++			int x = 0;
++			while (*p >= '0' && *p <= '9') {
++				x = x * 10 + (*p++ - '0');
++			}
++			v[n++] = x;
++			if (*p == ',') {
++				p++;
++			}
++		}
++		while (*p != 0 && *p != '/') {
++			p++;
++		}
++		if (*p == '/') {
++			p++;
++		}
++		switch (op) {
++		case 'w':
++			IOSleep((uint32_t)v[0] * 1000);
++			break;
++		case 'm':
++			IOSleep((uint32_t)v[0]);
++			break;
++		case 't':
++			sweet_hid_touch(0, 1, v[0], v[1]);
++			IOSleep(80);
++			sweet_hid_touch(0, 0, v[0], v[1]);
++			break;
++		case 'l':
++			sweet_hid_touch(0, 1, v[0], v[1]);
++			IOSleep(1200);
++			sweet_hid_touch(0, 0, v[0], v[1]);
++			break;
++		case 's':
++			asus_swipe(v[0], v[1], v[2], v[3], n >= 5 && v[4] > 0 ? (unsigned)v[4] : 300);
++			break;
++		case 'u':
++			asus_swipe(540, 2440, 540, 1100, 500);
++			break;
++		case 'p':
++			asus_shot_request();
++			break;
++		default:
++			continue;
++		}
++		uint64_t ns = 0;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++		step++;
++		if (op != 'w' && op != 'm') {
++			IOLog("ASUS SCRIPT: %llu.%01llu s: step %u: %c %d,%d,%d,%d\n", ns / 1000000000ull, ns / 100000000ull % 10, step,
++			    op, v[0], v[1], v[2], v[3]);
++		}
++	}
++	IOLog("ASUS SCRIPT: done (%u steps)\n", step);
++	/* (the text stays: a few bytes, once a boot) */
 +}
 +
 +void
@@ -22653,6 +22745,12 @@
 +asus_log_ready(void)
 +{
 +	return false;                   /* no flash log in this kernel: never run the bring-up */
++}
++
++/* Strong definition in SweetFramebuffer.cpp (--display): a screenshot at the next vsync. */
++extern "C" __attribute__((weak)) void
++asus_shot_request(void)
++{
 +}
 +
 +/*

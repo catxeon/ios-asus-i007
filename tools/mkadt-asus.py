@@ -100,7 +100,7 @@ def trust_cache_prop(path):
 
 
 def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM_SIZE, ncpus=1,
-          cores=None, amp=False):
+          cores=None, amp=False, script=None):
     gui_chosen, gui_top, gui_disp0 = gui_nodes(ios_gui) if ios_gui else ([], [], None)
     chosen = node('chosen', [
         ('dram-base', u64(PHYS_BASE)), ('dram-size', u64(mem_size)),
@@ -110,6 +110,10 @@ def build(display=False, ios_gui=None, trust_cache=None, ufs=False, mem_size=MEM
     chosen.props += gui_chosen
     if trust_cache:
         chosen.props.append(trust_cache_prop(trust_cache))
+    if script:
+        # a touch script for AsusPhoneInput (tools/build-asus-image.sh ASUS_SCRIPT): no
+        # room for it in the boot-args (608 characters)
+        chosen.props.append(('asus-script', cstr(script)))
     # SM8350: cores 0-3 Cortex-A55, 4-6 Cortex-A78, 7 Cortex-X1; MPIDR Aff1 = core (DynamIQ),
     # all ARMv8.2 with the 16K granule. ncpus > 1 lists them for the SMP patch (cpus=N boot-arg
     # starts the first N via PSCI CPU_ON); ncpus=1 keeps the single boot CPU node as before.
@@ -195,6 +199,7 @@ if __name__ == '__main__':
     parser.add_argument('--cpu-list', help='physical cores in logical order, e.g. 0,4,5,6,7 (overrides --cpus)')
     parser.add_argument('--amp', action='store_true', help="cluster-type 'E' (A55) / 'P' (A78, X1); --amp kernel")
     parser.add_argument('--dump', action='store_true')
+    parser.add_argument('--script', help="touch script, e.g. 'w60/u/w3/t669,960/w3/p' (AsusPhoneInput.cpp)")
     args = parser.parse_args()
     if not 512 <= args.mem_mib <= 5120 or args.mem_mib % 16:
         parser.error('--mem-mib must be 512..5120 and a multiple of 16')
@@ -206,7 +211,7 @@ if __name__ == '__main__':
     if not 1 <= args.cpus <= 8:
         parser.error('--cpus must be 1-8')
     root = build(args.display, args.ios_gui, args.trust_cache, args.ufs, args.mem_mib << 20, args.cpus,
-                 cores, args.amp)
+                 cores, args.amp, args.script)
     blob = adt.serialize(root)
     args.output.write_bytes(blob)
     if args.dump:

@@ -968,7 +968,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,586 @@
+@@ -0,0 +1,599 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -1093,6 +1093,14 @@
 +
 +/* ASUS: screenshots to the end of iosroot, for looking at the screen with nobody there */
 +extern "C" bool asus_shot_submit(const void *pixels, uint32_t width, uint32_t height);   /* bsd/dev/sweet_ufs.c */
++static volatile uint32_t asus_shot_wanted;
++/* A screenshot at the next vsync (AsusPhoneInput.cpp's touch script, step 'p'). */
++extern "C" void asus_shot_request(void);
++extern "C" void
++asus_shot_request(void)
++{
++	asus_shot_wanted = 1;
++}
 +#define ASUS_SHOT_W     360u
 +#define ASUS_SHOT_H     816u
 +
@@ -1196,7 +1204,8 @@
 +		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
 +	}
 +	IOLockUnlock(fb->fLock);
-+	if (fb->fShotSecs != 0 && count % (60ull * fb->fShotSecs) == 0) {
++	if ((fb->fShotSecs != 0 && count % (60ull * fb->fShotSecs) == 0) || asus_shot_wanted) {
++		asus_shot_wanted = 0;
 +		fb->takeShot();
 +	}
 +	if (count % 300 == 0) {
@@ -1218,6 +1227,10 @@
 +	static unsigned told;
 +	const uint32_t w = fWidth / 3, h = fHeight / 3;
 +
++	if (fShot == NULL && w <= ASUS_SHOT_W && h <= ASUS_SHOT_H) {
++		fShot = (uint16_t *)IOMalloc(ASUS_SHOT_W * ASUS_SHOT_H * 2);      /* (asked for without asusshot) */
++		fShotRow = (uint8_t *)IOMalloc(fRowBytes);
++	}
 +	if (fShot == NULL || fShotRow == NULL) {
 +		return;
 +	}
