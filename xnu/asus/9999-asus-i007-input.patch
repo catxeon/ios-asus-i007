@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4117 @@
+@@ -0,0 +1,4120 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -25283,10 +25283,12 @@
 + *
 + * The percentage is an ESTIMATE from the voltage through a generic curve for a 4.45 V
 + * cell; load, charging, temperature and age move it. It never reports a critical level
-+ * and never goes below 5 %, so that a wrong estimate cannot make iOS shut down. On
-+ * external power it counts as charging until the estimate reaches 100 %. The current is
-+ * passed on with Linux's sign turned round (positive = into the battery), which is NOT
-+ * checked on this phone; nothing depends on it.
++ * and never goes below 5 %, so that a wrong estimate cannot make iOS shut down. The
++ * gauge's current is positive out of the battery (images 0092/0094: 17-29 mA with the
++ * voltage falling 0.5 mV a minute, iOS idle on a PC's USB port); iOS gets it with the
++ * sign turned round, and "charging" only when 20 mA or more go in. Nobody runs the
++ * charger under XNU (that is the ADSP firmware's work), so on external power the battery
++ * is seen neither charging nor, below 100 %, full.
 + *
 + * Boot-arg asusbattery: 1 (default) as above, with a fixed 100 % on external power when
 + * no reading is usable; 2 always that fixed answer; 0 no battery at all.
@@ -25451,7 +25453,8 @@
 +	unsigned percent = measured ? estimatePercent(mv) : 100;
 +	bool external = !measured || !uok || (usb & 0x10);
 +	bool full = external && percent >= 100;
-+	bool charging = measured && external && !full;
++	/* (current into the battery, 20 mA and more; under XNU nobody runs the charger, so this stays false) */
++	bool charging = measured && external && iok && out <= -20;
 +
 +	/* (every reading for the first ten minutes, then the changes: the log is the only way to check this) */
 +	if (fPolls < 20 || (int)percent != fLastPercent) {
