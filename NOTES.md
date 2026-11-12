@@ -440,6 +440,35 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
     087-86698-044.dmg, stored (not deflated), 4730814044 bytes at offset 1191497236; raw
     APFS, mounted read-only with work/apfs-fuse as WSL root before. Downloading it needs
     the user's OK (4.7 GB from updates.cdn-apple.com).
+  - User OK "Да, скачивай": downloaded by range (curl -r offset+67 .. +4730814044; the
+    member's local header is ZIP64, extra 20) to WSL ~/ipsw/087-86698-044.dmg, crc32
+    66ccd39f = zip-index. Mounted read-only (`wsl -u root`, apfs-fuse -o ro,allow_other,
+    /mnt/os16). Its /System/Library/xpc/launchd.plist (1456980 bytes, 532 jobs) copied to
+    WSL ~/zc/launchd-20H392.plist. Stock jobs: com.apple.powerd (Program
+    /System/Library/CoreServices/powerd.bundle/powerd, KeepAlive, MachServices
+    com.apple.PowerManagement.control, com.apple.iokit.powerdxpc,
+    com.apple.powerd.{coresmartpowernap,lowpowermode,smartpowernap}, Adaptive) and
+    com.apple.TextInput.kbd (ProgramArguments /System/Library/TextInput/kbd, UserName
+    mobile, on demand: 16 MachServices incl. com.apple.TextInput, LaunchEvents). Neither
+    has the keys the root's jobs had removed (the root's 10 changed jobs differ from stock
+    only by EnablePressuredExit, _PanicOnCrash, LimitLoadFromHardware,
+    _LimitLoadFromClarityMode and resolved feature-flag branches).
+  - Fresh pull of iosroot (first 12 GiB, ~20:41-20:52, no iOS boot since 0103) to WSL
+    ~/asus-roots/iosroot-2026-11-12.img + .hash; header = phone (0x80002100, 211003 free);
+    fsck -n: only "Volume header needs minor repair" (always so).
+  - work/make_root_jobs_v1.py (WSL) edited that copy: the root's launchd.plist + the two
+    stock jobs, unchanged otherwise (498749 -> 500402 bytes, 13 jobs, sha256 ec0e8065...),
+    hfsplus rm + tools/hfs-add-contiguous.py: one extent at blocks 10146..10268, read back
+    equal; fsck -n: only the usual line. Block patch **../asus-rootfix-jobs-v1**: 131
+    blocks in runs [0,2] [91] [10146,123] [69181,2] [69399,2] [3145727] (volume header,
+    bitmap, the file, two catalog nodes, alternate header). Read-only check against the
+    phone: all 131 match old.hash, backup.bin kept. **NOT written: needs the user's OK**
+    (`MSYS_NO_PATHCONV=1 python tools/asus-iosroot-blockpatch.py ../asus-rootfix-jobs-v1
+    --write`; undo `--restore`; any iOS boot before writing makes the check fail: pull
+    and make it again).
+  - After the write: an iOS boot with the new device tree (sleep-disabled) and
+    asusshot: is powerd spawned, battery icon, any crash loop (powerd is KeepAlive), does
+    the screen still turn off/lock as before; kbd shows only when a text field asks for it.
 
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
