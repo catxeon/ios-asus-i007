@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,1085 @@
+@@ -0,0 +1,1217 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -992,6 +992,138 @@
 +	if (data != NULL) {
 +		kfree_data(data, size);
 +	}
++}
++
++/*
++ * ASUS: screenshots, for looking at the screen with nobody at the phone. The display driver
++ * (SweetFramebuffer.cpp, boot-arg asusshot=SECONDS) hands over a third-size copy of the
++ * panel (RGB565); a thread writes it into the next of ASUS_SHOT_SLOTS slots of an area right
++ * before the firmware area at the end of iosroot (all zeros when looked at from Android on
++ * 2026-11-12). A slot: one block "ASUSSHOT" | u32 version 1 | u32 width | u32 height |
++ * u32 bytes | u64 seq | u64 uptime in ns, then the pixels. The area is written only if it
++ * begins behind the HFS volume at the partition's start, as that volume's header gives its
++ * size. tools/asus-shot-pull.py reads the slots from Android.
++ */
++#define ASUS_SHOT_SLOTS         64u
++#define ASUS_SHOT_BYTES_MAX     (360u * 816u * 2u)
++#define ASUS_SHOT_SLOT_BLOCKS   (1u + (ASUS_SHOT_BYTES_MAX + UFS_BLOCK - 1) / UFS_BLOCK)
++#define ASUS_SHOT_BLOCKS        (ASUS_SHOT_SLOTS * ASUS_SHOT_SLOT_BLOCKS)
++
++struct asus_shot_header {
++	char magic[8];
++	uint32_t version, width, height, bytes;
++	uint64_t seq, uptime_ns;
++};
++
++static uint8_t *asus_shot_buf;
++static struct asus_shot_header asus_shot_hdr;
++static uint32_t _Atomic asus_shot_state;       /* 0 free, 1 being filled, 2 to be written */
++static int asus_shot_chan;
++static uint64_t asus_shot_seq, asus_shot_area;
++static bool asus_shot_started, asus_shot_refused;
++
++bool asus_shot_submit(const void *pixels, uint32_t width, uint32_t height);
++
++/* Under sweet_ufs_lock: the area's first block, 0 when it must not be written. */
++static uint64_t
++asus_shot_base(void)
++{
++	const uint8_t *b = (const uint8_t *)(su.dma + DMA_BOUNCE);
++	uint64_t base, hfs_end;
++	uint32_t bsize, total;
++	uint16_t sig;
++
++	if (asus_shot_area != 0) {
++		return asus_shot_area;
++	}
++	if (!su.ready || !su.writable || su.nblocks < 2 * SWEET_LOG_BLOCKS + ASUS_FW_BLOCKS + ASUS_SHOT_BLOCKS ||
++	    ufs_read_blocks(su.first_block, 1) != 0) {
++		return 0;
++	}
++	sig = (uint16_t)((b[1024] << 8) | b[1025]);
++	bsize = ((uint32_t)b[1024 + 0x28] << 24) | ((uint32_t)b[1024 + 0x29] << 16) | ((uint32_t)b[1024 + 0x2a] << 8) | b[1024 + 0x2b];
++	total = ((uint32_t)b[1024 + 0x2c] << 24) | ((uint32_t)b[1024 + 0x2d] << 16) | ((uint32_t)b[1024 + 0x2e] << 8) | b[1024 + 0x2f];
++	base = su.first_block + su.nblocks - SWEET_LOG_BLOCKS - ASUS_FW_BLOCKS - ASUS_SHOT_BLOCKS;
++	hfs_end = su.first_block + (uint64_t)total * bsize / UFS_BLOCK;
++	if ((sig != 0x482b && sig != 0x4858) || bsize < UFS_BLOCK || bsize % UFS_BLOCK != 0 || hfs_end + 256 > base) {
++		printf("ASUS SHOT: refused: volume signature %#x, %u blocks of %u bytes end at 0x%llx, the area would begin at 0x%llx\n",
++		    sig, total, bsize, hfs_end, base);
++		asus_shot_refused = true;
++		return 0;
++	}
++	printf("ASUS SHOT: %u slots of %u blocks at 0x%llx (the HFS volume ends at 0x%llx)\n", ASUS_SHOT_SLOTS,
++	    ASUS_SHOT_SLOT_BLOCKS, base, hfs_end);
++	asus_shot_area = base;
++	return base;
++}
++
++static void
++asus_shot_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	void *bounce = (void *)(su.dma + DMA_BOUNCE);
++
++	for (;;) {
++		while (os_atomic_load(&asus_shot_state, acquire) != 2) {
++			(void)tsleep(&asus_shot_chan, PZERO, "asusshot", hz);
++		}
++		struct asus_shot_header h = asus_shot_hdr;
++		uint32_t blocks = (h.bytes + UFS_BLOCK - 1) / UFS_BLOCK;
++		int error;
++
++		lck_mtx_lock(&sweet_ufs_lock);
++		uint64_t base = asus_shot_base();
++		error = base == 0 ? EPERM : 0;
++		if (!error) {
++			bzero(bounce, (1 + blocks) * UFS_BLOCK);
++			memcpy(bounce, &h, sizeof(h));
++			memcpy((uint8_t *)bounce + UFS_BLOCK, asus_shot_buf, h.bytes);
++			error = ufs_write_blocks(base + (h.seq % ASUS_SHOT_SLOTS) * ASUS_SHOT_SLOT_BLOCKS, 1 + blocks);
++		}
++		if (!error) {
++			error = ufs_sync_cache();
++		}
++		lck_mtx_unlock(&sweet_ufs_lock);
++		if (error && !asus_shot_refused) {
++			printf("ASUS SHOT: shot %llu not written (%d)\n", h.seq, error);
++		}
++		os_atomic_store(&asus_shot_state, 0, release);
++	}
++}
++
++/* From the display's work loop: false when the last shot is still being written. */
++bool
++asus_shot_submit(const void *pixels, uint32_t width, uint32_t height)
++{
++	uint32_t bytes = width * height * 2;
++	uint64_t ns = 0;
++
++	if (bytes == 0 || bytes > ASUS_SHOT_BYTES_MAX || asus_shot_refused || !su.ready || !su.writable) {
++		return false;
++	}
++	if (asus_shot_buf == NULL && (asus_shot_buf = kalloc_data(ASUS_SHOT_BYTES_MAX, Z_WAITOK | Z_ZERO)) == NULL) {
++		return false;
++	}
++	if (!asus_shot_started) {
++		thread_t thread;
++		if (kernel_thread_start(asus_shot_thread, NULL, &thread) != KERN_SUCCESS) {
++			return false;
++		}
++		thread_deallocate(thread);
++		asus_shot_started = true;
++	}
++	if (!os_atomic_cmpxchg(&asus_shot_state, 0, 1, acquire)) {
++		return false;
++	}
++	memcpy(asus_shot_buf, pixels, bytes);
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	asus_shot_hdr = (struct asus_shot_header){
++		.magic = { 'A', 'S', 'U', 'S', 'S', 'H', 'O', 'T' },
++		.version = 1, .width = width, .height = height, .bytes = bytes,
++		.seq = asus_shot_seq++, .uptime_ns = ns,
++	};
++	os_atomic_store(&asus_shot_state, 2, release);
++	wakeup(&asus_shot_chan);
++	return true;
 +}
 +
 +/* Reset paths: what printf would only queue, straight into the ring; on a panic also

@@ -968,7 +968,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,542 @@
+@@ -0,0 +1,586 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -1077,6 +1077,11 @@
 +	IOLock       *fLock;            /* swaps and client list */
 +	OSArray      *fClients;
 +	uint32_t      fSwapID;
++	uint32_t      fShotSecs;        /* boot-arg asusshot: a screenshot every that many seconds */
++	uint16_t     *fShot;            /* a third-size copy of the panel, RGB565 */
++	uint8_t      *fShotRow;         /* one panel row, read in one go (the panel is Normal-NC) */
++
++	void takeShot(void);
 +
 +	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 +	void addClient(IOMobileFramebufferUserClient *client);
@@ -1085,6 +1090,11 @@
 +};
 +
 +OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
++
++/* ASUS: screenshots to the end of iosroot, for looking at the screen with nobody there */
++extern "C" bool asus_shot_submit(const void *pixels, uint32_t width, uint32_t height);   /* bsd/dev/sweet_ufs.c */
++#define ASUS_SHOT_W     360u
++#define ASUS_SHOT_H     816u
 +
 +class IOMobileFramebufferUserClient : public IOUserClient {
 +	OSDeclareDefaultStructors(IOMobileFramebufferUserClient);
@@ -1144,6 +1154,13 @@
 +		OSSafeReleaseNULL(fWorkLoop);
 +		return false;
 +	}
++	fShotSecs = 0;
++	PE_parse_boot_argn("asusshot", &fShotSecs, sizeof(fShotSecs));
++	if (fShotSecs != 0 && fWidth / 3 <= ASUS_SHOT_W && fHeight / 3 <= ASUS_SHOT_H) {
++		fShot = (uint16_t *)IOMalloc(ASUS_SHOT_W * ASUS_SHOT_H * 2);
++		fShotRow = (uint8_t *)IOMalloc(fRowBytes);
++		IOLog("ASUS SHOT: a %ux%u screenshot every %u s\n", fWidth / 3, fHeight / 3, fShotSecs);
++	}
 +	fVsync = IOTimerEventSource::timerEventSource(this, &AppleCLCD::vsyncFired);
 +	if (fVsync == NULL || fWorkLoop->addEventSource(fVsync) != kIOReturnSuccess) {
 +		IOLog("ASUS FB: no vsync timer\n");
@@ -1179,6 +1196,9 @@
 +		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
 +	}
 +	IOLockUnlock(fb->fLock);
++	if (fb->fShotSecs != 0 && count % (60ull * fb->fShotSecs) == 0) {
++		fb->takeShot();
++	}
 +	if (count % 300 == 0) {
 +		static uint32_t last;
 +		uint32_t frames = (uint32_t)asus_fb_frames;
@@ -1189,6 +1209,30 @@
 +		last = frames;
 +	}
 +	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
++}
++
++/* The panel as it is now, every third pixel of every third row, to bsd/dev/sweet_ufs.c. */
++void
++AppleCLCD::takeShot(void)
++{
++	static unsigned told;
++	const uint32_t w = fWidth / 3, h = fHeight / 3;
++
++	if (fShot == NULL || fShotRow == NULL) {
++		return;
++	}
++	for (uint32_t y = 0; y < h; y++) {
++		memcpy(fShotRow, (const void *)(fPixels + (uint64_t)(3 * y + 1) * fRowBytes), (size_t)fWidth * 4);
++		const uint32_t *row = (const uint32_t *)fShotRow;
++		for (uint32_t x = 0; x < w; x++) {
++			uint32_t p = row[3 * x + 1];            /* B, G, R, A in memory */
++			fShot[y * w + x] = (uint16_t)((((p >> 16) & 0xf8) << 8) | (((p >> 8) & 0xfc) << 3) | ((p & 0xff) >> 3));
++		}
++	}
++	bool ok = asus_shot_submit(fShot, w, h);
++	if (told++ < 3) {
++		IOLog("ASUS SHOT: %ux%u handed over: %s\n", w, h, ok ? "yes" : "no");
++	}
 +}
 +
 +void
