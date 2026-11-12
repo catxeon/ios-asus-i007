@@ -388,6 +388,21 @@ phone** (the picture with the GPU fill, the battery icon, later the keyboard).
   percent and MaxCapacity 100 (mAh under AppleRaw*). Commit 5f1492e does that (+
   NominalChargeCapacity 3350 = Android's charge_full, AppleRawMaxCapacity 3350). Kernel CI
   43263131635. To check with a screenshot (asusshot) of the status bar.
+- **iOS 0101's 42 screenshots (../phone-0101/shots, 51..916 s; the user was at the phone,
+  37 touches) SHOW, first time without asking anybody:**
+  - 73 s: the Apple logo. 136 s: the lock screen, "Thursday, November 12", "8:43" (Pacific
+    = the user's time minus 11 h: the clock is right), flashlight and camera buttons, home
+    bar; battery icon with "1" in it (confirms the user). The picture with the GPU fill
+    looks right: no garbage, no missing parts, colours right.
+  - 241 s: Settings > General sliding in; its list says "**iPod touch** Storage" (the
+    device presents as an iPod touch somewhere: MobileGestalt's DeviceClass? not looked
+    into).
+  - 262 s: the home screen: labels "Photos", "App Store", "Settings" but **NO APP ICONS**
+    (blank), two widgets "Waiting...", empty dock, "Search". 642-726 s (autoswipe): the
+    App Library, its folders empty too. NEW PROBLEM, not looked into (iconservicesagent /
+    icon rendering?).
+  - Screenshot timing: the first at 51 s, then every ~21 s (asusshot=20 counts vsyncs of a
+    60 Hz timer).
 
 **NOW WORKED ON (2026-11-12, after the battery; the user is away from the phone): the
 frame cost.** iOS image 0096 (battery, charging flag fixed) is kept for a boot with the user
