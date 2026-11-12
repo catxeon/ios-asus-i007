@@ -84,6 +84,7 @@ void RedwoodGPUStop(void);
 ''', '''void RedwoodGPUStart(void);
 void RedwoodGPUStop(void);
 void redwood_gpu_state(const char * why);       /* ASUS: AsusPhoneInput.cpp */
+extern uint64_t gAsusFenceAbs, gAsusSyncAbs;    /* ASUS: SweetFramebuffer.cpp (where a swap's time goes) */
 }
 
 /* ASUS: no pass-through mode, so its memory pool is not there (the branches that use it are dead). */
@@ -118,17 +119,21 @@ gpu = once(gpu, '''	if (fence != 0 && gGPULock != NULL) {
 	}
 	return done;
 }
-''', '''	if (fence != 0 && gGPULock != NULL) {
+''', '''	uint64_t fenceBegan = mach_absolute_time();     /* ASUS: where a swap's time goes (SweetFramebuffer.cpp prints it) */
+	if (fence != 0 && gGPULock != NULL) {
 		IOLockLock(gGPULock);
 		done = !redwood_gpu_ready() || gpuWait(fence, milliseconds);
 		IOLockUnlock(gGPULock);
 	}
 	/* ASUS: the GPU wrote it behind this processor's caches: what they still hold of it is old */
+	gAsusFenceAbs += mach_absolute_time() - fenceBegan;
 	if (fence != 0 && done && surface->kernelAddress() != 0) {
 		static uint32_t shown;
 		uint8_t * pixels = (uint8_t *) surface->kernelAddress();
+		uint64_t syncBegan = mach_absolute_time();
 
 		redwood_gpu_to_memory(pixels, surface->allocSize);
+		gAsusSyncAbs += mach_absolute_time() - syncBegan;
 		if (shown++ % 300 == 0 && shown < 6000 && surface->bytesPerRow != 0 && surface->height != 0) {
 			uint32_t middle = *(volatile uint32_t *) (pixels + surface->offset + (uint64_t) surface->bytesPerRow *
 			    (surface->height / 2) + 4ull * (surface->width / 2));
@@ -239,6 +244,14 @@ f1 = once(f0, '''#include "SweetSurface.h"
 
 #if defined(SWEET)
 bool topaz_surface_drawn(SweetSurface *surface, uint64_t milliseconds);   /* RedwoodGPU.cpp */
+/*
+ * ASUS: where a swap's time goes, in mach_absolute_time units, since the last "ASUS FPS" line:
+ * waiting for the GPU's fence and reading its memory back (RedwoodGPU.cpp), and this file's
+ * copy of the surface to the panel.
+ */
+extern "C" uint64_t gAsusFenceAbs, gAsusSyncAbs;
+uint64_t gAsusFenceAbs, gAsusSyncAbs;
+static uint64_t gAsusCopyAbs;
 #endif
 ''')
 f1 = once(f1, '''		if (s == NULL || s == fSurface) {
@@ -252,6 +265,35 @@ f1 = once(f1, '''		if (s == NULL || s == fSurface) {
 		}
 		(void)topaz_surface_drawn(s, 100);      /* the GPU is done drawing it (or 100 ms have passed) */
 		uintptr_t src = s->kernelAddress();
+''')
+f1 = once(f1, '''		if (src != 0 && bpe == 4 && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
+			for (int32_t y = 0; y < h; y++) {
+''', '''		if (src != 0 && bpe == 4 && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
+			uint64_t copyBegan = mach_absolute_time();
+			for (int32_t y = 0; y < h; y++) {
+''')
+f1 = once(f1, '''			__asm__ volatile("dsb oshst" ::: "memory");
+		}
+		s->release();
+''', '''			__asm__ volatile("dsb oshst" ::: "memory");
+			gAsusCopyAbs += mach_absolute_time() - copyBegan;
+		}
+		s->release();
+''')
+f1 = once(f1, '''			IOLog("ASUS FPS: %u frames in 5 s (%u.%u fps)\\n", frames - last, (frames - last) / 5,
+			    ((frames - last) * 2) % 10);
+''', '''			IOLog("ASUS FPS: %u frames in 5 s (%u.%u fps)\\n", frames - last, (frames - last) / 5,
+			    ((frames - last) * 2) % 10);
+			{
+				uint64_t fence = 0, sync = 0, copy = 0, n = frames - last;
+
+				absolutetime_to_nanoseconds(gAsusFenceAbs, &fence);
+				absolutetime_to_nanoseconds(gAsusSyncAbs, &sync);
+				absolutetime_to_nanoseconds(gAsusCopyAbs, &copy);
+				gAsusFenceAbs = gAsusSyncAbs = gAsusCopyAbs = 0;
+				IOLog("ASUS FB: a swap took %llu us waiting for the GPU, %llu us reading its memory back, %llu us "
+				    "copying to the panel\\n", fence / 1000 / n, sync / 1000 / n, copy / 1000 / n);
+			}
 ''')
 f1 = once(f1, '''	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
 	registerService();
