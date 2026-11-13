@@ -705,6 +705,15 @@ minutes from power-on to the lock screen.**
   - Test plan: script w90/p/w12/p/k0/m1500/p/u/w3/p/w75/p: lock screen, black after ~10 s,
     power key -> lock screen back, unlock, home screen still live after 75 s; log lines
     `display power 0/1`.
+  - **iOS 0119 (kernel 43393525369): PANEL BLANKING WORKS** (11:43:45, Android back after
+    396 s, root clean; ../phone-0119, sheet-0119.png). Log: `display power 1` at start,
+    `display power 0: panel black ...` (lock screen timeout), 1/0 once more during boot, then
+    the script's k0 -> `SWEET HID: key 0x30 down` -> `display power 1`; unlock; no further
+    power 0 (Auto-Lock Never). Shots: 123 s and 135 s black; 136.8 s (1.5 s after k0) the lock
+    screen "100% Charged 10:46" (Vilnius time); 140 s home screen 10:46; 215 s home screen
+    10:47, live. Shot slots cleared per boot: exactly this boot's 5 shots pulled.
+  - Usage now: the screen goes dark like a phone's; a short press of the power key wakes it,
+    swipe up unlocks; once unlocked it stays on (Auto-Lock Never).
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
