@@ -519,6 +519,43 @@ minutes from power-on to the lock screen.**
     (fits in place: tools/hfs-replace-inplace.py --phone --expect-old-sha256 ec0e8065, the
     sha256 of the jobs-v1 file); then Settings can set any zone; (b) rewrite the localtime
     symlink in place to the user's zone directly.
+
+**NOW WORKED ON (2026-11-13 ~09:10, user: "давай после этого прогона расширим раздел ios с 12
+гб, и добавим все необходимые службы для работы ios, чтобы не гадать каждый раз какая нужна в
+данный момент"): grow the root volume, then the stock job set.**
+- The 0113 cycle was cut off when the agent session ended (boot sent 08:57:41, reset due
+  ~09:23); a resume script (scratchpad after0113.sh) waits for Android, pulls 0113's log and
+  shots into ../phone-0113, then a read-only 12 GiB backup ~/asus-roots/iosroot-2026-11-13-pregrow.img
+  (+ .hash, .sha256, fsck -n).
+- **Sizes:** iosroot (sda24) = 67108824 sectors = 8388603 blocks of 4 KiB = 32 GiB; the HFS+
+  volume = 3145728 blocks = 12 GiB (written so in 2026-11-05). The tail is ours: screenshot
+  slots 8378234..8387513, firmware 8387514..8387577, console log 8387578..8388602;
+  asus_shot_base() refuses shots unless volume end + 256 blocks <= 8378234. So the volume can
+  grow to **8377856 blocks (32726 MiB)** without a GPT change; more needs shrinking Android's
+  /data again (f2fs resize + GPT, as done 2026-11-0x).
+- **How:** commit 054a30f, kernel CI 43377007824: boot-arg `asushfsgrow=N` (ufs patch): a
+  thread waits for a read-write root (vfs_rootvnode), checks hfs, N against the reserved tail
+  (same limit as the shots), skips if the volume already has N blocks, then
+  VNOP_IOCTL(HFSIOC_RESIZE_VOLUME) = HFS's own hfs_extendfs (journaled: bitmap file grown,
+  volume header + alternate header moved), logs `ASUS HFSGROW: ...` and HFS's
+  `hfs_extendfs: will extend ... by N blocks`. Checked in hfs-627.100.6: HFSIOC_RESIZE_VOLUME
+  = _IOW('h', 2, u_int64_t); hfs_extendfs needs a journal (ours is journaled), the device's
+  DKIOCGETBLOCKCOUNT (sweet_ufs: the whole partition) >= new size, size % 4096 == 0.
+  - Seen in the source, not new: HFS also writes a copy of the volume header to the last
+    1024 bytes of the PARTITION (hfs_partition_avh_sector) on alternate-header flushes, i.e.
+    into the last block of our console log ring. Harmless so far; log only.
+- **Jobs:** tools/make-root-jobs.py (WSL): every stock job (20H392 launchd.plist,
+  ~/zc/launchd-20H392.plist) the root lacks, feature-flag branches resolved with the build's
+  FeatureFlags (9 flags; missing = off), _PanicOnCrash / EnablePressuredExit dropped, the
+  root's own 13 jobs untouched (backboardd sits under key dev.asus.launchd-probe as mobile,
+  so the stock backboardd key is skipped by Label), 19 left out with reasons (watchdogd,
+  ClarityBoard, CheckerBoard, store demo, obliteration, restoreserviced, nfrestore,
+  SepUpdateTimer, fdrhelper, iomfb_*, NAND/ASP, cryptexd, preboardservice). Dry run on the
+  2026-11-12 image: 13 -> 513 jobs, 91 start at boot, launchd.plist 500402 -> 787468 bytes
+  (193 blocks > its 123: needs allocation, so the offline route: pull, edit, blockdiff).
+- Order: (1) backup pull, (2) grow boot (user's OK) + check, (3) full 32 GiB pull = fsck -n
+  of the grown volume + the base for make-root-jobs.py, (4) jobs patch (user's OK), boot,
+  read which daemons crash-loop, add them to EXCLUDE.
   - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
     syncGrabRegistryWithReadBlock:]` (NanoRegistry, no nanoregistryd) and thread 3 on a lock
     behind it; not on the main thread.
