@@ -453,6 +453,46 @@ minutes from power-on to the lock screen.**
   alone), shift (51,1980), "Cancel" (972,213); `asussample=kbd,Preferences,Spotlight
   asussampleevery=10` (samples 90..260 s): where kbd and Settings' main thread stand after
   a key tap.
+- **iOS 0111 result** (01:31:09, Android back after 338 s, root clean; shots
+  ../phone-0111/sheet-0111.png, samples symbolized in ../phone-0111/smp.txt with
+  `python3 tools/asus-sample-symbols.py ~/dsc/dyld_shared_cache_arm64 ../phone-0111/log.txt`):
+  the keyboard comes up, then **nothing reacts: not "h", not "123", not shift, not even
+  Settings' own "Cancel"**. So the app's main thread is busy, not the keyboard broken.
+  - Observed: Settings calls AKS sel 17 (MKBGetDeviceLockState) ~1000 times a second from
+    the moment the keyboard shows (99000 calls by the end). Main-thread samples: a block of
+    AssistantServices -> `-[UIDictationConnection dictationConnnectionDidChangeAvailability:]`
+    -> `-[UIDictationController postUIKeyboardDictationAvailabilityDidChangeNotification]`
+    -> NSNotification -> `-[UISystemKeyboardDockController updateDockItemsVisibility]` ->
+    `+[UIDictationController dictationIsFunctional]` -> deviceStateIsLocked -> AKS; other
+    samples in `+[UIDictationConnection dictationRestricted]` (ManagedConfiguration reads a
+    file each time). Spotlight (0109/0110) spins in the same loop from
+    `-[SPUISearchHeader enableDictationIfRequired]`. kbd idles in its run loop all along.
+  - **Cause, read from the code (AssistantServices of 20H392, the dyld cache):**
+    `-[AFDictationConnection forcedOfflineDictationIsAvailableForLanguage:synchronous:]`
+    (+0x37a4) caches `[[AFPreferences offlineDictationStatus] keysOfEntriesPassingTest:]` in
+    ivar +0x18; while that ivar is nil it fills it AND dispatches
+    `-[AFDictationConnection _availabilityChanged]` (block +0x800ec) = "dictation
+    availability changed" to the delegate (UIKit). offlineDictationStatus =
+    CFPreferencesCopyAppValue("Offline Dictation Status", "com.apple.assistant.support"),
+    which assistantd writes; we have no assistantd and no such preference, so the set is
+    nil every time -> every availability check (dictationIsAvailableForLanguage:synchronous:
+    +0x2264 calls it) posts another change -> UIKit checks again -> forever.
+    (AFNetworkAvailability also re-notifies on every addObserver: while its
+    notify_register_dispatch of nwi_state_get_notify_key() failed (token -1): not the loop
+    seen here, noted only.)
+  - Fix: the preference as an empty dictionary (keysOfEntriesPassingTest: then gives an
+    empty set, not nil). CFPreferencesCopyAppValue searches the global domain too, so it can
+    go into the same .GlobalPreferences.plist (no new file): patch
+    **../asus-rootfix-dictation-v1** (tools/hfs-replace-inplace.py --phone
+    --expect-old-sha256 08aca86d; 190 -> 222 bytes, sha256 9fd7ff75...; block 2883219 +
+    catalog node 18500 at 69353-69354; 3 blocks), read-only check passed 2026-11-13 04:10,
+    backup kept. **NOT written: needs the user's OK.** Undo: `--restore`.
+  - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
+    syncGrabRegistryWithReadBlock:]` (NanoRegistry, no nanoregistryd) and thread 3 on a lock
+    behind it; not on the main thread.
+  - Tools made for this (scratchpad, not in git): dis.py (capstone disassembly of a cache
+    library + offset, objc stubs named by selector), callers.py (bl/b to a selector's stub),
+    refs.py (adrp+add to an address), stubs.py/names.py.
 - tools/asus-shot-pull.py --count N: only seq 0..N-1 (a boot with fewer shots than the last
   one leaves that one's later slots behind).
 - To fix: the shot puller mixes slots of an earlier boot when the new boot took fewer shots
