@@ -589,6 +589,26 @@ minutes from power-on to the lock screen.**
 - **iOS 0114** (09:4x, kernel 43377007824 sha256 checked, `asushfsgrow=8377856`,
   ASUS_REBOOT=300, no script): the grow. Read: `ASUS HFSGROW:` and `hfs_extendfs:` lines,
   the root header after (8377856 blocks?), `ASUS SHOT:` still accepted.
+- **0114 RESULT: THE ROOT IS 32 GiB NOW** (09:42:21, Android back after 336 s). Log: `ASUS
+  HFSGROW: growing the root volume from 3145728 to 8377856 blocks of 4 KiB (34315698176
+  bytes)`, `hfs_extendfs: will extend "ASUSRamRoot" by 5232128 blocks`, `hfs_extendfs:
+  extended "ASUSRamRoot" to 8377856 blocks (was 3145728 blocks)`, `ASUS HFSGROW: resize
+  returned 0 after 31 ms; ... 5442418 free`, LowDisk/NearLowDisk cleared, clean unmount.
+  Root header after: clean, journaled, 5442657 of 8377856 blocks free (~20.8 GB; was
+  210450 = 0.8 GB). (No shots in this boot; the shot area check uses the same limit.)
+  - Sparse pull (tools/asus-iosroot-sparsepull.py, 30 s, 46655 blocks; 183 MB on disk for
+    the 32 GiB image ~/asus-roots/iosroot-grown.img): **fsck -n: only "Volume header needs
+    minor repair"** (as always): the grown volume is consistent. Hash ~/asus-roots/
+    iosroot-grown.hash (1 min).
+- **Jobs patch ../asus-rootfix-jobs-full-v1** (tools/make-root-jobs.py on that image): 13 ->
+  513 jobs, 19 left out, launchd.plist 500402 -> 787468 bytes (sha256 8035a72c...), placed
+  at 10429..10621 (the run sparsepull predicted, pulled); fsck -n after: only the usual
+  line. 201 blocks: 0-1 (header, bitmap), 10429..10621 (file), catalog 69181, 69399-69400,
+  69409-69410, 8377855 (alternate header). Read-only check passed (all 201 match old.hash),
+  backup kept. **NOT written: needs the user's OK.** Undo: `--restore`.
+  - Next: write, boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
+    launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
+    --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
   - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
     syncGrabRegistryWithReadBlock:]` (NanoRegistry, no nanoregistryd) and thread 3 on a lock
     behind it; not on the main thread.
