@@ -59,6 +59,9 @@ EXCLUDE = {
     'com.apple.preboardservice_v2': 'the same',
     'com.apple.locationd': 'crash loop (107 in 10 min, image 0115): qmi::Client::create for the baseband, libxpc trap',
     'com.apple.WirelessRadioManager': 'crash loop (image 0115), the same baseband QMI trap',
+    'com.apple.bluetoothd': 'respawned every ~10 s (29x in 5 min, image 0122): no Bluetooth hardware here',
+    'com.apple.fairplayd.H2': 'respawned every ~10 s (29x in 5 min, image 0122): no FairPlay/SEP',
+    'com.apple.nanotimekitcompaniond': 'respawned every ~10 s (28x in 5 min, image 0122): Apple Watch faces',
 }
 
 DROP = ('_PanicOnCrash', 'EnablePressuredExit', 'EnablePressureExit')

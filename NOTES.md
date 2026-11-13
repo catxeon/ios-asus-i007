@@ -763,6 +763,40 @@ minutes from power-on to the lock screen.**
     screen with **Photos, App Store, Settings and the dock's Phone, Safari, Messages icons**;
     the second k0 locked it again (black). Still: the two widgets "Waiting...", a red "!"
     badge on Messages.
+  - 0122's spawn list ("Allowing spawn of iOS binary X", 586 lines; the "ASUS TRUST" list is
+    incomplete): ~200 daemons ran; respawn loops every ~10 s: bluetoothd 29x, fairplayd.H2
+    29x, nanotimekitcompaniond 28x (no CRASH lines: they exit). chronod and pkd ran, but NO
+    widget extension process was ever spawned.
+- **Why the widgets wait and most apps are missing: the deletable system apps were never
+  installed.** The home screen has only Photos, App Store, Settings + dock (non-deletable
+  ones). Calendar, Weather, Mail, Notes, Maps, Home, Fitness, Books, ... are only
+  /System/Library/AppPlaceholders/X.app (+ placeholder .appex for their widgets); the real
+  apps are in **/private/var/staged_system_apps** (MobileCal.app, MobileMail.app,
+  MobileNotes.app, Weather.app, ...; 3840 files, 511 MB) and
+  /private/var/containers/Bundle is EMPTY. They are installed by the DataMigration plugin
+  /System/Library/DataClassMigrators/SystemAppMigrator.migrator (MISystemAppMigrator,
+  DMUserAgnostic; through InstallCoordination/installd; checks each app against the trust
+  cache; installd waits for it: waitForSystemAppMigratorToComplete). It runs only during a
+  data migration, which this root has had switched off since 2026-10 (endless migrations
+  then: no IOPlatformUUID, so its ByHost prefs never stuck; fixed since by the synthetic
+  ECID/chip-id). Now /private/var/mobile/Library/Preferences/com.apple.migration.plist =
+  {DMUserDataDisposition: {SyntheticDidUpgrade: false, buildVersion: 20H392},
+  LastSystemVersion: 20H392} (bplist, 145 bytes), no ByHost copy, no com.apple.DataMigration.plist;
+  /private/var/datamigrator exists (the sentinel `migrate` would go there).
+  - (Unified logs exist now that logd runs: /private/var/db/diagnostics Persist/Special
+    *.tracev3, 39 MB, and /private/var/db/uuidtext 358 files 127 MB; no parser on this PC:
+    no Rust, no pip/lz4.) The downloaded OS image (~/ipsw, 4.7 GB) is deleted as promised;
+    /mnt/os16 had been gone since the WSL restart; FeatureFlags/launchd sources are in the
+    root and ~/zc.
+  - Prepared, read-only checks passed, NOT written (user's OK):
+    ../asus-rootfix-migration-v1: LastSystemVersion 20H392 -> 20H391 (153 bytes, sha256
+    109ec3e3..., catalog node 18615): datamigrator sees "System build version changed" and
+    runs every migrator once, SystemAppMigrator among them. Risks: the migration UI (logo +
+    bar) for an unknown time; some migrators may wait on missing hardware; Setup may come
+    back. Undo: --restore (then the migration is off again).
+    ../asus-rootfix-jobs-full-v3: EXCLUDE += bluetoothd, fairplayd.H2,
+    nanotimekitcompaniond: 511 -> 508 jobs, 87 at boot, launchd.plist 786115 -> 783885
+    bytes (sha256 d450ed4e...), in place, 194 blocks.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
