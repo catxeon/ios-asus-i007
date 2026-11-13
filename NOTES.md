@@ -686,6 +686,25 @@ minutes from power-on to the lock screen.**
   - Open: SweetFramebuffer should blank the panel when iOS turns the display off and come
     back on wake (now it shows the last frame, which looks like a hang); blank icons;
     widgets.
+- **Panel blanking (user: "Да, делай", 2026-11-13 ~11:20).** How iOS turns the display off
+  here, read from IOMobileFramebuffer.framework (scratchpad iomfb_table.py: public function
+  -> the object's function-pointer slot -> the implementation stored there at creation ->
+  the selector it passes to IOConnectCall*): **IOMobileFramebufferRequestPowerChange = slot
+  0x7a8 -> +0x64f0 -> selector 12** (one scalar). backboardd calls selector 12 once at start
+  (`ASUS FB: backboardd sel 12 in 1/0`); the off call is the same selector with 0, which the
+  log never showed (selectors < 64 are logged once). Others from the same table:
+  SetBrightnessCorrection 50, SetDisplayDevice 22, EnableDisableVideoPowerSavings 33,
+  Enable/Disable{VSync,Power,HotPlug,CRC}Notifications 72, CopyLayerDisplayedSurface 83,
+  GetDisplayArea 29, SetMatrix 55, SPLCSet/GetBrightness 66/67, SwapCancel 52, SwapCancelAll
+  81, SwapSetColorMatrix 69. (The display patch had 3/4/5/6/7/8/18/28/72 only.)
+  - Commit 2af11d8, kernel CI 43393525369: selector 12 logged on every call (`ASUS FB:
+    backboardd display power N`); 0 -> the panel memory filled black (OLED dark), swaps
+    ignored while off; non-zero after off -> the last swap record shown again at once.
+    (Barrier `dsb sy`, not a second `dsb oshst`: tools/make-asus-gpu-patch.py wants that
+    string exactly once.) zgpu regenerated.
+  - Test plan: script w90/p/w12/p/k0/m1500/p/u/w3/p/w75/p: lock screen, black after ~10 s,
+    power key -> lock screen back, unlock, home screen still live after 75 s; log lines
+    `display power 0/1`.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
