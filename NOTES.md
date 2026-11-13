@@ -754,6 +754,15 @@ minutes from power-on to the lock screen.**
   - Scripts that wake the display: a k0 on a lit display locks it. iOS 0122 uses
     w90/p/k0/m1500/p/u/w4/p/k0/m1500/p/u/w4/p/w20/p: one of the two rounds lands on the
     home screen whichever state it starts from.
+  - **iOS 0122 (kernel 43420997431): THE ICONS ARE THERE** (15:10:29, Android back after
+    336 s, root clean; ../phone-0122, sheet-0122.png). All client-memory creates succeed and
+    nothing is retried (9 in the boot, was ~1030): six 180x180 icon surfaces on read-only
+    pages at page offsets 0/2816/5632/8448/11264/14080 (720-byte rows packed back to back in
+    one mapping), 23x23, 28x28, 256x1. Shots: 123 s black (display off), k0 -> lock screen
+    "100% Charged 2:12" with the flashlight/camera buttons now on their discs, unlock -> home
+    screen with **Photos, App Store, Settings and the dock's Phone, Safari, Messages icons**;
+    the second k0 locked it again (black). Still: the two widgets "Waiting...", a red "!"
+    badge on Messages.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
