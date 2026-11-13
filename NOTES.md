@@ -714,6 +714,29 @@ minutes from power-on to the lock screen.**
     10:47, live. Shot slots cleared per boot: exactly this boot's 5 shots pulled.
   - Usage now: the screen goes dark like a phone's; a short press of the power key wakes it,
     swipe up unlocks; once unlocked it stays on (Auto-Lock Never).
+- **Blank icons / "Waiting..." widgets (user: "Да, делай", 2026-11-13 ~13:10).**
+  - iOS 0120 (kernel 43393525369, sweetnull += iconservicesagent,chronod, sampler on
+    iconservicesagent,SpringBoard,chronod): no stderr from either daemon; SpringBoard and
+    chronod idle in their run loops (the sampler did not match "iconservicesagent": 17
+    characters, process names are cut to 16).
+  - **The icons ARE rendered**: the cache /private/var/containers/Shared/SystemGroup/
+    systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache/ has 47
+    *.isdata (129632 bytes = a 32-byte header + 180x180 RGBA, 30308 = 87x87, 57632 = 120x120)
+    + store.index; four pulled (sparse pull --file) show Mail, Messages, Phone, App Store
+    correctly (scratchpad icons.png). So the loss is between the cache and the screen.
+  - backboardd's GL layer textures 19 surfaces '' (pixel format 0) 180 x 180 ("IOSurface
+    shown, internal format GL_RGBA"), so the icon surfaces reach it, but their memory is
+    empty. SweetSurface create() always gave a surface fresh zeroed memory and ignored
+    IOSurfaceAddress (a surface on memory the creator already has, e.g. the mapped .isdata);
+    the zgpu generator even mentions topaz's "client-memory surfaces". IconServices draws with
+    a CIContext "IconServices-Compositor" (kCIContextName, CacheIntermediates,
+    IntermediateMemoryTarget, high_quality_downsample; no software renderer key): not the
+    problem, the cache is fine.
+  - Commit ea70666, kernel CI 43417941662: create() honours IOSurfaceAddress (page-aligned):
+    IOMemoryDescriptor::withAddressRange on the creator's task, prepared InOut, or Out and
+    mapped read-only when the pages are read-only; complete() in free(). Create log: all
+    failures, all client-memory surfaces, the first 256 others, only 4 of backboardd's
+    1125x2436, plus the keys beyond the usual set. iOS 0121 boots it (wake, unlock, shots).
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
