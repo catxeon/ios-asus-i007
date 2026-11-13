@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,1217 @@
+@@ -0,0 +1,1294 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -89,6 +89,10 @@
 +#include <pexpert/device_tree.h>
 +#include <libkern/libkern.h>
 +#include <machine/atomic.h>
++#include <sys/mount.h>
++#include <sys/vnode.h>
++#include <sys/vnode_if.h>
++#include <sys/ioccom.h>
 +
 +extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 +/* osfmk/arm/machine_routines.h, not exported to the BSD layer */
@@ -1225,6 +1229,78 @@
 +	asus_psci_reset();
 +}
 +
++/*
++ * asushfsgrow=N: grow the root HFS+ volume to N blocks of 4 KiB, live, with HFS's own
++ * resize (HFSIOC_RESIZE_VOLUME -> hfs_extendfs: the allocation bitmap, the volume header
++ * and the alternate header all go through the journal, as macOS's diskutil resizeVolume
++ * does it). The volume was written as 12 GiB into the 32 GiB iosroot partition. N is
++ * checked against the reserved tail (screenshots, firmware, console log) with the same
++ * 1 MiB gap asus_shot_base() wants; a volume already that big is left alone, so the
++ * boot-arg is harmless after the first time.
++ */
++#define ASUS_HFSIOC_RESIZE_VOLUME       _IOW('h', 2, u_int64_t)  /* hfs_fsctl.h HFSIOC_RESIZE_VOLUME */
++
++static void
++asus_hfs_grow_thread(void *arg, __unused wait_result_t wr)
++{
++	uint64_t want = (uint32_t)(uintptr_t)arg;
++	uint64_t limit = su.nblocks - SWEET_LOG_BLOCKS - ASUS_FW_BLOCKS - ASUS_SHOT_BLOCKS - 256;
++	unsigned waited = 0;
++	int chan, error;
++	vnode_t vp;
++	mount_t mp;
++
++	/* the root file system, once bsd_init has mounted it read-write (up to 10 min) */
++	for (;;) {
++		vp = vfs_rootvnode();           /* with an iocount, or NULLVP */
++		if (vp != NULLVP) {
++			mp = vnode_mount(vp);
++			if (mp != NULL && !vfs_isrdonly(mp)) {
++				break;
++			}
++			vnode_put(vp);
++		}
++		if (++waited > 600) {
++			printf("ASUS HFSGROW: no read-write root after 600 s: not grown\n");
++			return;
++		}
++		(void)tsleep(&chan, PZERO, "asushfsgrow", hz);
++	}
++	struct vfsstatfs *sf = vfs_statfs(mp);
++	uint64_t have = sf->f_blocks * sf->f_bsize / UFS_BLOCK;
++	if (strncmp(sf->f_fstypename, "hfs", MFSNAMELEN) != 0) {
++		printf("ASUS HFSGROW: the root is %s, not hfs: not grown\n", sf->f_fstypename);
++	} else if (want > limit) {
++		printf("ASUS HFSGROW: %llu blocks would reach the reserved tail (at most %llu): not grown\n", want, limit);
++	} else if (want <= have) {
++		printf("ASUS HFSGROW: the root already has %llu blocks (asked %llu): nothing to do\n", have, want);
++	} else {
++		uint64_t newsize = want * UFS_BLOCK;
++		uint64_t t0 = mach_absolute_time(), ns = 0;
++		printf("ASUS HFSGROW: growing the root volume from %llu to %llu blocks of 4 KiB (%llu bytes)\n", have, want,
++		    newsize);
++		error = VNOP_IOCTL(vp, ASUS_HFSIOC_RESIZE_VOLUME, (caddr_t)&newsize, 0, vfs_context_kernel());
++		absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
++		(void)vfs_update_vfsstat(mp, vfs_context_kernel(), VFS_KERNEL_EVENT);
++		printf("ASUS HFSGROW: resize returned %d after %llu ms; the volume has %llu blocks of %u bytes, %llu free\n",
++		    error, ns / 1000000, sf->f_blocks, (uint32_t)sf->f_bsize, sf->f_bfree);
++	}
++	vnode_put(vp);
++}
++
++static void
++asus_hfs_grow_start(void)
++{
++	uint32_t want = 0;
++	thread_t thread;
++
++	if (PE_parse_boot_argn("asushfsgrow", &want, sizeof(want)) && want) {
++		if (kernel_thread_start(asus_hfs_grow_thread, (void *)(uintptr_t)want, &thread) == KERN_SUCCESS) {
++			thread_deallocate(thread);
++		}
++	}
++}
++
 +extern int (*PE_halt_restart)(unsigned int type);
 +
 +static void
@@ -1234,6 +1310,7 @@
 +	thread_t thread;
 +
 +	PE_halt_restart = asus_halt_restart;
++	asus_hfs_grow_start();
 +	if (PE_parse_boot_argn("asusreboot", &secs, sizeof(secs)) && secs) {
 +		if (kernel_thread_start(asus_reboot_thread, (void *)(uintptr_t)secs, &thread) == KERN_SUCCESS) {
 +			thread_deallocate(thread);

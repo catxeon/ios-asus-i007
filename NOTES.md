@@ -502,6 +502,23 @@ minutes from power-on to the lock screen.**
   - Seen, not looked into: Settings' search lists no results for "Hi"; the keyboard is laid
     out for 375 pt (Q/P cut at the edges); the clock shows 9:45 at 08:45 local = UTC-8, the
     time zone is still Pacific (the user can now set it: General -> Date & Time).
+- iOS 0113 (user: "Да, запускай"; 08:5x, ASUS_REBOOT=1500, asusshot=30, no script): a
+  25-minute session for the user to set the time zone by hand.
+- **Found meanwhile (code, not yet seen on the phone): choosing a city can NOT stick.**
+  `-[PSGDateTimeController setTimeZoneValue:specifier:]` (GeneralSettingsUI +0x1bf98)
+  writes com.apple.preferences.datetime "timezone"/"timezoneset", then
+  `+[PSTimeZoneController setTimeZone:]` (Preferences.framework +0x634b8) calls libutil's
+  `tzlink()` = XPC to com.apple.tzlink = **tzlinkd, which is not in the root's 13 jobs**
+  (on failure it logs "Failed to set the timezone to %@"). timed (CoreTime,
+  com.apple.timed.xpc, "Set Automatically") is missing too; not needed for a manual zone,
+  and left out on purpose (it might set the clock from its own sources).
+  - Root: /usr/libexec/tzlinkd is there (54304 bytes); /private/var/db/timezone/localtime is
+    a 36-byte symlink (= /var/db/timezone/zoneinfo/US/Pacific), zoneinfo a 27-byte one.
+  - Two ways, both root writes (user's OK): (a) the stock com.apple.tzlinkd job added to
+    launchd.plist: ~/zc/jobs-v1/launchd-v2.plist, 500402 -> 500611 bytes, still 123 blocks
+    (fits in place: tools/hfs-replace-inplace.py --phone --expect-old-sha256 ec0e8065, the
+    sha256 of the jobs-v1 file); then Settings can set any zone; (b) rewrite the localtime
+    symlink in place to the user's zone directly.
   - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
     syncGrabRegistryWithReadBlock:]` (NanoRegistry, no nanoregistryd) and thread 3 on a lock
     behind it; not on the main thread.
