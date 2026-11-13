@@ -669,7 +669,23 @@ minutes from power-on to the lock screen.**
   - Kernel change (not yet built): touch scripts get `kN` = press button N for 0.15 s
     (0 power, 1 vol up, 2 vol down, 3 home), so a script can wake the display; the shot
     thread clears all 64 slot headers before a boot's first shot (no more leftovers of
-    earlier boots in tools/asus-shot-pull.py). zgpu patch regenerated.
+    earlier boots in tools/asus-shot-pull.py). zgpu patch regenerated. Commit b733a82, kernel
+    CI 43387928469 (building).
+  - iOS 0118 (user: "Да, запускай"; 10:4x, kernel 43377007824, ASUS_REBOOT=1500, asusshot=30,
+    no script): the user's session: power key to wake, unlock, Date & Time -> Vilnius.
+  - **0118 RESULT: WAKE, TIME ZONE AND A LIVE SCREEN ALL WORK** (10:50:25, Android back
+    after 1538 s, no panic, root clean; ../phone-0118, sheet-0118a/b/c.png). Lock screen
+    "11:51" (Pacific) frozen until the user's power key: log `SWEET HID: key 0x30 down/up (1
+    clients)` (Consumer Power reaches backboardd), unlock, Date & Time shows **Time Zone
+    Vilnius, Nov 13, 2026 9:5x** and `tzlinkd` was spawned: the zone changed (no "Failed to
+    set the timezone" this time). Then the home screen stayed live for 20 min untouched,
+    clock 9:54 ... 10:15 every minute: **Auto-Lock Never holds**. Crashes: PosterBoard 1x,
+    configd at shutdown. Still seen: blank app icons, widgets "Waiting...", a red "!" badge
+    on the dock.
+  - Kernel CI 43387928469 (b733a82: script step kN, shot slots cleared per boot) succeeded.
+  - Open: SweetFramebuffer should blank the panel when iOS turns the display off and come
+    back on wake (now it shows the last frame, which looks like a hang); blank icons;
+    widgets.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
