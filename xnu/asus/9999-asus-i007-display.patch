@@ -69,7 +69,7 @@
 +#endif /* _SWEET_SURFACE_H */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -0,0 +1,968 @@
+@@ -0,0 +1,990 @@
 +/*
 + * Built-in IOSurface for SWEET.
 + *
@@ -768,16 +768,29 @@
 +	 * had these "client-memory" surfaces). The creator's pages are wired and shared as they
 +	 * are; read-only ones (a mapped cache file) are shared read-only.
 +	 */
++	/*
++	 * The address need not be page aligned (image 0121: backboardd's 180x180 and 129x129 icon
++	 * surfaces, ~1000 refused creates in 5 min): the descriptor starts at the page, ends right
++	 * after the pixels, and the page offset goes into the surface offset (IOSurface.framework's
++	 * base address = the mapping + the result's offset at 0x2c, checked in
++	 * IOSurfaceClientGetBaseAddress).
++	 */
 +	OSNumber *clientAddr = OSDynamicCast(OSNumber, props->getObject("IOSurfaceAddress"));
 +	bool clientRO = false;
++	uint32_t clientPageOff = 0;
 +	if (ret == kIOReturnSuccess && clientAddr != NULL) {
 +		mach_vm_address_t addr = clientAddr->unsigned64BitValue();
++		clientPageOff = (uint32_t)(addr & PAGE_MASK);
++		uint64_t need = s->planeCount ? s->allocSize :
++		    (uint64_t)s->offset + (uint64_t)s->bytesPerRow * s->height;
++		mach_vm_size_t len = round_page((uint64_t)clientPageOff + need);
 +		IOMemoryDescriptor *md = NULL;
-+		if (addr != 0 && (addr & PAGE_MASK) == 0) {
-+			md = IOMemoryDescriptor::withAddressRange(addr, s->allocSize, kIODirectionInOut, fTask);
++		if (addr != 0 && need != 0 && len <= SWEET_SURFACE_MAX_ALLOC) {
++			addr -= clientPageOff;
++			md = IOMemoryDescriptor::withAddressRange(addr, len, kIODirectionInOut, fTask);
 +			if (md != NULL && md->prepare() != kIOReturnSuccess) {
 +				md->release();
-+				md = IOMemoryDescriptor::withAddressRange(addr, s->allocSize, kIODirectionOut, fTask);
++				md = IOMemoryDescriptor::withAddressRange(addr, len, kIODirectionOut, fTask);
 +				clientRO = true;
 +				if (md != NULL && md->prepare() != kIOReturnSuccess) {
 +					md->release();
@@ -788,6 +801,11 @@
 +		if (md == NULL) {
 +			ret = kIOReturnVMError;
 +		} else {
++			s->offset += clientPageOff;
++			for (uint32_t i = 0; i < s->planeCount; i++) {
++				s->planes[i].offset += clientPageOff;
++			}
++			s->allocSize = (uint32_t)len;
 +			s->memory = md;
 +			s->clientMemory = true;
 +			s->mapCache = kIOMapDefaultCache | (clientRO ? kIOMapReadOnly : 0);
@@ -853,6 +871,10 @@
 +		    name, s->id, s->width, s->height, s->pixelFormat, s->bytesPerElement,
 +		    s->bytesPerRow, s->offset, s->planeCount, s->allocSize, props->getCount(), extra,
 +		    clientAddr == NULL ? "" : clientRO ? " [client memory, read-only]" : " [client memory]", ret);
++		if (clientAddr != NULL && (ret != kIOReturnSuccess || clientPageOff != 0)) {
++			IOLog("SWEET SURF:   client address %#llx (page offset %u)\n", clientAddr->unsigned64BitValue(),
++			    clientPageOff);
++		}
 +	}
 +	props->release();
 +	if (ret != kIOReturnSuccess) {

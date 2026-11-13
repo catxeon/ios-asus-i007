@@ -1438,7 +1438,7 @@ diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.c
  	s->planeCount = 0;
  	if (planes != NULL) {
  		uint64_t next = s->offset;
-@@ -726,16 +739,28 @@
+@@ -744,16 +757,28 @@
  	}
  	if (ret == kIOReturnSuccess && clientAddr == NULL) {
  		IOBufferMemoryDescriptor *mem = NULL;
