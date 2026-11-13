@@ -527,6 +527,14 @@ minutes from power-on to the lock screen.**
   ~09:23); a resume script (scratchpad after0113.sh) waits for Android, pulls 0113's log and
   shots into ../phone-0113, then a read-only 12 GiB backup ~/asus-roots/iosroot-2026-11-13-pregrow.img
   (+ .hash, .sha256, fsck -n).
+- **0113 result** (Android back 09:23:18 after 1538 s; the old cycle survived the session end
+  and pulled log + 47 shots too, ../phone-0113, sheet-0113a/b/c.png; root clean, 210450
+  free): the user set Date & Time -> Set Automatically off (shot 9:59: Time Zone
+  US/Pacific) and chose a city: log `|Preferences| Failed to set the timezone to
+  Europe/Vilnius` (twice) = tzlink() without tzlinkd, as read from the code; also
+  `TZUpdate isUpdateWaitingWithCompletion: ... Code=4099` (no tzd). The clock stayed Pacific
+  (home screen 10:00-10:22 PM). The stock job set brings tzlinkd and tzd; the user's choice
+  is Europe/Vilnius.
 - **Sizes:** iosroot (sda24) = 67108824 sectors = 8388603 blocks of 4 KiB = 32 GiB; the HFS+
   volume = 3145728 blocks = 12 GiB (written so in 2026-11-05). The tail is ours: screenshot
   slots 8378234..8387513, firmware 8387514..8387577, console log 8387578..8388602;
@@ -556,6 +564,31 @@ minutes from power-on to the lock screen.**
 - Order: (1) backup pull, (2) grow boot (user's OK) + check, (3) full 32 GiB pull = fsck -n
   of the grown volume + the base for make-root-jobs.py, (4) jobs patch (user's OK), boot,
   read which daemons crash-loop, add them to EXCLUDE.
+- **PC DISK FULL (09:3x): C: (238 GB) had 6 MB left.** The WSL disk
+  (%LOCALAPPDATA%\wsl\{8065ad97-...}\ext4.vhdx, 74.8 GB) lives on C: and grew with the 12 GiB
+  backup pull; WSL then got I/O errors (ext4 read-only, every `wsl.exe -e ...` exited 11 with
+  no output), the pull stopped at 8.7 GB, gh could not unpack the kernel. Fixed: pull killed;
+  with the user's OK the old boot images 0001-0105 in shim/asus-xnu/out deleted (2.6 GB,
+  ignored by git, rebuildable); `wsl --shutdown`; ext4 "recovery complete", 16 orphan inodes
+  deleted, r/w again; the partial pull deleted (inside the vhdx: frees nothing on C:).
+  **Z: is a network drive (user): do not move WSL or put roots there.** So: no more full
+  pulls of the root onto this PC. C: free 2.6 GB after this; WSL ext4 69 GB used.
+  - Instead of the 12 GiB backup: tools/asus-iosroot-metabackup.py ../asus-rootbackup-pregrow
+    (read only): what hfs_extendfs changes on the old volume = volume header block 0, bitmap
+    1..96, extents file 97..1376, journal info block 4329 + journal 4330..6377, old
+    alternate header 3145727: 3427 blocks, 13 MiB, sha256 bb0e1e25..., ranges.txt with a
+    sha256 per range. Writing them back undoes the grow. Fallback beyond that: the full
+    12 GiB pull of 2026-11-12 (~/asus-roots/iosroot-2026-11-12.img) + the keyboards and
+    dictation patches.
+  - Instead of the 32 GiB pull after the grow: tools/asus-iosroot-sparsepull.py (WSL,
+    adb.exe by interop): a sparse image of the whole volume with only block 0, the special
+    files, journal, last block, the files named with --file, and with --replace PATH NEWSIZE
+    the free run hfs-add-contiguous.py will choose (same first-fit, PATH's blocks freed) + 256
+    blocks. Holes are zeros; every block the edit can change was read from the phone, so the
+    blockpatch's old.hash check still holds.
+- **iOS 0114** (09:4x, kernel 43377007824 sha256 checked, `asushfsgrow=8377856`,
+  ASUS_REBOOT=300, no script): the grow. Read: `ASUS HFSGROW:` and `hfs_extendfs:` lines,
+  the root header after (8377856 blocks?), `ASUS SHOT:` still accepted.
   - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
     syncGrabRegistryWithReadBlock:]` (NanoRegistry, no nanoregistryd) and thread 3 on a lock
     behind it; not on the main thread.
