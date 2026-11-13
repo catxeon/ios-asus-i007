@@ -1386,7 +1386,7 @@ new file mode 100644
 diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
 --- a/iokit/Kernel/arm/SweetSurface.h
 +++ b/iokit/Kernel/arm/SweetSurface.h
-@@ -40,6 +40,12 @@
+@@ -41,6 +41,12 @@
  	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
  	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
  
@@ -1410,7 +1410,7 @@ diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.c
  #include <IOKit/system.h>
  #include <libkern/c++/OSArray.h>
  #include <libkern/c++/OSDictionary.h>
-@@ -288,6 +289,18 @@
+@@ -293,6 +294,18 @@
  	s->elementWidth = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementWidth", 1);
  	s->elementHeight = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementHeight", 1);
  	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
@@ -1429,7 +1429,7 @@ diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.c
  	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
  	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
  	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
-@@ -301,7 +314,7 @@
+@@ -306,7 +319,7 @@
  	}
  	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
  
@@ -1438,9 +1438,9 @@ diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.c
  	s->planeCount = 0;
  	if (planes != NULL) {
  		uint64_t next = s->offset;
-@@ -686,16 +699,28 @@
- 	ret = sweet_surface_layout(s, props);
- 	if (ret == kIOReturnSuccess) {
+@@ -726,16 +739,28 @@
+ 	}
+ 	if (ret == kIOReturnSuccess && clientAddr == NULL) {
  		IOBufferMemoryDescriptor *mem = NULL;
 +		/*
 +		 * asusgpu>=10 (the GPU draws for programs): 64 rows more than the picture, as topaz

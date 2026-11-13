@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetSurface.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,66 @@
 +/*
 + * Built-in IOSurface for SWEET (see SweetSurface.cpp).
 + *
@@ -40,6 +40,7 @@
 +
 +	IOMemoryDescriptor       *memory;       /* pixels (buffer or physical) */
 +	IOOptionBits              mapCache;     /* cache mode for user mappings */
++	bool                      clientMemory; /* memory of the creating task (IOSurfaceAddress), prepared */
 +	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
 +	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
 +
@@ -68,7 +69,7 @@
 +#endif /* _SWEET_SURFACE_H */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -0,0 +1,897 @@
+@@ -0,0 +1,968 @@
 +/*
 + * Built-in IOSurface for SWEET.
 + *
@@ -109,6 +110,8 @@
 +#include <libkern/c++/OSDictionary.h>
 +#include <libkern/c++/OSNumber.h>
 +#include <libkern/c++/OSUnserialize.h>
++#include <libkern/c++/OSCollectionIterator.h>
++#include <libkern/c++/OSSymbol.h>
 +#include <sys/proc.h>
 +
 +enum {
@@ -153,6 +156,9 @@
 +{
 +	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
 +		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
++	}
++	if (clientMemory && memory != NULL) {
++		memory->complete();
 +	}
 +	OSSafeReleaseNULL(kernelMap);
 +	OSSafeReleaseNULL(memory);
@@ -755,7 +761,42 @@
 +	}
 +	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
 +	ret = sweet_surface_layout(s, props);
-+	if (ret == kIOReturnSuccess) {
++	/*
++	 * IOSurfaceAddress: a surface on memory the creator already has (images 0118-0120: the
++	 * home screen icons, 180x180 surfaces of IconServices' icon cache, were blank: the
++	 * surface got fresh zeroed memory and the pixels stayed in the creator's pages; topaz
++	 * had these "client-memory" surfaces). The creator's pages are wired and shared as they
++	 * are; read-only ones (a mapped cache file) are shared read-only.
++	 */
++	OSNumber *clientAddr = OSDynamicCast(OSNumber, props->getObject("IOSurfaceAddress"));
++	bool clientRO = false;
++	if (ret == kIOReturnSuccess && clientAddr != NULL) {
++		mach_vm_address_t addr = clientAddr->unsigned64BitValue();
++		IOMemoryDescriptor *md = NULL;
++		if (addr != 0 && (addr & PAGE_MASK) == 0) {
++			md = IOMemoryDescriptor::withAddressRange(addr, s->allocSize, kIODirectionInOut, fTask);
++			if (md != NULL && md->prepare() != kIOReturnSuccess) {
++				md->release();
++				md = IOMemoryDescriptor::withAddressRange(addr, s->allocSize, kIODirectionOut, fTask);
++				clientRO = true;
++				if (md != NULL && md->prepare() != kIOReturnSuccess) {
++					md->release();
++					md = NULL;
++				}
++			}
++		}
++		if (md == NULL) {
++			ret = kIOReturnVMError;
++		} else {
++			s->memory = md;
++			s->clientMemory = true;
++			s->mapCache = kIOMapDefaultCache | (clientRO ? kIOMapReadOnly : 0);
++			if (!sweet_surface_publish(s)) {
++				ret = kIOReturnNoResources;
++			}
++		}
++	}
++	if (ret == kIOReturnSuccess && clientAddr == NULL) {
 +		IOBufferMemoryDescriptor *mem = NULL;
 +		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
 +		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
@@ -774,13 +815,44 @@
 +			}
 +		}
 +	}
-+	if (ret != kIOReturnSuccess || sweet_surface_creates_logged < 64) {
-+		char name[32];
-+		proc_selfname(name, sizeof(name));
-+		sweet_surface_creates_logged++;
-+		IOLog("SWEET SURF: %s create id %u %ux%u fmt 0x%x bpe %u bpr %u planes %u size %u keys %u -> 0x%x\n",
++	/*
++	 * Logged: every failure, every client-memory surface, the first 256 others, but only 4 of
++	 * backboardd's screen-size surfaces (they used up the old 64 lines, image 0120); and the
++	 * keys beyond the usual ones, so that a new kind of surface shows what it asks for.
++	 */
++	char name[32];
++	proc_selfname(name, sizeof(name));
++	static uint32_t screens_logged;
++	bool screen = s->width == 1125 && s->height == 2436 && strcmp(name, "backboardd") == 0;
++	if (ret != kIOReturnSuccess || clientAddr != NULL ||
++	    (screen ? screens_logged++ < 4 : sweet_surface_creates_logged++ < 256)) {
++		char extra[192];
++		extra[0] = 0;
++		OSCollectionIterator *it = OSCollectionIterator::withCollection(props);
++		if (it != NULL) {
++			static const char *const usual[] = { "Width", "Height", "BytesPerElement", "BytesPerRow",
++				                             "PixelFormat", "AllocSize", "ElementWidth", "ElementHeight",
++				                             "CacheMode", "PlaneInfo", "Offset" };
++			while (OSSymbol *k = OSDynamicCast(OSSymbol, it->getNextObject())) {
++				const char *n = k->getCStringNoCopy();
++				if (strncmp(n, "IOSurface", 9) == 0) {
++					n += 9;
++				}
++				bool known = false;
++				for (unsigned i = 0; i < sizeof(usual) / sizeof(usual[0]); i++) {
++					known = known || strcmp(n, usual[i]) == 0;
++				}
++				if (!known) {
++					strlcat(extra, " ", sizeof(extra));
++					strlcat(extra, n, sizeof(extra));
++				}
++			}
++			it->release();
++		}
++		IOLog("SWEET SURF: %s create id %u %ux%u fmt 0x%x bpe %u bpr %u off %u planes %u size %u keys %u%s%s -> 0x%x\n",
 +		    name, s->id, s->width, s->height, s->pixelFormat, s->bytesPerElement,
-+		    s->bytesPerRow, s->planeCount, s->allocSize, props->getCount(), ret);
++		    s->bytesPerRow, s->offset, s->planeCount, s->allocSize, props->getCount(), extra,
++		    clientAddr == NULL ? "" : clientRO ? " [client memory, read-only]" : " [client memory]", ret);
 +	}
 +	props->release();
 +	if (ret != kIOReturnSuccess) {
