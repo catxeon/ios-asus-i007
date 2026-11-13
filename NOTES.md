@@ -642,10 +642,34 @@ minutes from power-on to the lock screen.**
     ../asus-rootfix-jobs-full-v2** (in place, hfs-replace-inplace.py --phone
     --expect-old-sha256 8035a72c): 513 -> 511 jobs, 89 at boot, launchd.plist 787453 -> 786115
     bytes (sha256 58eb404b...), same extent 10429..10621, catalog node 18414 (69181-69182);
-    195 blocks, read-only check passed, backup kept. NOT written: needs the user's OK.
-  - Proposed with it: Auto-Lock "Never" = maxInactivity 2147483647 in UserSettings.plist and
-    EffectiveUserSettings.plist (both in place), until the framebuffer blanks/wakes with
-    iOS's display state.
+    195 blocks, read-only check passed, backup kept. **Written** after the user's "Да, оба"
+    (2026-11-13 10:30:43, all 195 blocks verified).
+  - **Auto-Lock "Never"** (same OK): maxInactivity 2147483647 (INT_MAX: Never, or 68 years)
+    in /private/var/mobile/Library/UserConfigurationProfiles/UserSettings.plist ({} -> 99
+    bytes, sha256 e6df4735..., patch ../asus-rootfix-autolock-UserSettings, 3 blocks) and
+    EffectiveUserSettings.plist (10568 -> 9928 bytes, re-encoded by Python's plistlib, only
+    restrictedValue.maxInactivity.value changed, sha256 a4a45d5e..., patch
+    ../asus-rootfix-autolock-EffectiveUserSettings, 5 blocks): both through
+    hfs-replace-inplace.py --phone, one after the other (they share catalog node 18553),
+    written and verified 10:31:54. Undo: each patch dir with `--restore`, in reverse order.
+    Until the framebuffer blanks/wakes with iOS's display state.
+  - iOS 0117 (10:3x, ASUS_REBOOT=480, asusshot=30, script unlock): does the screen stay live?
+  - **0117 result** (10:33:04, Android back after 516 s, no panic, root clean): crashes only
+    PosterBoard 1x and configd SIGKILL at shutdown: **no more locationd /
+    WirelessRadioManagerd**. Screen: lock screen "11:34" from 91 to 470 s, the unlock swipe
+    at 126 s did nothing, and the log has only TWO `ASUS FPS` lines (before ~120 s): after
+    that backboardd swaps no frame at all = iOS has the display off. So Auto-Lock Never was
+    not the whole story: **the LOCK SCREEN has its own short display timeout** (~10 s, not the
+    Auto-Lock setting); with the full job set it works, the display goes off, a tap does not
+    wake it. 0116 got past it because it booted to the home screen (unlocked state). Guess
+    for why it never happened with 13 jobs: some service the idle/backlight path needs.
+  - The physical power key IS wired (AsusPhoneInput: PMK8350 PON KPDPWR -> sweet_hid_key(0)
+    -> Consumer Power = the iOS lock button): a short press should wake the display; then
+    unlock with a swipe, and with Auto-Lock Never it stays on.
+  - Kernel change (not yet built): touch scripts get `kN` = press button N for 0.15 s
+    (0 power, 1 vol up, 2 vol down, 3 home), so a script can wake the display; the shot
+    thread clears all 64 slot headers before a boot's first shot (no more leftovers of
+    earlier boots in tools/asus-shot-pull.py). zgpu patch regenerated.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.

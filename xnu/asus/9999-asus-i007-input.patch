@@ -21644,7 +21644,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/AsusPhoneInput.cpp
-@@ -0,0 +1,4270 @@
+@@ -0,0 +1,4277 @@
 +/*
 + * ASUS I007 phone input (profile --input; starts only with boot-arg asusinput=1,
 + * QEMU has none of these blocks).
@@ -22546,8 +22546,10 @@
 + * A touch script, so that the screen can be driven with nobody at the phone (with asusshot's
 + * screenshots to see what came of it). Steps separated by '/', counted from the moment the
 + * touch screen is up: wN wait N s, mN wait N ms, tX,Y tap, lX,Y long press (1.2 s),
-+ * sX0,Y0,X1,Y1[,MS] swipe, u unlock swipe, p screenshot now. Coordinates are native panel
-+ * pixels (1080x2448): a screenshot's (360x816) times 3. Every step is logged with the uptime.
++ * sX0,Y0,X1,Y1[,MS] swipe, u unlock swipe, p screenshot now, kN press button N for 0.15 s
++ * (sweet_hid_key: 0 power = the side/lock button, 1 volume up, 2 volume down, 3 home).
++ * Coordinates are native panel pixels (1080x2448): a screenshot's (360x816) times 3. Every
++ * step is logged with the uptime. (A display iOS has turned off ignores taps; k0 wakes it.)
 + */
 +static void
 +asus_script(void *arg, __unused wait_result_t wr)
@@ -22601,6 +22603,11 @@
 +			break;
 +		case 'p':
 +			asus_shot_request();
++			break;
++		case 'k':
++			sweet_hid_key(v[0], 1);
++			IOSleep(150);
++			sweet_hid_key(v[0], 0);
 +			break;
 +		default:
 +			continue;

@@ -41,7 +41,7 @@
  //
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,1294 @@
+@@ -0,0 +1,1306 @@
 +/*
 + * SWEET internal UFS root device.
 + *
@@ -1024,7 +1024,7 @@
 +static uint32_t _Atomic asus_shot_state;       /* 0 free, 1 being filled, 2 to be written */
 +static int asus_shot_chan;
 +static uint64_t asus_shot_seq, asus_shot_area;
-+static bool asus_shot_started, asus_shot_refused;
++static bool asus_shot_started, asus_shot_refused, asus_shot_cleared;
 +
 +bool asus_shot_submit(const void *pixels, uint32_t width, uint32_t height);
 +
@@ -1077,6 +1077,18 @@
 +		lck_mtx_lock(&sweet_ufs_lock);
 +		uint64_t base = asus_shot_base();
 +		error = base == 0 ? EPERM : 0;
++		if (!error && !asus_shot_cleared) {
++			/*
++			 * A boot's first shot: clear every slot's header first. Slots of an earlier boot
++			 * that took more shots looked like this boot's continuation (seq restarts at 0;
++			 * images 0115-0117 had to be read by slot number).
++			 */
++			bzero(bounce, UFS_BLOCK);
++			for (unsigned i = 0; i < ASUS_SHOT_SLOTS && !error; i++) {
++				error = ufs_write_blocks(base + (uint64_t)i * ASUS_SHOT_SLOT_BLOCKS, 1);
++			}
++			asus_shot_cleared = true;
++		}
 +		if (!error) {
 +			bzero(bounce, (1 + blocks) * UFS_BLOCK);
 +			memcpy(bounce, &h, sizeof(h));
