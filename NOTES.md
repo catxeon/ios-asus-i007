@@ -486,7 +486,22 @@ minutes from power-on to the lock screen.**
     **../asus-rootfix-dictation-v1** (tools/hfs-replace-inplace.py --phone
     --expect-old-sha256 08aca86d; 190 -> 222 bytes, sha256 9fd7ff75...; block 2883219 +
     catalog node 18500 at 69353-69354; 3 blocks), read-only check passed 2026-11-13 04:10,
-    backup kept. **NOT written: needs the user's OK.** Undo: `--restore`.
+    backup kept. **Written** after the user's "Да, записывай" (2026-11-13 08:43:07):
+    all 3 blocks match the new hashes. Undo: `asus-iosroot-blockpatch.py
+    ../asus-rootfix-dictation-v1 --restore`.
+  - iOS 0112: the same kernel; script: Settings search, "h", "i", "123", "Cancel", home,
+    Spotlight (w8), tap its field, "h"; 10 shots; sampler on kbd, Preferences, Spotlight.
+  - **iOS 0112 result: THE KEYBOARD WORKS** (08:43:27, Android back after 336 s, root
+    clean; ../phone-0112/sheet-0112a.png = Settings, sheet-0112b.png = Spotlight). Settings
+    search: "h" -> "H" (auto-capitalized), "i" -> "Hi", the predictive bar offers
+    "Have"/"He", then "Him"/"His" (kbd's input manager works), "123" switches to the
+    number plane, "Cancel" closes the search. Spotlight: Siri Suggestions show, the
+    keyboard comes up by itself, "h" typed -> "Search in Apps / Search App Store". AKS
+    sel 17 calls: Preferences 8, Spotlight 8 in the whole boot (0111: 99000). So the
+    dictation loop was the whole keyboard problem (and Spotlight's AKS polling since 0044).
+  - Seen, not looked into: Settings' search lists no results for "Hi"; the keyboard is laid
+    out for 375 pt (Q/P cut at the edges); the clock shows 9:45 at 08:45 local = UTC-8, the
+    time zone is still Pacific (the user can now set it: General -> Date & Time).
   - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
     syncGrabRegistryWithReadBlock:]` (NanoRegistry, no nanoregistryd) and thread 3 on a lock
     behind it; not on the main thread.
