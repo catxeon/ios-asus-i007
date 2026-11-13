@@ -1472,7 +1472,7 @@ diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.c
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -31,6 +31,18 @@
+@@ -32,6 +32,18 @@
   */
  #include "SweetSurface.h"
  
@@ -1491,7 +1491,7 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
  static volatile SInt32 asus_fb_frames;  /* swaps shown, for the ASUS FPS log line */
  
  extern "C" __attribute__((weak)) int sweet_console_muted;  /* osfmk/console/serial_console.c */
-@@ -208,6 +220,7 @@
+@@ -214,6 +226,7 @@
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
  	setProperty("external", false);
  	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
@@ -1499,7 +1499,7 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
  	registerService();
  	IOLog("ASUS FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
  	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
-@@ -243,6 +256,16 @@
+@@ -249,6 +262,16 @@
  		if (frames != last) {
  			IOLog("ASUS FPS: %u frames in 5 s (%u.%u fps)\n", frames - last, (frames - last) / 5,
  			    ((frames - last) * 2) % 10);
@@ -1516,7 +1516,7 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
  		}
  		last = frames;
  	}
-@@ -369,6 +392,7 @@
+@@ -382,6 +405,7 @@
  			OSSafeReleaseNULL(s);
  			continue;
  		}
@@ -1524,7 +1524,7 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
  		if (w <= 0 || h <= 0) {
-@@ -413,12 +437,14 @@
+@@ -426,12 +450,14 @@
  			src = 0;
  		}
  		if (src != 0 && bpe == 4 && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {

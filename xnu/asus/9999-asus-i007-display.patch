@@ -968,7 +968,7 @@
 +#endif /* SWEET */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -0,0 +1,599 @@
+@@ -0,0 +1,648 @@
 +/*
 + * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
 + * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
@@ -986,7 +986,8 @@
 + *   5  SwapEnd, struct 0x46c: +0x50 swap id, +0x54 IOSurface id per layer
 + *      (4 layers), +0x64 rect a / +0xc4 rect b per layer (int x,y,w,h),
 + *      +0x104 enabled layer mask
-+ *   6  SwapWait, 7 GetID, 8 GetDisplaySize -> [w, h], 18 IsMainDisplay,
++ *   6  SwapWait, 7 GetID, 8 GetDisplaySize -> [w, h], 12 RequestPowerChange [state]
++ *      (IOMobileFramebufferRequestPowerChange; 0 = display off), 18 IsMainDisplay,
 + *   28 GetDotPitch, 72 Enable/DisableNotifications [func, refcon, type, 0]
 + * Everything else is accepted and logged once.
 + *
@@ -1026,6 +1027,7 @@
 +	kSweetFBSwapWait                = 6,
 +	kSweetFBGetID                   = 7,
 +	kSweetFBGetDisplaySize          = 8,
++	kSweetFBRequestPowerChange      = 12,
 +	kSweetFBIsMainDisplay           = 18,
 +	kSweetFBGetDotPitch             = 28,
 +	kSweetFBNotifications           = 72,
@@ -1080,8 +1082,12 @@
 +	uint32_t      fShotSecs;        /* boot-arg asusshot: a screenshot every that many seconds */
 +	uint16_t     *fShot;            /* a third-size copy of the panel, RGB565 */
 +	uint8_t      *fShotRow;         /* one panel row, read in one go (the panel is Normal-NC) */
++	bool          fPowerOff;        /* iOS turned the display off (RequestPowerChange 0) */
++	bool          fHaveLastRec;
++	uint8_t       fLastRec[SWEET_FB_SWAP_REC_SIZE];    /* the last swap, to show again at power on */
 +
 +	void takeShot(void);
++	void setPower(bool on);
 +
 +	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 +	void addClient(IOMobileFramebufferUserClient *client);
@@ -1281,6 +1287,13 @@
 +void
 +AppleCLCD::swap(const uint8_t *rec)
 +{
++	if (rec != fLastRec) {
++		memcpy(fLastRec, rec, sizeof(fLastRec));
++		fHaveLastRec = true;
++	}
++	if (fPowerOff) {
++		return;                 /* the display is off: the panel stays black */
++	}
 +	OSIncrementAtomic(&asus_fb_frames);
 +	uint32_t mask = get32(rec, 0x104);
 +
@@ -1392,6 +1405,34 @@
 +			__asm__ volatile("dsb oshst" ::: "memory");
 +		}
 +		s->release();
++	}
++}
++
++/*
++ * Display power (images 0115-0118). With the stock job set iOS turns the display off: the
++ * lock screen after ~10 s, the home screen after the Auto-Lock time, through
++ * IOMobileFramebufferRequestPowerChange (selector 12) with 0, and stops swapping. The panel
++ * kept the last frame, which looked like a hang (and a tap does not wake an iPhone display
++ * that is off; the power key does). Off: the panel memory black (the OLED dark), swaps
++ * ignored. On: the last swap is shown again at once, without waiting for the next one.
++ */
++void
++AppleCLCD::setPower(bool on)
++{
++	if (!on) {
++		fPowerOff = true;
++		for (uint32_t y = 0; y < fHeight; y++) {
++			volatile uint64_t *row = (volatile uint64_t *)(fPixels + (uint64_t)y * fRowBytes);
++			for (uint32_t x = 0; x < fWidth / 2; x++) {
++				row[x] = 0xff000000ff000000ULL;
++			}
++		}
++		__asm__ volatile ("dsb sy" ::: "memory");
++	} else if (fPowerOff) {
++		fPowerOff = false;
++		if (fHaveLastRec) {
++			swap(fLastRec);
++		}
 +	}
 +}
 +
@@ -1531,6 +1572,14 @@
 +		out[0] = SWEET_FB_DOT_PITCH;
 +		outCount = 1;
 +		break;
++	case kSweetFBRequestPowerChange: {
++		uint64_t state = args->scalarInputCount > 0 ? args->scalarInput[0] : 1;
++		char who[32];
++		proc_selfname(who, sizeof(who));
++		IOLog("ASUS FB: %s display power %llu%s\n", who, state, state ? "" : ": panel black until power comes back");
++		fFB->setPower(state != 0);
++		break;
++	}
 +	case kSweetFBNotifications:
 +		if (args->scalarInputCount >= 3 && args->scalarInput[2] < SWEET_FB_NOTIFY_TYPES) {
 +			uint32_t type = (uint32_t)args->scalarInput[2];
