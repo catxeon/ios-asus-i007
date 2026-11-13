@@ -57,6 +57,8 @@ EXCLUDE = {
     'com.apple.security.cryptexd': 'manages cryptex mounts; the OS cryptex is laid out by hand here',
     'com.apple.preboardservice': 'pre-unlock system UI (data protection, updates) that takes the screen',
     'com.apple.preboardservice_v2': 'the same',
+    'com.apple.locationd': 'crash loop (107 in 10 min, image 0115): qmi::Client::create for the baseband, libxpc trap',
+    'com.apple.WirelessRadioManager': 'crash loop (image 0115), the same baseband QMI trap',
 }
 
 DROP = ('_PanicOnCrash', 'EnablePressuredExit', 'EnablePressureExit')
@@ -129,7 +131,13 @@ def main():
     jobs = have['LaunchDaemons']
     labels = {v.get('Label') for v in jobs.values()}
     stock = plistlib.loads(Path(a.stock).read_bytes())['LaunchDaemons']
-    added, skipped, left_out = [], [], []
+    added, skipped, left_out, removed = [], [], [], []
+    for key in list(jobs):                  # a job excluded since an earlier run goes again
+        label = jobs[key].get('Label')
+        if label in exclude and key in stock:
+            del jobs[key]
+            removed.append(label)
+    labels = {v.get('Label') for v in jobs.values()}
     for key in sorted(stock):
         job = stock[key]
         label = job.get('Label')
@@ -149,8 +157,9 @@ def main():
     new = staging / 'launchd.plist'
     new.write_bytes(blob)
     at_boot = sorted(j['Label'] for k, j in jobs.items() if (j.get('RunAtLoad') or j.get('KeepAlive')) and not j.get('Disabled'))
-    print(f'launchd.plist: {cur.stat().st_size} -> {len(blob)} bytes; jobs {len(jobs) - len(added)} -> {len(jobs)} '
-          f'({len(added)} added, {len(skipped)} already there, {len(left_out)} left out); '
+    print(f'launchd.plist: {cur.stat().st_size} -> {len(blob)} bytes; jobs {len(jobs) - len(added) + len(removed)} -> '
+          f'{len(jobs)} ({len(added)} added, {len(removed)} removed: {", ".join(removed) or "none"}; '
+          f'{len(skipped)} already there, {len(left_out)} left out); '
           f'{len(at_boot)} start at boot (RunAtLoad/KeepAlive, not Disabled)')
     for label, why in left_out:
         print(f'  left out {label}: {why}')

@@ -605,8 +605,48 @@ minutes from power-on to the lock screen.**
   at 10429..10621 (the run sparsepull predicted, pulled); fsck -n after: only the usual
   line. 201 blocks: 0-1 (header, bitmap), 10429..10621 (file), catalog 69181, 69399-69400,
   69409-69410, 8377855 (alternate header). Read-only check passed (all 201 match old.hash),
-  backup kept. **NOT written: needs the user's OK.** Undo: `--restore`.
-  - Next: write, boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
+  backup kept. **Written** after the user's "Да, записывай" (2026-11-13 09:57:22): all 201
+  blocks match the new hashes. Undo: `asus-iosroot-blockpatch.py ../asus-rootfix-jobs-full-v1
+  --restore`.
+  - iOS 0115 (09:5x, kernel 43377007824, ASUS_REBOOT=600, asusshot=30, script w90/p/u/w5/p):
+    the first boot with 513 jobs.
+  - **iOS 0115 result** (09:57:43, Android back after 637 s, no panic, root clean; 185342
+    files, 5369373 free: ~290 MB written; ../phone-0115, sheet-0115.png, log 5614 lines):
+    63 platform binaries spawned (configd, logd, UserEventAgent, thermalmonitord, timed,
+    bluetoothd, fairplayd.H2, rapportd, lockdownd, sharingd, mediaserverd, identityservicesd,
+    nfcd, routined, remoted, locationd, dasd, seld, wcd, WirelessRadioManagerd, ...).
+    Crashes: **locationd 107x** (SIGTRAP in libxpc +0x20894 <- -[OS_xpc_connection
+    _xref_dispose] <- libATCommandStudioDynamic qmi::Client::create: the baseband QMI client,
+    no modem), **WirelessRadioManagerd 5x** (same trap), PosterBoard 1x, configd SIGKILL at
+    shutdown only. Screen: lock screen "10:59" in all shots 90..628 s, the script's unlock
+    swipe at 126 s did nothing, FPS 2-4.
+  - **iOS 0116** (10:12:40, ASUS_REBOOT=420, `asussample=SpringBoard,backboardd
+    asussampleevery=20`, asusshot=60, script unlock; ../phone-0116, sheet-0116.png, smp.txt):
+    home screen at 90 s, Settings>General at 123 s, the home gesture at 126 s works, clock
+    11:15 at 153 s ... and STILL 11:15 at 216, 279, 343, 406 s. All 17 samples: SpringBoard
+    and backboardd main threads idle in their run loops (not hung).
+  - **Reading (strong guess): auto-lock now works, so iOS turns the display off ~60 s after
+    the last touch; SweetFramebuffer keeps showing the last frame and a touch does not wake a
+    display that is off** (the power button should). Before the full job set the display
+    never slept (0113: home screen clock moved 20 min untouched). The new piece: profiled
+    (com.apple.managedconfiguration.profiled) created /private/var/mobile/Library/
+    UserConfigurationProfiles/ in 0115 (EffectiveUserSettings.plist 10568 bytes:
+    restrictedValue maxInactivity {value 60, rangeMinimum 30} = ManagedConfiguration.framework
+    defaultSettings.plist; UserSettings.plist = {}).
+  - Shot puller: slots of earlier boots with higher seq confuse it (0116 had to be read by
+    slot number 0..8). Still to fix (boot id in the header).
+  - The OS image mount (/mnt/os16, apfs-fuse) is gone since the `wsl --shutdown` (the tool
+    was not found on disk any more); the root itself has the same files (sparse pull --file).
+  - tools/make-root-jobs.py now also removes stock jobs that EXCLUDE gained since an earlier
+    run; EXCLUDE += com.apple.locationd, com.apple.WirelessRadioManager. **Patch
+    ../asus-rootfix-jobs-full-v2** (in place, hfs-replace-inplace.py --phone
+    --expect-old-sha256 8035a72c): 513 -> 511 jobs, 89 at boot, launchd.plist 787453 -> 786115
+    bytes (sha256 58eb404b...), same extent 10429..10621, catalog node 18414 (69181-69182);
+    195 blocks, read-only check passed, backup kept. NOT written: needs the user's OK.
+  - Proposed with it: Auto-Lock "Never" = maxInactivity 2147483647 in UserSettings.plist and
+    EffectiveUserSettings.plist (both in place), until the framebuffer blanks/wakes with
+    iOS's display state.
+  - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
   - Also seen in Settings: thread 1 waits forever in `-[NRRegistryClient
