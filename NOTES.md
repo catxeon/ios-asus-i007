@@ -737,6 +737,23 @@ minutes from power-on to the lock screen.**
     mapped read-only when the pages are read-only; complete() in free(). Create log: all
     failures, all client-memory surfaces, the first 256 others, only 4 of backboardd's
     1125x2436, plus the keys beyond the usual set. iOS 0121 boots it (wake, unlock, shots).
+  - **0121 result** (14:47:29, Android back after 336 s, root clean): the client-memory
+    surfaces are made by **backboardd itself** (CoreAnimation's render server wraps image
+    data it received: keys `Name Address`): 87x87, 92x92, 180x179 (read-only pages), 23x23,
+    28x28, 33x57, 256x1 created; but **914 x 180x180 and 114 x 129x129 refused
+    0xe00002c8** (kIOReturnVMError: the address was not page aligned, which v1 demanded)
+    and backboardd retries them every frame. The user was using the phone at the time (29
+    real touches, a power key press, up to 37 fps); the script's k0 at 125 s then hit a lit
+    display and locked it, so both shots are black. Crashes: PosterBoard (SIGABRT this time),
+    configd at shutdown.
+  - Commit 5abeaed, kernel CI 43420997431: any address: the descriptor starts at the page,
+    ends after the pixels; the page offset goes into the surface offset and the plane
+    offsets (IOSurface.framework: IOSurfaceClientGetBaseAddress = [client+0x68] (result
+    0x00, the mapping) + [client+0x94] (result 0x2c, the offset)); allocSize = that length;
+    a failure logs the address and page offset.
+  - Scripts that wake the display: a k0 on a lit display locks it. iOS 0122 uses
+    w90/p/k0/m1500/p/u/w4/p/k0/m1500/p/u/w4/p/w20/p: one of the two rounds lands on the
+    home screen whichever state it starts from.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
