@@ -317,12 +317,57 @@ asus_userland_register(void)
  * no policy of this name. Every other call succeeds and leaves the caller's output alone
  * (as sweet and topaz do).
  */
+/* The static trust cache (any hash type): libmis's question below has no type. */
+static bool
+asus_tc_find(const uint8_t *cdhash)
+{
+	uint32_t lo = 0, hi = asus_tc_count;
+	while (lo < hi) {
+		uint32_t mid = lo + (hi - lo) / 2;
+		int c = memcmp(asus_tc_entries + 24ULL * mid, cdhash, CS_CDHASH_LEN);
+		if (c == 0) {
+			return true;
+		}
+		if (c < 0) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
+	}
+	return false;
+}
+
 static int
 asus_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
 {
 	uint64_t in_out[2] = { 0, 0 }, allow = 0xffULL;
 	int error;
 
+	/*
+	 * Call 0x5f: libmis amfi_interface_cdhash_in_trustcache ({ u8 cdhash[20], u32, u64 result
+	 * }), behind MISValidateSignature with kMISValidationOptionTrustCacheOnly. The data
+	 * migration's SystemAppMigrator asks it for every staged system app (Calendar, Weather,
+	 * Mail, ...); left at 0 they were all "NOT in the trust cache" and image 0123's migration
+	 * removed /private/var/staged_system_apps without installing anything. Answered from the
+	 * static trust cache loaded at boot: 1 when the cdhash is in it.
+	 */
+	if (call == 0x5f) {
+		struct { uint8_t cdhash[CS_CDHASH_LEN]; uint32_t pad; uint64_t result; } q;
+		static uint32_t logged;
+		error = copyin(arg, &q, sizeof(q));
+		if (error == 0) {
+			q.result = asus_tc_find(q.cdhash) ? 1 : 0;
+			error = copyout(&q.result, arg + CS_CDHASH_LEN + sizeof(uint32_t), sizeof(q.result));
+			if (logged < 32) {
+				char who[32];
+				logged++;
+				proc_selfname(who, sizeof(who));
+				printf("ASUS AMFI: %s trust cache query %02x%02x%02x%02x...: %s\\n", who, q.cdhash[0], q.cdhash[1],
+				    q.cdhash[2], q.cdhash[3], q.result ? "in it" : "not in it");
+			}
+		}
+		return error;
+	}
 	if (call != 0x5a) {
 		return 0;
 	}
