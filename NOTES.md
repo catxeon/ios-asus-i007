@@ -1087,6 +1087,29 @@ minutes from power-on to the lock screen.**
   - Cleanup 2026-11-18: stock OS image deleted (WSL ~/ipsw, /mnt/os16 unmounted), log dumps
     ~/zc/0125-0130 deleted (~/zc/0132 kept: logarchive, sel.jsonl, poster.jsonl); C: had 13 GB
     free (WSL's vhdx does not shrink by itself).
+  - **iPhone identity (user 2026-11-18 "давай допиливать дальше"), commit 26c0c24:** boot-arg
+    **asusiphone=1** (off by default): SweetPlatformExpert getProductName "iPhone10,3",
+    getTargetName "D22AP" (hw.product / hw.target: MobileGestalt ProductType / HWModelStr),
+    kern_mib.c hw.machine for iOS processes "iPhone10,3" (was the macOS-config "iPad8,6"),
+    hw.model "D22AP" (was the product name). The ADT root stays model ASUS_I007D,
+    compatible asus,picasso (platform expert match). verify-asus-kernel.py's marker string
+    stays in the kernel.
+  - MobileGestalt cache (keyed by build + UUID only): ProductType was cached as
+    'ASUS Smartphone for Snapdragon Insiders' (CacheExtra key h9jDsbgj7xIVeIQ8S3/X3Q,
+    CacheVersion 20H392, 47 keys; copy WSL ~/zc/0132/MobileGestalt-before.plist).
+    ../asus-rootfix-mgcache-v1 (sparse pull read18.img after 0132): com.apple.MobileGestalt.plist
+    moved from /private/var/containers/Shared/SystemGroup/systemgroup.com.apple.
+    mobilegestaltcache/Library/Caches to /private/var/asus-off/mg-0132 (mode 0, owner -2);
+    10 blocks, fsck -n only the usual; written 2026-11-18 02:45, verified. Undo: --restore.
+  - **Speech AU crashes:** "plugin has invalid sandbox or container: error 2 path ?" in
+    -[PKService checkEnvironment:] (PlugInKit): Sandbox op 4 (container path) got ENOENT.
+    Commit fc74d8c: bsd/kern/asus_sandbox_container.c answers op 4 from the process's
+    CFFIXED_USER_HOME (as topaz 0936, darwin-redwood), ENOENT when it has none (daemons
+    unchanged). Kernel CI **44202809873** (identity + container path; 44201237703 with the
+    identity alone was cancelled).
+  - Next: boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
+    speech AUs not crashing; watch for new trouble from the iPhone class (CommCenter/telephony,
+    Face ID services).
   - Later (not done): give the ASUS kernel the iPhone identity (hw.product iPhone10,3,
     hw.target D22AP like sweet 0059) instead of the Collections~ipod.plist workaround; Settings
     shows "iPod touch" for the same reason. Bigger change (MobileGestalt cache must be cleared).
