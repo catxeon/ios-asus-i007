@@ -1273,3 +1273,102 @@
 +    "   },"
 +    "   {"
      "     'IOClass'         = SweetPlatformExpert;"
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -9,6 +9,7 @@
+ #include <IOKit/IOPlatformExpert.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
+ 
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+@@ -70,13 +71,35 @@
+ 	}
+ }
+ 
++/*
++ * ASUS: boot-arg asusiphone=1 gives the iOS userland the identity of the iPhone X whose
++ * device tree nodes (/product, /buttons, display) it already gets: hw.product iPhone10,3
++ * and hw.target D22AP (MobileGestalt ProductType / HWModelStr), hw.machine iPhone10,3 and
++ * hw.model D22AP (bsd/kern/kern_mib.c). Without it MobileGestalt calls the unknown product
++ * an iPod (GSDeviceName 'iPod': WallpaperKit looked for Collections~ipod.plist, Settings
++ * says "iPod touch").
++ */
++extern "C" int asus_iphone_identity(void);
++
++extern "C" int
++asus_iphone_identity(void)
++{
++	static int identity = -1;
++
++	if (identity < 0) {
++		int value = 0;
++		identity = PE_parse_boot_argn("asusiphone", &value, sizeof(value)) && value != 0;
++	}
++	return identity;
++}
++
+ bool
+ SweetPlatformExpert::getTargetName(char *name, int maxLength)
+ {
+ 	if (name == NULL || maxLength <= 0) {
+ 		return false;
+ 	}
+-	strlcpy(name, "picasso", (size_t)maxLength);
++	strlcpy(name, asus_iphone_identity() ? "D22AP" : "picasso", (size_t)maxLength);
+ 	return true;
+ }
+ 
+@@ -86,7 +109,8 @@
+ 	if (name == NULL || maxLength <= 0) {
+ 		return false;
+ 	}
+-	strlcpy(name, "ASUS Smartphone for Snapdragon Insiders", (size_t)maxLength);
++	strlcpy(name, asus_iphone_identity() ? "iPhone10,3" : "ASUS Smartphone for Snapdragon Insiders",
++	    (size_t)maxLength);
+ 	return true;
+ }
+ #endif /* SWEET */
+diff --git a/bsd/kern/kern_mib.c b/bsd/kern/kern_mib.c
+--- a/bsd/kern/kern_mib.c
++++ b/bsd/kern/kern_mib.c
+@@ -275,6 +275,10 @@
+ 	return cpu_info;
+ }
+ 
++#if defined(ASUS_I007)
++int asus_iphone_identity(void);    /* iokit/Kernel/arm/SweetPlatformExpert.cpp */
++#endif
++
+ /*
+  * Supporting some variables requires us to do "real" work.  We
+  * gather some of that here.
+@@ -536,6 +540,13 @@
+ 			 * instead.
+ 			 */
+ 
++#if defined(ASUS_I007)
++			/* ASUS: the iPhone X identity (boot-arg asusiphone=1,
++			 * iokit/Kernel/arm/SweetPlatformExpert.cpp). */
++			if (asus_iphone_identity()) {
++				strlcpy(dummy, "iPhone10,3", sizeof(dummy));
++			} else
++#endif
+ 			strlcpy(dummy, "iPad8,6", sizeof(dummy));
+ 		}
+ 		else {
+@@ -545,6 +556,12 @@
+ 		return SYSCTL_OUT(req, dummy, strlen(dummy) + 1);
+ 	case HW_MODEL:
+ 		bzero(dummy, sizeof(dummy));
++#if defined(ASUS_I007)
++		if (asus_iphone_identity()) {
++			strlcpy(dummy, "D22AP", sizeof(dummy));
++			return SYSCTL_OUT(req, dummy, strlen(dummy) + 1);
++		}
++#endif
+ 		if (!PEGetProductName(dummy, 64)) {
+ 			return EINVAL;
+ 		}
