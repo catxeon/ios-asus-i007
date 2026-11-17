@@ -841,6 +841,9 @@ minutes from power-on to the lock screen.**
     4816921..4943974; nothing else. Boot image 0124 built for after the write (kernel
     43434294917, sha256 98aa59b6..., ASUS_REBOOT=900, asusshot=60, script at 420 s: two
     wake/unlock rounds then a left swipe to page 2; scratchpad run0124.sh).
+    Read-only check passed 2026-11-17 13:28 (phone vs old.hash: all 126544 blocks match;
+    backup.bin 518324224 bytes saved; 2 min, after the blockpatch fix 369432f).
+    Undo after a write: asus-iosroot-blockpatch.py ../asus-rootfix-systemapps-v1 --restore.
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
