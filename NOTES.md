@@ -870,6 +870,15 @@ minutes from power-on to the lock screen.**
   - iOS 0125 (kernel 43434294917, same root, `asussample=chronod asussampleevery=120`, two
     wake rounds at 420 s and ~730 s): does chronod ingest the extensions on the second boot,
     and where do its threads sit.
+    **0125 result** (20:01:46 boot sent, Android back after 936 s, root clean; ../phone-0125,
+    sheet-0125.png, chronod-samples.txt): the home screen with all the apps again at 460 s and
+    773 s, widgets still "Waiting...". No widget extension spawned; lskdd 547x. chronod[89]
+    sampled 7x (90..810 s): IDLE every time (t0 main run loop UIApplicationMain/GSEventRunModal
+    via ChronoCore, t1 UIEventFetcher, t2 workq; t3/t4 once), SIGKILL at shutdown. So chronod
+    is not stuck; it just has no extension to run. Next: read the unified logs (chronod's
+    extension discovery, lskdd's caller): /private/var/db/diagnostics + /private/var/db/uuidtext
+    on the root; candidate reader: mandiant/macos-UnifiedLogs unifiedlog_iterator v0.7.0
+    (x86_64-unknown-linux-gnu, 1582297 bytes, GitHub release) -- download needs the user's OK.
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
