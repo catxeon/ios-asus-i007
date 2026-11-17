@@ -990,8 +990,15 @@ minutes from power-on to the lock screen.**
     the first 32 queries are logged ("ASUS AMFI: lsd asks whether cdhash d7b2a44a... ... yes").
     Apply check of the profile's series on xnu-8796.141.3 for the touched files: ok
     (scratchpad applycheck.py). Kernel CI **44167645901** (same inputs as 43434294917).
-  - Next: with that kernel, move the csstore aside once more (the 0127 database lacks the
-    extensions; needs the user's OK for the root patch) and boot; expect "ASUS AMFI: lsd asks
+  - **Prepared, read-only check passed, NOT written (user's OK):** ../asus-rootfix-lsrebuild-v3
+    (sparse pull read11.img after 0127): both csstore (3833856 / 4587520 bytes, from 0127)
+    moved to /private/var/asus-off/ls-0127; 12 blocks in 9 runs; fsck -n only the usual
+    volume header repair; phone vs old.hash all 12 match, backup saved.
+  - lskdd (537 spawns in 0127): launchd "Successfully spawned lskdd because xpc event" each
+    time, lskdd logs nothing itself; its job has LaunchEvents com.apple.notifyd.matching
+    (com.apple.MobileAsset.AppleKeyServicesCRL.new-asset-installed) + xpc.activity (dasd
+    cancelled the activity once). Guess: it exits without consuming the event; EXCLUDE candidate.
+  - Next: with that kernel, write lsrebuild-v3 (needs the user's OK) and boot; expect "ASUS AMFI: lsd asks
     ... yes", no "Unable to find AMFI", widget extensions registered, chronod filling
     ExtensionMetadata. Then delete the OS image (WSL ~/ipsw, unmount /mnt/os16).
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
