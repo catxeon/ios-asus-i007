@@ -40,6 +40,9 @@ class Phone:
     def __init__(self, adb):
         self.adb = adb
         self.read_blocks = 0
+        # A server started by a captured adb call keeps its pipes open (the call never returns).
+        subprocess.run([adb, 'start-server'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=60, check=True)
 
     def blocks(self, start, n):
         out = bytearray()

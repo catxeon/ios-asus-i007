@@ -28,8 +28,20 @@ BS = 4096
 TMP = '/data/local/tmp/asusfix'
 
 
-def adb(*args, data=None):
-    r = subprocess.run(['adb', *args], input=data, capture_output=True)
+def start_server(adb_exe='adb'):
+    """Start the adb server on its own first. A server that the first captured adb call starts
+    itself inherits that call's stdout/stderr pipes and keeps them open, so subprocess.run waits
+    forever (2026-11-17: 20 min stuck before the first write, 5 h in a sparse pull)."""
+    subprocess.run([adb_exe, 'start-server'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=60, check=True)
+
+
+def adb(*args, data=None, timeout=1800):
+    try:
+        r = subprocess.run(['adb', *args], input=data, capture_output=True, timeout=timeout,
+                           stdin=None if data is not None else subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        sys.exit(f'adb {" ".join(args)}: no answer in {timeout} s')
     if r.returncode:
         sys.exit(f'adb {" ".join(args)} failed: {r.stderr.decode(errors="replace")}')
     return r.stdout
@@ -118,6 +130,7 @@ def main():
     del data
     runs = runs_of(blocks)
     print(f'{len(blocks)} blocks in {len(runs)} runs ({len(blocks) * BS // 1024} KiB)')
+    start_server()
 
     size = su(f'blockdev --getsize64 {PART}').strip()
     if size != str(PART_BYTES):
