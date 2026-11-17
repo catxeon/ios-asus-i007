@@ -1009,7 +1009,52 @@ minutes from power-on to the lock screen.**
     (not looked at). chronod still "Ignoring restricted extension" (weather 77, calendar 77,
     ...), chrono.sql ExtensionMetadata/Descriptors 0, shots as 0127: the 0127 database has no
     widget extensions, lsd does not rescan system apps on a normal boot. lskdd 548x.
-  - Next: write lsrebuild-v3 (needs the user's OK) and boot with kernel 44167645901; expect "ASUS AMFI: lsd asks
+  - User's OK ("Да, записывай", 2026-11-17 ~23:59) for the LS rebuild. v3 was refused by
+    blockpatch ("phone vs old.hash: 8 of 12 blocks differ": built before boot 0128, which
+    changed the root); nothing written. Rebuilt as **../asus-rootfix-lsrebuild-v4** from
+    read12.img (pulled after 0128): both csstore (3833856 / 4587520) -> /private/var/asus-off/
+    ls-0128, 16 blocks in 11 runs, fsck -n only the usual; check passed and **written**
+    2026-11-18 00:02, "after write vs new.hash: all 16 blocks match". Undo: --restore.
+    Lesson: rebuild a prepared root patch after any iOS boot in between.
+  - iOS 0129: kernel 44167645901, image sha256 e4646b12..., booted right after v4.
+  - **0129 result: WIDGETS WORK** (00:02:52 boot sent, Android back after 941 s, root clean,
+    unified log boot E9974ABD). Home screen shots 008/018: Weather widget ("No weather data")
+    and Calendar widget ("TUESDAY 17", "No events today") instead of "Waiting...". Spawned
+    once each: CalendarWidgetExtension, WeatherWidget (2), StocksWidget, MailWidgetExtension,
+    GeneralMapsWidget, PhotosReliveWidget, RemindersWidgetExtension, TipsWidget, WorldClock...
+    lsd asked AMFI twice (d7b2a44a... yes). New since the extension points work:
+    - **PosterBoard crash loop** 166x sig6 (+ CollectionsPoster 159x, poster extensions 166x
+      each): "NSInvalidArgumentException ... `Collections.plist` (path:
+      '/Library/Wallpaper/Collections/Collections.plist') does not contain valid value for
+      keypath: 'order'", in +[WKDefaultWallpaperManager defaultWallpaperManager] ->
+      -[WKWallpaperRepresentingCollectionsManager _loadSystemWallpaperCollections]
+      (WallpaperKit +0x225c8): MGCopyAnswer("GSDeviceName").lowercaseString ->
+      "Collections~%@.plist", else "Collections.plist". MobileGestalt says **'iPod'** (the
+      ASUS kernel's hw.product is "ASUS Smartphone for Snapdragon Insiders", hw.target
+      "picasso" (bringup patch); MG ProductType = hw.product, unknown -> iPod; the sweet fix
+      is xnu/patches/0059, not in the ASUS profile). The OS has only Collections~iphone.plist.
+      Order ids without a collection are skipped ("Skipping empty"), so a copy is safe.
+    - **assetsd** 84x sig6 "assetsd requires TCCPhotosService access": tccd grants
+      kTCCServicePhotos by entitlement com.apple.private.tcc.allow but "Failed to issue Sandbox
+      Extension for kTCCServicePhotos" -> kTCCErrorDomain 6 to assetsd ("Activate TCC"). The
+      Sandbox policy answered op 5 (extension issue) with ENOENT.
+    - also SiriTTSSynthesizer/MacinTalkAUSP/KonaSynthesizer 18x each, MusicWidgets 3x sig11.
+  - **Fix 1 (root, written with the user's standing OK for this work "делай всё что нужно, не
+    спрашивай разрешение"):** ../asus-rootfix-wallpaper-ipod-v1 = stock
+    Collections~iphone.plist (308 bytes, sha256 83fcde21...) added as
+    /Library/Wallpaper/Collections/Collections~ipod.plist (0644 0:0, contiguous at block 10648;
+    sparse pull read14.img with --free-range 10648 257), 13 blocks, fsck -n only the usual;
+    written 2026-11-18 00:30, verified. Undo: --restore. Boot 0130 (kernel 44167645901, image
+    4698ea60...) right after.
+  - **Fix 2 (kernel, commit 890a91c, CI 44181165625):** asus_userland.c ops 5/6 succeed:
+    issue writes an opaque token "%016llx;00;asus;<type>;<class>" into the library's buffer
+    (args { class, type, path, flags, buffer[0x800], pid, u32 }, libsystem_sandbox +0xf98),
+    consume (args { token, len+1, &handle }) returns a handle; first 32 issues logged
+    ("ASUS Sandbox: tccd issues extension com.apple.tcc.kTCCServicePhotos (type 3)").
+  - Later (not done): give the ASUS kernel the iPhone identity (hw.product iPhone10,3,
+    hw.target D22AP like sweet 0059) instead of the Collections~ipod.plist workaround; Settings
+    shows "iPod touch" for the same reason. Bigger change (MobileGestalt cache must be cleared).
+  - Next (was): write lsrebuild-v3 and boot with kernel 44167645901; expect "ASUS AMFI: lsd asks
     ... yes", no "Unable to find AMFI", widget extensions registered, chronod filling
     ExtensionMetadata. Then delete the OS image (WSL ~/ipsw, unmount /mnt/os16).
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
