@@ -954,6 +954,46 @@ minutes from power-on to the lock screen.**
     (libdmg mv, catalog only); 15 blocks in 10 runs; fsck -n only the usual; phone vs old.hash
     all 15 match, backup saved. Next boot rebuilds the LS database with the points registered.
   - The OS image stays mounted until the boot after this patch shows the result; delete it then.
+  - **Written** after the user's "Да, записывай": 2026-11-17 ~22:47, "after write vs new.hash:
+    all 15 blocks match". Undo: blockpatch ../asus-rootfix-lsrebuild-v2 --restore.
+  - **0127 result** (kernel 43434294917, image sha256 0b76140d..., 22:48:59 boot sent, Android
+    back after 940 s, root clean; unified log boot 24B5ED5C, its `timestamp` 19:49 = 3 h behind
+    local): widgets still "Waiting..." (shots 008/018 = 0126's), no widget extension spawned,
+    lskdd 537x. lsd DID rebuild the database (new csstore 3833856 + 4587520 bytes, smaller than
+    0124's 5685248 + 6209536), but MobileInstallation (InstalledContentLibrary, in lsd) skipped
+    every extension whose point is a legacy one: "-[MIPluginKitBundle extensionPointOverlay]:
+    Failed to fetch extension cache entry for extension point with identifier
+    com.apple.widgetkit-extension : (null)" then "Appex bundle at /Applications/.../X.appex ...
+    specifies a value (com.apple.widgetkit-extension) ... that does not correspond to a known
+    extension point" (also intents-service, usernotifications.content-extension,
+    spotlight.index, message-payload-provider, ...). chronod: "Ignoring restricted extension"
+    for weather/calendar/maps/news/notes/... as before.
+  - **Root cause (observed):** lsd 2x "Failed to read extension point cache at URL <private>
+    with error: ... Code=12 "Unable to find AMFI"". _MICopyExtensionCacheEntryWithPlatform
+    (InstalledContentLibrary +0x35578) asks [EXExtensionPointCatalog extensionPointForIdentifier:
+    platform:].SDKDictionary; the catalog reads extensions.plist through
+    +[NSDictionary _EX_dictionaryWithSignedURL:error:] (ExtensionFoundation +0x283ec), which
+    after SecStaticCode + the detached .sig does IOServiceGetMatchingService(IOServiceMatching(
+    "AppleMobileFileIntegrity")) -> none -> "Unable to find AMFI" (+0x28d40); with a service:
+    IOServiceOpen type 0, IOConnectCallMethod selector 6, 1 scalar (1), the cdhash as struct
+    input; 0 = "cdhash: %@ is trusted", 0xe00002f0 = "is not in trust cache". The ASUS kernel
+    never had that IOService: topaz added it in xnu/patches/0151 (from AppleCLCD::start), which
+    the ASUS profile does not take. So extensions.plist was never usable on the phone; 0126's
+    "Done reregistering" without errors was not a fix (guess: lsd skipped the scan), and the
+    0124 records were not the problem.
+  - **Kernel fix, commit a83e35d:** userland patch adds iokit/Kernel/arm/AsusMobileFileIntegrity.cpp
+    (class AppleMobileFileIntegrity, IOResources match in KernelConfigTables like AppleKeyStore,
+    user client class AppleMobileFileIntegrityUserClient): selector 6 with a 20-byte struct is
+    answered from the static trust cache (new asus_trust_cache_has() in asus_userland.c; zgpu's
+    0x5f query uses it too, generator updated, zgpu regenerated); other selectors succeed with
+    zeroed outputs (as topaz) and are logged once ("ASUS AMFI: user client selector N from X");
+    the first 32 queries are logged ("ASUS AMFI: lsd asks whether cdhash d7b2a44a... ... yes").
+    Apply check of the profile's series on xnu-8796.141.3 for the touched files: ok
+    (scratchpad applycheck.py). Kernel CI **44167645901** (same inputs as 43434294917).
+  - Next: with that kernel, move the csstore aside once more (the 0127 database lacks the
+    extensions; needs the user's OK for the root patch) and boot; expect "ASUS AMFI: lsd asks
+    ... yes", no "Unable to find AMFI", widget extensions registered, chronod filling
+    ExtensionMetadata. Then delete the OS image (WSL ~/ipsw, unmount /mnt/os16).
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
