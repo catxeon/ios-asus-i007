@@ -1051,6 +1051,25 @@ minutes from power-on to the lock screen.**
     (args { class, type, path, flags, buffer[0x800], pid, u32 }, libsystem_sandbox +0xf98),
     consume (args { token, len+1, &handle }) returns a handle; first 32 issues logged
     ("ASUS Sandbox: tccd issues extension com.apple.tcc.kTCCServicePhotos (type 3)").
+  - **0130** (kernel 44167645901 + Collections~ipod.plist; 00:31:06 sent, back after 941 s,
+    root clean, log boot 60F3D2FF): **PosterBoard crash loop gone** (0 crashes, was 166),
+    widgets still shown. New loop: **AegirPoster** (Astronomy poster,
+    /System/Library/CoreServices/AegirProxyApp.app/PlugIns/AegirPoster.appex) 120x sig6
+    "-[__NSArrayM insertObject:atIndex:]: object cannot be nil" from -[NUNIAegirRenderer
+    getOrCreateUniformBufferforFrameBufferIndex:] (NanoUniverse) <- ClockKitUI
+    CLKUIMetalQuadView snapshot <- PosterKit PRRenderer: a Metal buffer is nil (no Metal device
+    here). PosterBoard also logged "SandboxExtensionError ... cannot extend access of
+    PRSServerPosterPath ..." for the Aegir descriptors. assetsd 4x sig6 (old kernel).
+  - **0131** (kernel 44181165625 = sandbox extensions, root as 0130; 00:54:08 sent, back after
+    940 s): **assetsd crash loop gone** (0, was 84); "ASUS Sandbox: cloudd issues extension
+    com.apple.app-sandbox.read-write (type 0)" 17x, "tccd issues ... kTCCServiceAddressBook"
+    13x, linkd 2x. AegirPoster still 70x sig6 (Metal), SiriTTSSynthesizerAU/MacinTalkAUSP/
+    KonaSynthesizer 12x each, configd sig9 1x. Kernel d304814b..., image aa59cf20...
+  - **Fix 3 (root):** ../asus-rootfix-aegir-off-v1 (sparse pull read16.img after 0131):
+    AegirPoster.appex moved to /private/var/asus-off/AegirPoster.appex and both csstore
+    (5799936 / 6488064, from 0129) to /private/var/asus-off/ls-0131 so lsd forgets it; 17
+    blocks, fsck -n only the usual; written 2026-11-18 01:13, verified. Undo: --restore.
+    Boot 0132 (kernel 44181165625, image f14d6650...) right after.
   - Later (not done): give the ASUS kernel the iPhone identity (hw.product iPhone10,3,
     hw.target D22AP like sweet 0059) instead of the Collections~ipod.plist workaround; Settings
     shows "iPod touch" for the same reason. Bigger change (MobileGestalt cache must be cleared).
