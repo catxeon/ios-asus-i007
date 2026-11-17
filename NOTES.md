@@ -908,6 +908,34 @@ minutes from power-on to the lock screen.**
     EXDeclaringPath -> url nil -> the errors above. Not verified: that the stock 20H392 OS
     image has /System/Library/xpc/extensions.plist (the OS dmg was deleted; nothing on disk).
   - lskdd's caller: not found yet (no lskdd lines in lsd/chronod logs; full-log search pending).
+  - Correction: the signature check (+0x32340) applies to extensions.plist (hasSuffix ->
+    _EX_dictionaryWithSignedURL: entitlement com.apple.private.amfi.can-check-trust-cache,
+    SecStaticCode on the file + its detached `.sig`, trust cache); launchd.plist is read plain.
+  - **Stock OS image re-downloaded** (user OK 2026-11-17 "Да, скачивай"): tools/remotezip.py
+    -> WSL ~/ipsw/087-86698-044.dmg (4730814044 bytes, CRC-32 ok, 10 min at ~8 MB/s; also
+    Firmware/*.mtree (IM4P, LZFSE), .root_hash, .trustcache = os.trustcache.im4p), mounted
+    read-only: `wsl -u root`, work/apfs-fuse/build/apfs-fuse -o ro,allow_other DMG /mnt/os16
+    (files under /mnt/os16/root). Stock /System/Library/xpc: extensions.plist 104731,
+    extensions.plist.sig 1852, launchd.plist 1456980, launchd.plist.sig 19006 (root:80, 0644).
+    extensions.plist.sig = SuperBlob with CodeDirectories sha1 ca206699... and sha256
+    d7b2a44a..., both IN os.trustcache, code pages match the file. Copies: WSL ~/zc/xpc-stock.
+  - Stock vs root file lists (find on the mount: ~/zc/stock-files.txt, 318071 entries; root
+    catalog of iosroot-2026-11-12.img: ~/zc/root-1112-files.txt; scratchpad cmpfiles.py):
+    839 stock entries missing on the root: the 3 xpc files above, 481 job files of
+    /System/Library/LaunchDaemons (on purpose: the root keeps only its own 11 jobs there),
+    354 WorkflowKit DefaultShortcuts *.shortcut with non-ASCII names (libdmg-hfsplus names are
+    ASCII only; harmless). Size differences: the 10 own LaunchDaemons plists + launchd.plist.
+  - **Prepared, read-only check passed, NOT written (user's OK):**
+    ../asus-rootfix-extensionsplist-v1: stock extensions.plist + extensions.plist.sig added to
+    /System/Library/xpc (0644 root:80, contiguous at block 10621/10647 via
+    tools/hfs-add-contiguous.py; sparse pull read7.img with --free-range 10621 539), read
+    back equal, fsck -n only the usual minor volume header repair; 40 blocks in 9 runs
+    (volume headers, bitmap, catalog nodes, the 27 data blocks); phone vs old.hash all 40
+    match, backup.bin saved. Expected: lsd loads the extension point cache, registers the
+    legacy points (com.apple.widgetkit-extension), LSApplicationExtensionRecord requireValid
+    works, chronod stops calling the widgets restricted. Risk: if lsd cannot verify the
+    signature (AMFI trust cache query, kernel 43434294917 has call 0x5f), it falls back as now.
+  - The OS image stays mounted until the boot after this patch shows the result; delete it then.
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
