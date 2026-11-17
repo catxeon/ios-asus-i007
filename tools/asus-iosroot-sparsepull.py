@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Pull only what an offline edit of the iOS root needs, into a sparse image of the whole volume.
 
-  asus-iosroot-sparsepull.py IMAGE [--file PATH ...] [--replace PATH NEWSIZE] [--adb ADB]
+  asus-iosroot-sparsepull.py IMAGE [--file PATH ...] [--replace PATH NEWSIZE]
+                             [--free-range START COUNT] [--adb ADB]
 
 Run in WSL (adb.exe through interop; IMAGE on ext4, where the holes cost nothing). The
 volume is 32 GiB since asushfsgrow; a full pull no longer fits on the PC's disk. An edit with
@@ -15,7 +16,11 @@ dd, read only):
 - with --file PATH: that file's data (one extent or several, from its catalog record);
 - with --replace PATH NEWSIZE (implies --file PATH): the blocks tools/hfs-add-contiguous.py
   will put a NEWSIZE-byte file into once PATH is removed: its first-fit free run of
-  ceil(NEWSIZE/4096) + 256 blocks in the bitmap with PATH's blocks freed, plus 256 blocks.
+  ceil(NEWSIZE/4096) + 256 blocks in the bitmap with PATH's blocks freed, plus 256 blocks;
+- with --free-range START COUNT (repeatable): those blocks, which must all be free (refused
+  otherwise; e.g. also the blocks right after the catalog, where a growing catalog goes);
+  an edit that first sets the volume header's nextAllocation to START then allocates in them
+  (libdmg-hfsplus allocate() starts at nextAllocation), e.g. for a whole tree of new files.
 
 Everything else stays a hole (zeros). So the per-block hashes made from IMAGE before the edit
 are right for every block the edit can change, which is what asus-iosroot-blockpatch.py checks
@@ -40,8 +45,11 @@ class Phone:
         out = bytearray()
         while n:
             k = min(n, 16384)                       # 64 MiB a call
-            r = subprocess.run([self.adb, 'exec-out', f"su -c 'dd if={PART} bs={BS} skip={start} count={k} 2>/dev/null'"],
-                               capture_output=True, stdin=subprocess.DEVNULL)
+            try:                                    # a call made while Android was still booting hung 5 h
+                r = subprocess.run([self.adb, 'exec-out', f"su -c 'dd if={PART} bs={BS} skip={start} count={k} 2>/dev/null'"],
+                                   capture_output=True, stdin=subprocess.DEVNULL, timeout=600)
+            except subprocess.TimeoutExpired:
+                sys.exit(f'read of {k} blocks at {start}: adb gave nothing for 10 min (is Android up, su granted?)')
             if r.returncode or len(r.stdout) != k * BS:
                 sys.exit(f'read of {k} blocks at {start} failed ({len(r.stdout)} bytes)')
             out += r.stdout
@@ -102,6 +110,7 @@ def main():
     ap.add_argument('image')
     ap.add_argument('--file', action='append', default=[])
     ap.add_argument('--replace', nargs=2, metavar=('PATH', 'NEWSIZE'))
+    ap.add_argument('--free-range', nargs=2, type=int, metavar=('START', 'COUNT'), action='append', default=[])
     ap.add_argument('--adb', default='adb.exe')
     a = ap.parse_args()
     dev = Phone(a.adb)
@@ -171,6 +180,17 @@ def main():
         print(f'{path} -> {newsize} bytes: hfs-add-contiguous will take the free run at {run} ({need} blocks); '
               f'pulled with 256 more')
         ranges.append((run, need + 256))
+    if a.free_range:
+        size, ext = special['allocation']
+        bitmap = b''.join(dev.blocks(s, c) for s, c in ext)[:size]
+    for start, count in a.free_range:
+        if start < 1 or start + count > total - 1:
+            sys.exit(f'--free-range {start} {count}: outside the volume')
+        used = [blk for blk in range(start, start + count) if bitmap[blk >> 3] & (0x80 >> (blk & 7))]
+        if used:
+            sys.exit(f'--free-range {start} {count}: {len(used)} blocks in use, first {used[0]}')
+        print(f'free range {start}..{start + count - 1} ({count} blocks) is free; pulled')
+        ranges.append((start, count))
 
     # merge and pull
     ranges = sorted(set(ranges))

@@ -5,6 +5,12 @@
  * Keeps mode, owner, group, ownerFlags and adminFlags (e.g. SF_RESTRICTED on
  * the dyld cache). HFS+ private metadata folders are not copied. Entries that
  * already exist in DST are left untouched. Exit status 0 only if nothing failed.
+ *
+ *   asus-hfs-copyvol SRC.hfs DST.hfs --tree SRCDIR DSTDIR [--owner UID:GID]
+ * copies only what is inside SRCDIR into the existing folder DSTDIR (e.g. the
+ * staged system apps of one root into /Applications of another), with every
+ * copied entry's owner and group set to UID:GID when --owner is given. Extended
+ * attributes are not copied (as in the whole-volume copy).
  */
 #include <hfs/hfsplus.h>
 #include <hfs/hfslib.h>
@@ -18,6 +24,8 @@ char endianness;
 
 static Volume *src, *dst;
 static unsigned long dirs, files, links, kept, failed;
+static int set_owner;
+static uint32_t owner_uid, owner_gid;
 
 static HFSPlusCatalogRecord *lookup(const char *path)
 {
@@ -35,8 +43,8 @@ static void copy_attrs(const char *path, const HFSPlusBSDInfo *from)
     }
     to = record->recordType == kHFSPlusFolderRecord ? &((HFSPlusCatalogFolder *)record)->permissions
                                                     : &((HFSPlusCatalogFile *)record)->permissions;
-    to->ownerID = from->ownerID;
-    to->groupID = from->groupID;
+    to->ownerID = set_owner ? owner_uid : from->ownerID;
+    to->groupID = set_owner ? owner_gid : from->groupID;
     to->fileMode = (uint16_t)((to->fileMode & 0170000) | (from->fileMode & 07777));
     to->adminFlags = from->adminFlags;
     to->ownerFlags = (uint8_t)(from->ownerFlags & ~UF_COMPRESSED);
@@ -125,8 +133,21 @@ int main(int argc, char **argv)
 {
     int one = 1;
     io_func *sio, *dio;
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s SRC.hfs DST.hfs\n", argv[0]);
+    const char *tree_src = NULL, *tree_dst = NULL;
+    int bad = argc < 3;
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--tree") == 0 && i + 2 < argc) {
+            tree_src = argv[++i];
+            tree_dst = argv[++i];
+        } else if (strcmp(argv[i], "--owner") == 0 && i + 1 < argc &&
+                   sscanf(argv[++i], "%u:%u", &owner_uid, &owner_gid) == 2) {
+            set_owner = 1;
+        } else {
+            bad = 1;
+        }
+    }
+    if (bad || (set_owner && tree_src == NULL)) {
+        fprintf(stderr, "usage: %s SRC.hfs DST.hfs [--tree SRCDIR DSTDIR [--owner UID:GID]]\n", argv[0]);
         return 2;
     }
     endianness = *(char *)&one ? IS_LITTLE_ENDIAN : IS_BIG_ENDIAN;
@@ -136,8 +157,22 @@ int main(int argc, char **argv)
     src = openVolume(sio);
     dst = openVolume(dio);
     if (!src || !dst) return 1;
-    walk(kHFSRootFolderID, "/");
-    {
+    if (tree_src != NULL) {
+        HFSPlusCatalogRecord *from = getRecordFromPath3(tree_src, src, NULL, NULL, TRUE, FALSE, kHFSRootFolderID);
+        HFSPlusCatalogRecord *to = lookup(tree_dst);
+        if (from == NULL || from->recordType != kHFSPlusFolderRecord ||
+            to == NULL || to->recordType != kHFSPlusFolderRecord) {
+            fprintf(stderr, "--tree: %s (source) and %s (destination) must both be folders\n", tree_src, tree_dst);
+            failed++;
+        } else {
+            walk(((HFSPlusCatalogFolder *)from)->folderID, tree_dst);
+        }
+        free(from);
+        free(to);
+    } else {
+        walk(kHFSRootFolderID, "/");
+    }
+    if (tree_src == NULL) {
         /* mkfs.hfsplus leaves the root folder with mode 0: copy the source root's
          * BSD info, or uid 501 processes cannot look anything up (EACCES). */
         HFSPlusCatalogFolder *from = (HFSPlusCatalogFolder *)getRecordByCNID(kHFSRootFolderID, src);

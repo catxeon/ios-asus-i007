@@ -797,6 +797,52 @@ minutes from power-on to the lock screen.**
     ../asus-rootfix-jobs-full-v3: EXCLUDE += bluetoothd, fairplayd.H2,
     nanotimekitcompaniond: 511 -> 508 jobs, 87 at boot, launchd.plist 786115 -> 783885
     bytes (sha256 d450ed4e...), in place, 194 blocks.
+  - **Both written** after the user's "Да, записывай" (2026-11-13 15:42:34), each verified
+    (194 and 3 blocks). Undo: each dir with --restore.
+  - iOS 0123 (15:4x, kernel 43420997431, ASUS_REBOOT=1800, asusshot=60, `asussample=
+    com.apple.datami,com.apple.migrat asussampleevery=120`, script at 1500 s: two rounds of
+    k0 + unlock with shots): the migration run.
+  - **0123 result: the migration ran, but no app was installed, and the staged apps are
+    gone.** Shots: the migration progress UI (logo + bar) at 89 s, the home screen from
+    279 s with still only Photos, App Store, Settings + dock, widgets still "Waiting...".
+    Root afterwards (sparse pull, 2026-11-17): fsck clean, 5470429 blocks free,
+    /private/var/staged_system_apps and /private/var/containers/Bundle both EMPTY;
+    com.apple.migration.plist = {DMLastMigrationResults: {success: true, buildVersion:
+    20H392}, DMUserDataDisposition: {SyntheticDidUpgrade: false, buildVersion: 20H392},
+    LastSystemVersion: 20H392} (so it will not run again by itself). installd's own text
+    log /private/var/installd/Library/Logs/MobileInstallation/mobile_installation.log.0
+    says why: placeholder installs fail in `clonefile` (NSPOSIXErrorDomain 45, ENOTSUP:
+    HFS+ has no clonefile) into /var/installd/Library/Caches/com.apple.mobile.installd.staging;
+    full installs fail in MICodeSigningVerifier with 0xe8008001 (libmis). The migrator then
+    deleted the staged apps and marked itself done. (Observed; whether the 0xe8008001 is
+    the AMFI trust cache query 0x5f, fixed in commit 882bf58 / kernel CI 43434294917 since,
+    is a guess; that kernel is built, not booted yet.)
+  - The binaries are in os.trustcache: checked Weather (db3d240b...), MobileCal
+    (af3b7e0a...), WeatherWidget.appex (07a3f4a4...), CalendarWidgetExtension.appex
+    (51272950...). The full staged tree is still in ~/asus-roots/iosroot-2026-11-12.img
+    (32 apps, the same 32 names as /System/Library/AppPlaceholders; 3840 files, 5575 dirs,
+    127054 blocks; owned 501:501, dirs 0755, files 0644; no non-ASCII names).
+  - **New route, no installd: copy them into /Applications** (where Photos/App Store/Settings
+    are, root:admin(80), dirs 0775, files 0664): tools/make-root-systemapps.py (copy with
+    tools/asus-hfs-copyvol.c --tree ... --owner 0:80, move the 32 placeholders and lsd's two
+    *.csstore (InternalDaemon container 96656571-5801-4F8E-950F-5969908DE580, Library/Caches)
+    to /private/var/asus-off so lsd rebuilds its database from disk). The new blocks go to
+    the free run at 4816921 (libdmg-hfsplus allocate() starts at the volume header's
+    nextAllocation, which the tool sets there; asus-iosroot-sparsepull.py --free-range
+    pulls those blocks and the 5632 free blocks right after the catalog, where a growing
+    catalog would go; catalog: 19712 nodes of 8 KiB, 1353 free).
+  - Built 2026-11-17 (NOT written yet, needs the user's OK): sparse pull ~/asus-roots/read3.img
+    (8 ranges, 193947 blocks, 81 s) + read3.hash; make-root-systemapps.py: copyvol "copied 5575
+    dirs, 3840 files, 0 links; kept 0; failed 0", owner 0:80, executables 0755 (Weather,
+    WeatherWidget, MobileCal checked), AppPlaceholders empty, 32 placeholders + both csstore
+    in /private/var/asus-off; fsck -n: only "Volume header needs minor repair".
+    ../asus-rootfix-systemapps-v1: 126544 blocks (494 MiB) in 612 runs = 2 volume headers +
+    4 bitmap + 1047 catalog (the catalog did not grow) + 125491 app blocks in
+    4816921..4943974; nothing else. Boot image 0124 built for after the write (kernel
+    43434294917, sha256 98aa59b6..., ASUS_REBOOT=900, asusshot=60, script at 420 s: two
+    wake/unlock rounds then a left swipe to page 2; scratchpad run0124.sh).
+  - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
+    Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
     launchd lines), add them to EXCLUDE and redo the patch the same way (sparse pull with
     --replace, make-root-jobs). Then the time zone (tzlinkd) and Europe/Vilnius.
