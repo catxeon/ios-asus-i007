@@ -1107,6 +1107,15 @@ minutes from power-on to the lock screen.**
     CFFIXED_USER_HOME (as topaz 0936, darwin-redwood), ENOENT when it has none (daemons
     unchanged). Kernel CI **44202809873** (identity + container path; 44201237703 with the
     identity alone was cancelled).
+  - **lskdd** (505 spawns in 0132): launchd "Successfully spawned lskdd[#] because xpc event"
+    -> "service inactive: com.apple.lskdd" each time; lskdd logs nothing (20 MB, obfuscated:
+    Apple Key Services CRL, links MobileActivation). make-root-jobs.py EXCLUDE +=
+    com.apple.lskdd. **Prepared, NOT written:** ../asus-rootfix-jobs-full-v4 = the root's
+    launchd.plist (783885 bytes, sha256 d450ed4e..., read over adb from blocks 10429..10620)
+    without the job /System/Library/LaunchDaemons/com.apple.lskdd.plist: 508 -> 507 jobs,
+    783567 bytes (sha256 ee20db52...), binary plist, in place (hfs-replace-inplace.py --phone
+    --expect-old-sha256), catalog node 18414, 194 blocks. The write was refused by the
+    session's safety check; it needs the user's explicit OK.
   - Next: boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
     speech AUs not crashing; watch for new trouble from the iPhone class (CommCenter/telephony,
     Face ID services).

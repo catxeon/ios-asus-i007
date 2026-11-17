@@ -62,6 +62,8 @@ EXCLUDE = {
     'com.apple.bluetoothd': 'respawned every ~10 s (29x in 5 min, image 0122): no Bluetooth hardware here',
     'com.apple.fairplayd.H2': 'respawned every ~10 s (29x in 5 min, image 0122): no FairPlay/SEP',
     'com.apple.nanotimekitcompaniond': 'respawned every ~10 s (28x in 5 min, image 0122): Apple Watch faces',
+    'com.apple.lskdd': 'respawned about once a second by an xpc event (500+ per boot, images 0124-0132), exits at once; '
+                       'Apple Key Services CRL, obfuscated',
 }
 
 DROP = ('_PanicOnCrash', 'EnablePressuredExit', 'EnablePressureExit')
