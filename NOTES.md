@@ -844,6 +844,32 @@ minutes from power-on to the lock screen.**
     Read-only check passed 2026-11-17 13:28 (phone vs old.hash: all 126544 blocks match;
     backup.bin 518324224 bytes saved; 2 min, after the blockpatch fix 369432f).
     Undo after a write: asus-iosroot-blockpatch.py ../asus-rootfix-systemapps-v1 --restore.
+  - **Written** after the user's "Да, записывай": 2026-11-17 19:24:58-19:29:19, "after write vs
+    new.hash: all 126544 blocks match". (A first attempt at 19:03 hung before writing anything:
+    the adb server was not running, the first captured adb call started it and the server kept
+    the pipes open; both tools now run `adb start-server` on its own first, commit d7904a8.)
+  - iOS 0124 (boot image 0124 above): the first boot with the apps in /Applications.
+    **THE APPS ARE THERE** (19:30:02 boot sent, Android back after 941 s, root clean before and
+    after; ../phone-0124, sheet-0124.png). 460 s shot after unlock = the stock iOS home screen:
+    FaceTime, Calendar (live date "TUE 17"), Photos, Mail, Notes, Reminders, Clock (live
+    hands), News, TV, Podcasts, App Store, Maps, Health, Wallet, Settings + dock. lsd rebuilt
+    its database (new csstore 5685248 / 6209536 bytes; it holds com.apple.widgetkit-extension
+    30x, com.apple.weather.widget, com.apple.mobilecal.CalendarWidgetExtension,
+    PhotosReliveWidget). installd only logged "Reboot detected", 0 containerized items.
+  - **Widgets still "Waiting..."**: chronod's /private/var/mobile/Library/chronod/chrono.sql
+    (with -wal) has ExtensionMetadata 0 rows, Descriptors 0, WidgetMetadata 0, WidgetConfigs 2
+    (LockScreen 1118 bytes, SpringBoard-Homescreen 7392 bytes): chronod knows NO widget
+    extension at all (not even Photos'/Batteries', which were always in /Applications), so it
+    launches none (no widget extension spawned in 0122/0124). The snapshot cache has an old
+    CalendarUpNextWidget systemSmall dark snapshot from 0123 (2203 bytes). AKS answers lock
+    state 0x4 (unlocked since boot). com.apple.chronod.plist: migrationState systemVersion
+    20H392, displaySize 375x812 @3, en_US. Cause not known yet.
+  - NEW respawn loop in 0124: **lskdd** (com.apple.lskdd, Apple Key Services CRL, ThrottleInterval
+    0) spawned 440x, from the unlock at 466 s to the end (~1/s); 0 times in 0122/0123. Caller
+    unknown (no unified log parser). Candidate for EXCLUDE.
+  - iOS 0125 (kernel 43434294917, same root, `asussample=chronod asussampleevery=120`, two
+    wake rounds at 420 s and ~730 s): does chronod ingest the extensions on the second boot,
+    and where do its threads sit.
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
