@@ -341,7 +341,7 @@
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
 --- /dev/null
 +++ b/bsd/kern/asus_userland.c
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,337 @@
 +/*
 + * ASUS I007 userland services (optional profile --userland).
 + *
@@ -371,6 +371,7 @@
 +#include <sys/ubc_internal.h>
 +#include <sys/vnode.h>
 +#include <sys/priv.h>
++#include <libkern/OSAtomic.h>
 +
 +static uint64_t asus_sandbox_seen;
 +
@@ -411,8 +412,67 @@
 +	return EPERM;
 +}
 +
++/*
++ * Sandbox extensions (libsystem_sandbox, iOS 16.7). Issue, op 5: { u64 class (user
++ * string), type (0 file, 3 generic, ...), path or name, flags, token buffer (0x800 bytes,
++ * the library mallocs it), pid, u32 }; the kernel writes the token string there and the
++ * library returns the buffer. Consume, op 6: { u64 token, its length + 1, user pointer to
++ * an i64 handle }; release (op 7, handle) and the rest succeed by default. Nothing is
++ * enforced here, so a token is only an opaque string: what matters is that issuing works.
++ * tccd grants kTCCServicePhotos to assetsd by entitlement but replied "Failed to issue
++ * Sandbox Extension" (kTCCErrorDomain 6) while op 5 failed with ENOENT, and assetsd threw
++ * "assetsd requires TCCPhotosService access" (84 crashes per boot, image 0129).
++ */
++static int64_t asus_sandbox_ext_issued, asus_sandbox_ext_consumed;
++
 +static int
-+asus_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
++asus_sandbox_extension_issue(user_addr_t arg)
++{
++	uint64_t a[7];
++	char cls[96], token[160];
++	size_t done;
++	int64_t n;
++	int error = copyin(arg, a, sizeof(a));
++
++	if (error != 0) {
++		return error;
++	}
++	if (a[4] == 0) {
++		return EINVAL;
++	}
++	cls[0] = '\0';
++	if (a[0] == 0 || copyinstr((user_addr_t)a[0], cls, sizeof(cls), &done) != 0) {
++		strlcpy(cls, "?", sizeof(cls));
++	}
++	n = OSIncrementAtomic64(&asus_sandbox_ext_issued) + 1;
++	snprintf(token, sizeof(token), "%016llx;00;asus;%llu;%s", (unsigned long long)n, a[1], cls);
++	if (n <= 32) {
++		char name[32];
++		proc_selfname(name, sizeof(name));
++		printf("ASUS Sandbox: %s issues extension %s (type %llu)\n", name, cls, a[1]);
++	}
++	return copyout(token, (user_addr_t)a[4], strlen(token) + 1);
++}
++
++static int
++asus_sandbox_extension_consume(user_addr_t arg)
++{
++	uint64_t a[3];
++	int64_t handle;
++	int error = copyin(arg, a, sizeof(a));
++
++	if (error != 0) {
++		return error;
++	}
++	if (a[2] == 0) {
++		return EINVAL;
++	}
++	handle = OSIncrementAtomic64(&asus_sandbox_ext_consumed) + 1;
++	return copyout(&handle, (user_addr_t)a[2], sizeof(handle));
++}
++
++static int
++asus_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
 +{
 +	if (call >= 0 && call < 64 && !(asus_sandbox_seen & (1ULL << call))) {
 +		char name[32];
@@ -421,9 +481,11 @@
 +		printf("ASUS Sandbox: %s op %d\n", name, call);
 +	}
 +	switch (call) {
-+	case 4:         /* container path (audit token / pid) */
 +	case 5:         /* extension issue */
++		return asus_sandbox_extension_issue(arg);
 +	case 6:         /* extension consume */
++		return asus_sandbox_extension_consume(arg);
++	case 4:         /* container path (audit token / pid) */
 +	case 0x43:      /* container expected */
 +		return ENOENT;
 +	default:

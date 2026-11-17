@@ -1572,7 +1572,7 @@ diff --git a/bsd/kern/asus_userland.c b/bsd/kern/asus_userland.c
  #include <sys/codesign.h>
  #include <sys/mount.h>
  #include <sys/ubc_internal.h>
-@@ -253,6 +254,67 @@
+@@ -315,6 +316,67 @@
  	.mpc_name = "ASUS ENTITLEMENTS",
  	.mpc_fullname = "ASUS XML entitlements from code signatures",
  	.mpc_ops = &asus_entitlements_ops,
@@ -1640,7 +1640,7 @@ diff --git a/bsd/kern/asus_userland.c b/bsd/kern/asus_userland.c
  };
  
  void asus_userland_register(void);
-@@ -271,5 +333,11 @@
+@@ -333,5 +395,11 @@
  		error = mac_policy_register(&asus_trust_conf, &trust_handle, NULL);
  		printf("ASUS TRUST: policy registration %d\n", error);
  	}
