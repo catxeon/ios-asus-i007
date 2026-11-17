@@ -54,13 +54,13 @@ def runs_of(blocks):
 
 
 def read_blocks(runs):
-    out = b''
+    out = bytearray()
     for start, n in runs:
         part = adb('exec-out', f"su -c 'dd if={PART} bs={BS} skip={start} count={n} 2>/dev/null'")
         if len(part) != n * BS:
             sys.exit(f'short read at block {start}: {len(part)} bytes')
         out += part
-    return out
+    return bytes(out)
 
 
 def verify(data, blocks, hashes, what):
@@ -112,8 +112,10 @@ def main():
     payload = os.path.join(d, 'payload.bin')
     assert os.path.getsize(payload) == len(blocks) * BS
     assert len(old) == len(new) == len(blocks) * 16 and blocks[-1] < PART_BYTES // BS - 2048
+    data = open(payload, 'rb').read()       # once: re-reading it per block took > 25 min for 494 MiB
     for i in range(len(blocks)):
-        assert h(open(payload, 'rb').read()[i * BS:(i + 1) * BS]) == new[i * 16:i * 16 + 16]
+        assert h(data[i * BS:(i + 1) * BS]) == new[i * 16:i * 16 + 16]
+    del data
     runs = runs_of(blocks)
     print(f'{len(blocks)} blocks in {len(runs)} runs ({len(blocks) * BS // 1024} KiB)')
 
