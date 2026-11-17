@@ -341,7 +341,7 @@
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
 --- /dev/null
 +++ b/bsd/kern/asus_userland.c
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,275 @@
 +/*
 + * ASUS I007 userland services (optional profile --userland).
 + *
@@ -499,6 +499,31 @@
 +		int c = memcmp(entry, cdhash, CS_CDHASH_LEN);
 +		if (c == 0) {
 +			return entry[CS_CDHASH_LEN] == hash_type;
++		}
++		if (c < 0) {
++			lo = mid + 1;
++		} else {
++			hi = mid;
++		}
++	}
++	return false;
++}
++
++/*
++ * The same trust cache, any hash type, for AppleMobileFileIntegrity's user client
++ * (iokit/Kernel/arm/AsusMobileFileIntegrity.cpp): ExtensionFoundation asks it whether the
++ * detached signature of /System/Library/xpc/extensions.plist is in the trust cache.
++ */
++bool asus_trust_cache_has(const uint8_t *cdhash);
++bool
++asus_trust_cache_has(const uint8_t *cdhash)
++{
++	uint32_t lo = 0, hi = asus_tc_count;
++	while (lo < hi) {
++		uint32_t mid = lo + (hi - lo) / 2;
++		int c = memcmp(asus_tc_entries + 24ULL * mid, cdhash, CS_CDHASH_LEN);
++		if (c == 0) {
++			return true;
 +		}
 +		if (c < 0) {
 +			lo = mid + 1;
@@ -781,10 +806,11 @@
 +#endif /* SWEET */
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
-@@ -10,2 +10,4 @@
+@@ -10,2 +10,5 @@
  iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
 +iokit/Kernel/arm/SweetEntitlements.cpp                          optional iokitcpp
 +iokit/Kernel/arm/SweetKeyStore.cpp                              optional iokitcpp
++iokit/Kernel/arm/AsusMobileFileIntegrity.cpp                    optional iokitcpp
  
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetKeyStore.cpp
@@ -1057,13 +1083,131 @@
 +	return ret;
 +}
 +#endif /* SWEET */
+--- /dev/null
++++ b/iokit/Kernel/arm/AsusMobileFileIntegrity.cpp
+@@ -0,0 +1,110 @@
++/*
++ * ASUS I007: an IOService named AppleMobileFileIntegrity, as the AMFI kext publishes on a
++ * device (topaz has one in xnu/patches/0151, where every cdhash is trusted).
++ *
++ * ExtensionFoundation reads the extension point cache /System/Library/xpc/extensions.plist
++ * (+[NSDictionary _EX_dictionaryWithSignedURL:error:]) only after asking AMFI's user client
++ * whether the cdhash of its detached signature (extensions.plist.sig) is in the trust cache:
++ * IOServiceGetMatchingService(IOServiceMatching("AppleMobileFileIntegrity")), IOServiceOpen
++ * type 0, IOConnectCallMethod selector 6 with one scalar (1) and the 20-byte cdhash as the
++ * structure; kIOReturnSuccess means trusted, kIOReturnNotFound "not in trust cache". Without
++ * the service lsd logs "Failed to read extension point cache ... Unable to find AMFI" and,
++ * while it builds the LaunchServices database, MobileInstallation finds no extension point
++ * ("Failed to fetch extension cache entry for extension point with identifier
++ * com.apple.widgetkit-extension") and drops every extension of those points; chronod then
++ * calls each widget "restricted" (images 0124-0127: home screen widgets stay "Waiting...").
++ *
++ * Selector 6 with a 20-byte structure is answered from the static trust cache loaded at boot
++ * (asus_trust_cache_has, bsd/kern/asus_userland.c). Other selectors succeed with zeroed
++ * outputs, as on topaz; each is logged the first time, and the first 32 queries are logged.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOKitKeys.h>
++#include <IOKit/IOLib.h>
++#include <sys/proc.h>
++
++extern "C" bool asus_trust_cache_has(const uint8_t *cdhash);    /* bsd/kern/asus_userland.c */
++
++enum {
++	kAMFISelectorCdhashInTrustCache = 6,
++	kAMFICdhashLength               = 20,
++};
++
++class AppleMobileFileIntegrity : public IOService
++{
++	OSDeclareDefaultStructors(AppleMobileFileIntegrity);
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++
++class AppleMobileFileIntegrityUserClient : public IOUserClient
++{
++	OSDeclareDefaultStructors(AppleMobileFileIntegrityUserClient);
++public:
++	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleMobileFileIntegrity, IOService);
++OSDefineMetaClassAndStructors(AppleMobileFileIntegrityUserClient, IOUserClient);
++
++bool
++AppleMobileFileIntegrity::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setProperty(kIOUserClientClassKey, "AppleMobileFileIntegrityUserClient");
++	registerService();
++	IOLog("ASUS AMFI: AppleMobileFileIntegrity service published (trust cache queries)\n");
++	return true;
++}
++
++IOReturn
++AppleMobileFileIntegrityUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    IOExternalMethodDispatch *dispatch __unused, OSObject *target __unused, void *reference __unused)
++{
++	static uint64_t seen;
++	static uint32_t queries;
++	char name[32];
++
++	proc_selfname(name, sizeof(name));
++	if (selector == kAMFISelectorCdhashInTrustCache && args->structureInputDescriptor == NULL &&
++	    args->structureInput != NULL && args->structureInputSize == kAMFICdhashLength) {
++		const uint8_t *h = (const uint8_t *)args->structureInput;
++		IOReturn ret = asus_trust_cache_has(h) ? kIOReturnSuccess : kIOReturnNotFound;
++
++		if (queries < 32) {
++			queries++;
++			IOLog("ASUS AMFI: %s asks whether cdhash %02x%02x%02x%02x... (scalar %llu) is in the trust cache: %s\n",
++			    name, h[0], h[1], h[2], h[3], args->scalarInputCount ? args->scalarInput[0] : 0ULL,
++			    ret == kIOReturnSuccess ? "yes" : "no");
++		}
++		return ret;
++	}
++	if (selector < 64 && !(seen & (1ULL << selector))) {
++		seen |= 1ULL << selector;
++		IOLog("ASUS AMFI: user client selector %u from %s (%u scalars, %u bytes in): success\n", selector, name,
++		    args->scalarInputCount, args->structureInputSize);
++	}
++	for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
++		args->scalarOutput[i] = 0;
++	}
++	if (args->structureOutputDescriptor == NULL && args->structureOutput != NULL) {
++		bzero(args->structureOutput, args->structureOutputSize);
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn
++AppleMobileFileIntegrityUserClient::clientClose(void)
++{
++	terminate();
++	return kIOReturnSuccess;
++}
++#endif /* SWEET */
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -38,2 +38,7 @@
+@@ -38,2 +38,12 @@
      "   {"
 +    "     'IOClass'         = AppleKeyStore;"
 +    "     'IOProviderClass' = IOResources;"
 +    "     'IOMatchCategory' = AppleKeyStore;"
++    "   },"
++    "   {"
++    "     'IOClass'         = AppleMobileFileIntegrity;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = AppleMobileFileIntegrity;"
 +    "   },"
 +    "   {"
      "     'IOClass'         = SweetPlatformExpert;"
