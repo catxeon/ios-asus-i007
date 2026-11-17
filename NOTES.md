@@ -935,6 +935,24 @@ minutes from power-on to the lock screen.**
     legacy points (com.apple.widgetkit-extension), LSApplicationExtensionRecord requireValid
     works, chronod stops calling the widgets restricted. Risk: if lsd cannot verify the
     signature (AMFI trust cache query, kernel 43434294917 has call 0x5f), it falls back as now.
+  - **Written** after the user's "Да, записывай": 2026-11-17 21:24:07-21:24:11, "after write
+    vs new.hash: all 40 blocks match". Undo: blockpatch ../asus-rootfix-extensionsplist-v1
+    --restore. iOS 0126 (kernel 43434294917, sha256 5cefd8a6..., as 0125 without sampling)
+    booted right after.
+  - **0126 result** (21:24:58 boot sent, Android back after 941 s, root clean): the extension
+    point registration is FIXED: lsd logs "Registering extension points" -> "Done
+    reregistering extension points" with no "Failed to create node" (134 per boot before) and
+    no "Failed to load or create cache". But no AMFI trust cache query reached the kernel, no
+    widget extension spawned, lskdd 532x, chronod still "Ignoring restricted extension" 388x,
+    chrono.sql still ExtensionMetadata/Descriptors 0. Per boot (unified log boot_uuid):
+    0124 BC7C18AC (LS seeded: 516 "registering app extension", 500 "haven't yet registered
+    extension point"), 0125 B6C2F5DA (134 framework failures), 0126 4E599D8A (none). So the
+    extension RECORDS in the csstore are still the ones registered in 0124 without their
+    points; lsd does not re-register system apps on a normal boot.
+  - **Prepared, read-only check passed, NOT written (user's OK):** ../asus-rootfix-lsrebuild-v2:
+    both csstore (5685248 / 6209536 bytes, from 0124) moved to /private/var/asus-off/ls-0126
+    (libdmg mv, catalog only); 15 blocks in 10 runs; fsck -n only the usual; phone vs old.hash
+    all 15 match, backup saved. Next boot rebuilds the LS database with the points registered.
   - The OS image stays mounted until the boot after this patch shows the result; delete it then.
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
