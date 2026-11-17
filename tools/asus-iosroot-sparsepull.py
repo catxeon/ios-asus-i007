@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pull only what an offline edit of the iOS root needs, into a sparse image of the whole volume.
 
-  asus-iosroot-sparsepull.py IMAGE [--file PATH ...] [--replace PATH NEWSIZE]
+  asus-iosroot-sparsepull.py IMAGE [--file PATH ...] [--tree FOLDER ...] [--replace PATH NEWSIZE]
                              [--free-range START COUNT] [--adb ADB]
 
 Run in WSL (adb.exe through interop; IMAGE on ext4, where the holes cost nothing). The
@@ -13,7 +13,10 @@ dd, read only):
 - block 0 (volume header), the allocation, extents, catalog, attributes and startup files
   (the extents in the volume header; files with overflow extents are refused), the journal
   info block and the journal, and the last block (alternate volume header);
-- with --file PATH: that file's data (one extent or several, from its catalog record);
+- with --file PATH: that file's data (its catalog record's extents and any in the extents
+  overflow file);
+- with --tree FOLDER: the data of every file below FOLDER (e.g. /private/var/db/diagnostics
+  and /private/var/db/uuidtext, the unified logs, for `hfsplus IMAGE extractall`);
 - with --replace PATH NEWSIZE (implies --file PATH): the blocks tools/hfs-add-contiguous.py
   will put a NEWSIZE-byte file into once PATH is removed: its first-fit free run of
   ceil(NEWSIZE/4096) + 256 blocks in the bitmap with PATH's blocks freed, plus 256 blocks;
@@ -73,45 +76,86 @@ def records(node, size):
     return [(offs[i], offs[i + 1]) for i in range(nrec)]
 
 
-def catalog_lookup(cat, path):
-    node_size = struct.unpack('>H', cat[32:34])[0]
-    n = struct.unpack('>I', cat[24:28])[0]
-    index = {}
+def leaves(tree):
+    """Records (key, data) of every leaf node of an HFS+ B-tree file, in order."""
+    node_size = struct.unpack('>H', tree[32:34])[0]
+    n = struct.unpack('>I', tree[24:28])[0]
     while n:
-        node = cat[n * node_size:(n + 1) * node_size]
-        flink = struct.unpack('>I', node[0:4])[0]
+        node = tree[n * node_size:(n + 1) * node_size]
         if struct.unpack('>b', node[8:9])[0] != -1:
-            sys.exit(f'catalog node {n} is not a leaf')
+            sys.exit(f'B-tree node {n} is not a leaf')
         for lo, hi in records(node, node_size):
-            klen, parent, nlen = struct.unpack('>HIH', node[lo:lo + 8])
-            name = node[lo + 8:lo + 8 + 2 * nlen].decode('utf-16-be', errors='replace')
-            index[(parent, name)] = node[lo + 2 + klen:hi]
-        n = flink
-    parent, data = 2, None
-    parts = [p for p in path.split('/') if p]
-    for i, part in enumerate(parts):
-        data = index.get((parent, part))
-        if data is None:
-            sys.exit(f'{path}: {part} not found')
-        rtype = struct.unpack('>h', data[:2])[0]
-        if i < len(parts) - 1:
-            if rtype != 1:
-                sys.exit(f'{path}: {part} is not a folder')
-            parent = struct.unpack('>I', data[8:12])[0]
-    if struct.unpack('>h', data[:2])[0] != 2:
-        sys.exit(f'{path} is not a file')
-    lsize, _, ftotal = struct.unpack('>QII', data[88:104])
-    ext = [struct.unpack('>II', data[104 + 8 * i:112 + 8 * i]) for i in range(8)]
-    ext = [(s, c) for s, c in ext if c]
-    if sum(c for _, c in ext) != ftotal:
-        sys.exit(f'{path}: extents in the overflow file: not handled')
-    return lsize, ext
+            klen = struct.unpack('>H', node[lo:lo + 2])[0]
+            yield node[lo + 2:lo + 2 + klen], node[lo + 2 + klen:hi]
+        n = struct.unpack('>I', node[0:4])[0]
+
+
+class Catalog:
+    """The catalog (one pass over its leaves) and the data fork extents in the overflow file."""
+
+    def __init__(self, cat, extents_tree):
+        self.index, self.children = {}, {}
+        for key, data in leaves(cat):
+            parent, nlen = struct.unpack('>IH', key[0:6])
+            name = key[6:6 + 2 * nlen].decode('utf-16-be', errors='replace')
+            if struct.unpack('>h', data[:2])[0] in (1, 2):      # folder, file (not threads)
+                self.index[(parent, name)] = data
+                self.children.setdefault(parent, []).append(name)
+        self.overflow = {}
+        for key, data in leaves(extents_tree):
+            fork_type, file_id, start = struct.unpack('>BxII', key[:10])
+            if fork_type == 0:
+                ext = [struct.unpack('>II', data[8 * i:8 * i + 8]) for i in range(8)]
+                self.overflow.setdefault(file_id, []).append((start, [(s, c) for s, c in ext if c]))
+
+    def lookup(self, path):
+        parent, data = 2, None
+        parts = [p for p in path.split('/') if p]
+        for i, part in enumerate(parts):
+            data = self.index.get((parent, part))
+            if data is None:
+                sys.exit(f'{path}: {part} not found')
+            if i < len(parts) - 1:
+                if struct.unpack('>h', data[:2])[0] != 1:
+                    sys.exit(f'{path}: {part} is not a folder')
+                parent = struct.unpack('>I', data[8:12])[0]
+        return data
+
+    def extents(self, path, data):
+        if struct.unpack('>h', data[:2])[0] != 2:
+            sys.exit(f'{path} is not a file')
+        file_id = struct.unpack('>I', data[8:12])[0]
+        lsize, _, ftotal = struct.unpack('>QII', data[88:104])
+        ext = [struct.unpack('>II', data[104 + 8 * i:112 + 8 * i]) for i in range(8)]
+        ext = [(s, c) for s, c in ext if c]
+        for _, more in sorted(self.overflow.get(file_id, [])):
+            ext += more
+        if sum(c for _, c in ext) != ftotal:
+            sys.exit(f'{path}: extents add up to {sum(c for _, c in ext)} blocks, not {ftotal}')
+        return lsize, ext
+
+    def files_under(self, path):
+        """(path, record) of every file below the folder PATH."""
+        data = self.lookup(path)
+        if struct.unpack('>h', data[:2])[0] != 1:
+            sys.exit(f'{path} is not a folder')
+        out, todo = [], [(path.rstrip('/'), struct.unpack('>I', data[8:12])[0])]
+        while todo:
+            base, folder = todo.pop()
+            for name in self.children.get(folder, []):
+                rec = self.index[(folder, name)]
+                if struct.unpack('>h', rec[:2])[0] == 1:
+                    todo.append((f'{base}/{name}', struct.unpack('>I', rec[8:12])[0]))
+                else:
+                    out.append((f'{base}/{name}', rec))
+        return sorted(out)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('image')
     ap.add_argument('--file', action='append', default=[])
+    ap.add_argument('--tree', action='append', default=[], metavar='FOLDER')
     ap.add_argument('--replace', nargs=2, metavar=('PATH', 'NEWSIZE'))
     ap.add_argument('--free-range', nargs=2, type=int, metavar=('START', 'COUNT'), action='append', default=[])
     ap.add_argument('--adb', default='adb.exe')
@@ -150,13 +194,22 @@ def main():
 
     cat_size, cat_ext = special['catalog']
     cat = b''.join(dev.blocks(s, c) for s, c in cat_ext)[:cat_size]
+    ext_size, ext_ext = special['extents']
+    catalog = Catalog(cat, b''.join(dev.blocks(s, c) for s, c in ext_ext)[:ext_size])
     files = list(a.file) + ([a.replace[0]] if a.replace else [])
     found = {}
     for path in files:
-        lsize, ext = catalog_lookup(cat, path)
+        lsize, ext = catalog.extents(path, catalog.lookup(path))
         found[path] = ext
         ranges += ext
         print(f'{path}: {lsize} bytes in {ext}')
+    for top in a.tree:
+        n = size = nblocks = 0
+        for path, rec in catalog.files_under(top):
+            lsize, ext = catalog.extents(path, rec)
+            ranges += ext
+            n, size, nblocks = n + 1, size + lsize, nblocks + sum(c for _, c in ext)
+        print(f'{top}: {n} files, {size} bytes in {nblocks} blocks')
     if a.replace:
         path, newsize = a.replace[0], int(a.replace[1])
         size, ext = special['allocation']

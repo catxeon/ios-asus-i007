@@ -879,6 +879,35 @@ minutes from power-on to the lock screen.**
     extension discovery, lskdd's caller): /private/var/db/diagnostics + /private/var/db/uuidtext
     on the root; candidate reader: mandiant/macos-UnifiedLogs unifiedlog_iterator v0.7.0
     (x86_64-unknown-linux-gnu, 1582297 bytes, GitHub release) -- download needs the user's OK.
+  - **Unified logs readable now** (user OK 2026-11-17): ~/dl/unifiedlogs-v0.7.0/unifiedlog_iterator
+    (sha256 7192a187... = the release's .sha256). Pull: `asus-iosroot-sparsepull.py IMG --tree
+    /private/var/db/diagnostics --tree /private/var/db/uuidtext` (46 + 436 files, 216 MB, 100 s;
+    --tree and overflow extents added), `hfsplus IMG extractall FOLDER DEST` for both into one
+    logarchive dir, then `unifiedlog_iterator -m log-archive -i DIR -o all.jsonl` (34 s, 4.47M
+    entries, 4.3 GB: filter and delete it, WSL's vhdx is on C:). mediaserverd alone 866k lines.
+    The `time` field of 0125's entries did not map to wall time (all ~18 s after my boot mark).
+  - **Why the widgets wait (from the logs + ChronoKit/CoreServices/ExtensionFoundation in the
+    cache):** chronod logs "Ignoring restricted extension com.apple.weather.widget" (and
+    Calendar, News, Maps, Notes, Stocks, Tips, ScreenTime, PhotosRelive): ChronoKit +0x1ece0
+    does `[[LSApplicationExtensionRecord alloc] initWithBundleIdentifier:requireValid:YES
+    error:]` and calls a nil result "restricted" (a separate static set holds only
+    com.apple.tv.TVWidgetExtension). LS gives no valid record because lsd never registered the
+    legacy extension points: every lsd start logs "Registering extension points", then 134x
+    "Failed to create node for framework (null): -50 aURL" + "Error -10814 registering extension
+    points inside framework (null)", then "Registering extension X but haven't yet registered
+    extension point Y" (856x). Only the 6 /System/Library/ExtensionKit/ExtensionPoints/*.appexpt
+    register ("Registering extension point: ... platform: 2", 6 per boot). ExtensionFoundation
+    (+[EXEnumerator extensionPointDefinitionEnumerator], 0x31888) first wants the extension
+    point CACHE: EXEnumeratorConfig (rootURL "/") xpcExtensionPointsCache =
+    **/System/Library/xpc/extensions.plist** (xpcExtensionsCache = launchd.plist); it is
+    exempt from the signature check (+0x32340; launchd.plist would need launchd.plist.sig,
+    feature flag ExtensionKit/enforce_xpc_cache_code_signing = Enabled in this build).
+    **Our root has no extensions.plist** (/System/Library/xpc holds only launchd.plist), so
+    it logs "Failed to load or create cache extension/extension point info." and falls back
+    to the live scan (EXFrameworkScanner), whose legacy (NSExtension) definitions come without
+    EXDeclaringPath -> url nil -> the errors above. Not verified: that the stock 20H392 OS
+    image has /System/Library/xpc/extensions.plist (the OS dmg was deleted; nothing on disk).
+  - lskdd's caller: not found yet (no lskdd lines in lsd/chronod logs; full-log search pending).
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
     Android was still booting and hung in `adb exec-out su -c dd` for 5 h.
   - Next: boot ~10 min with asusshot, read which daemons crash/loop (CRASH/exits,
