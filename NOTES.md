@@ -1070,6 +1070,23 @@ minutes from power-on to the lock screen.**
     (5799936 / 6488064, from 0129) to /private/var/asus-off/ls-0131 so lsd forgets it; 17
     blocks, fsck -n only the usual; written 2026-11-18 01:13, verified. Undo: --restore.
     Boot 0132 (kernel 44181165625, image f14d6650...) right after.
+  - **0132 result** (01:14:01 sent, back after 941 s, root clean, log boot F5A3288D): **no
+    crash loops left from posters**: AegirPoster gone, PosterBoard 1 crash in the whole boot
+    (not a loop): "-[__NSPlaceholderDictionary initWithObjects:forKeys:count:]: attempt to
+    insert nil object from objects[1]" in -[PBFHomeScreenPreviewImageBuilder _imageForView:]
+    (PosterBoard +0x718fc: MTLDevice newCommandQueue -> nil, CARenderer rendererWithMTLTexture
+    options dictionary): the home screen preview image needs Metal; not fixable without a
+    Metal device. assetsd 0. Home screen (shot 018): Notes widget ("No Notes") + Calendar
+    widget ("WEDNESDAY 18") on top, icons as before; shot 001 (157 s) caught SpringBoard
+    re-laying out the pages after the LS rebuild. Sandbox extensions issued: tccd
+    AddressBook 12x / MediaLibrary 1x, extensionkitservice pluginkit.plugin-service (type 1)
+    11x, cloudd 3x, iconservicesagent 2x, PosterBoard 2x, mobileassetd 1x.
+  - Still crashing (not posters, left alone): SiriTTSSynthesizerAU / MacinTalkAUSP /
+    KonaSynthesizer 18x each, sig6 from an exception in -[PKService checkEnvironment:]
+    (PlugInKit) - the speech AU extensions; configd sig9 1x; lskdd 505 spawns.
+  - Cleanup 2026-11-18: stock OS image deleted (WSL ~/ipsw, /mnt/os16 unmounted), log dumps
+    ~/zc/0125-0130 deleted (~/zc/0132 kept: logarchive, sel.jsonl, poster.jsonl); C: had 13 GB
+    free (WSL's vhdx does not shrink by itself).
   - Later (not done): give the ASUS kernel the iPhone identity (hw.product iPhone10,3,
     hw.target D22AP like sweet 0059) instead of the Collections~ipod.plist workaround; Settings
     shows "iPod touch" for the same reason. Bigger change (MobileGestalt cache must be cleared).
