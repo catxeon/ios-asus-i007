@@ -998,7 +998,18 @@ minutes from power-on to the lock screen.**
     time, lskdd logs nothing itself; its job has LaunchEvents com.apple.notifyd.matching
     (com.apple.MobileAsset.AppleKeyServicesCRL.new-asset-installed) + xpc.activity (dasd
     cancelled the activity once). Guess: it exits without consuming the event; EXCLUDE candidate.
-  - Next: with that kernel, write lsrebuild-v3 (needs the user's OK) and boot; expect "ASUS AMFI: lsd asks
+  - **Kernel 44167645901 OK** (success in 21 min; ../asus-ci-44167645901, kernel sha256
+    d49a921a...). **0128** (that kernel, root as after 0127, image fd8be416..., 23:39:03 boot
+    sent, Android back after 941 s, root clean, unified log boot 576625EF): kernel log "ASUS
+    AMFI: AppleMobileFileIntegrity service published", "lsd asks whether cdhash d7b2a44a...
+    (scalar 1) is in the trust cache: yes" (= extensions.plist.sig), also online-auth-agent
+    selectors 9 (1 scalar) and 13 (none) answered success. lsd: no "Unable to find AMFI",
+    "Registering extension points" -> 124x "Registering extension point: ..." (6 before) ->
+    "Done reregistering"; 124x "Failed to fetch app bundle unit: # for extension point"
+    (not looked at). chronod still "Ignoring restricted extension" (weather 77, calendar 77,
+    ...), chrono.sql ExtensionMetadata/Descriptors 0, shots as 0127: the 0127 database has no
+    widget extensions, lsd does not rescan system apps on a normal boot. lskdd 548x.
+  - Next: write lsrebuild-v3 (needs the user's OK) and boot with kernel 44167645901; expect "ASUS AMFI: lsd asks
     ... yes", no "Unable to find AMFI", widget extensions registered, chronod filling
     ExtensionMetadata. Then delete the OS image (WSL ~/ipsw, unmount /mnt/os16).
   - sparsepull now has a 10 min timeout per adb call: on 2026-11-13 a pull started while
