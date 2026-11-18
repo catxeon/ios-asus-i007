@@ -1214,6 +1214,41 @@ minutes from power-on to the lock screen.**
     - **asusiphone=1 is now the standard boot-arg** for iOS images (add it to ASUS_EXTRA_ARGS
       next to asusshot). Going back to the iPod identity (or to 3/5/7) needs the MG cache moved
       aside first.
+  - **USB NETWORK WORKS (user 2026-11-18 "USB-сеть"; image 0137, 22:49).** Commit **451ef34**:
+    xnu/asus/9999-asus-i007-usb.patch (bsd/dev/asus_usb.c; selected with --ufs, after "ufs",
+    before "userland"; generated from the scratchpad source by a one-off script, the C file is
+    the patch's new-file hunk), tools/asus-usbnet.py (PC side), prepare-asus-profile.py.
+    - Port of sweet 0072-0077 (DWC3 device mode, ep0 state machine, QSCRATCH VBUS override,
+      ifnet ue0, rx into one cluster mbuf, live log) to the SM8350, and CDC-ECM -> **CDC-NCM**
+      (NTB16, one datagram per IN NTB, any number per OUT NTB, 16 KiB) because Windows has no
+      ECM driver. Windows' own usbncm.inf matches only `USB\MS_COMP_WINNCM`, so the device has
+      class EF/02/01 + an IAD and answers string 0xEE "MSFT100" (vendor code 1) and the vendor
+      request C0 01 wIndex 4 with an Extended Compat ID "WINNCM" for interface 0. VID:PID
+      1209:0007 (pid.codes test ID). Boot-arg **asususb**: 0 (default) nothing, 1 report, 2 run;
+      asususblog=0 no live log.
+    - Hardware (Android DT): ssusb@a600000 qcom,dwc-usb3-msm (1 MiB, QSCRATCH +0xf8800),
+      dwc3 snps,dwc3 max super-speed-plus, dis_u2_susphy_quirk, dma-coherent, iommus SID 0;
+      HS PHY snps femto 0x088e3000, SS PHY QMP 0x088e8000; also ssusb@a800000 (second port).
+    - Observed (log): GDSC usb30_prim 0xf822f000 on, CBCRs master 0x221 / sleep / utmi / cfg-noc
+      / aggre all on (offsets 0xf010/0xf018/0xf01c/0xf07c/0xf080 as gcc-sm8250); **DWC_usb31
+      1.10a** (GSNPSID 0x33313130), GCTL 0x00102001 (device), DCFG 0x004808f4, ABL's event
+      buffer at 0x9bdb1000; soft reset 1 ms; QSCRATCH HS/SS_PHY_CTRL 0 -> 0x10100000 /
+      0x01000000; running at once; bus reset, connect done speed 0 (high speed), address 37,
+      descriptors, 0xEE, MS compat header, NTB parameters, alt 1, both notifications.
+    - Windows: "Ethernet 4" = **UsbNcm Host Device**, Up ~12 s after `fastboot boot`, APIPA
+      169.254.213.111 4 s later. `ping 169.254.7.2`: the first 3 "transmit failed. General
+      failure" (Windows, address not ready), then 30/30 at 32 bytes and 10/10 at 1400 bytes,
+      ~1 ms. **Live log over USB from the first second to "asusreboot=900 reached: clean
+      reboot"** (../phone-0137/usbnet-log.txt, 373 KB, 4365 lines; the UFS log has 4882).
+      ue0 at the end: rx 1288 frames in 1161 NTBs, 0 bad, tx 642 frames.
+    - iOS itself unchanged: no crash, CommCenter 2 / mediaserverd 1 spawns, shots as 0136.
+    - **Use it:** add `asususb=2` to ASUS_EXTRA_ARGS and run next to the cycle
+      `python tools/asus-usbnet.py ../phone-NNNN/usbnet-log.txt --seconds 1000 --all &` (it
+      waits for the adapter, pings, streams the log; ends when the adapter goes away). No admin
+      rights, no PC configuration. 1 ms polling thread, as sweet.
+    - Not done: internet for iOS (needs e.g. Windows ICS -> 192.168.137.x, a default route and
+      DNS for iOS: configd does not know ue0, a BSD-only ifnet); interrupts instead of polling;
+      SuperSpeed.
     - Rule: whenever asusiphone is switched on or off, move the MobileGestalt cache aside
       before the boot (it is keyed by build + UUID only, not by hw.product).
   - Next (was): boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the

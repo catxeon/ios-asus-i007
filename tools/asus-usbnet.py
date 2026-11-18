@@ -107,7 +107,11 @@ def main():
                 last_rx = time.time()
             now = time.time()
             if now - last_sent > 3:             # keepalive (and a retry before the first answer)
-                so.sendto(b'hello' if last_rx else first, (PHONE, PORT))
+                try:
+                    so.sendto(b'hello' if last_rx else first, (PHONE, PORT))
+                except OSError as e:            # the adapter went away: the phone reset itself
+                    print('%5.0fs adapter gone (%s)' % (now - t0, e), flush=True)
+                    break
                 last_sent = now
             if last_rx and now - last_rx > 60:
                 print('%5.0fs phone silent for 60 s' % (now - t0), flush=True)
