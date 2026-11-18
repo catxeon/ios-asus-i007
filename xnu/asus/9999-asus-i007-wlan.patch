@@ -37,7 +37,7 @@ diff --git a/bsd/dev/asus_wlan.c b/bsd/dev/asus_wlan.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/asus_wlan.c
-@@ -0,0 +1,874 @@
+@@ -0,0 +1,911 @@
 +/*
 + * ASUS I007: Wi-Fi, stage A - power the QCA6490 and bring up its PCIe link.
 + *
@@ -554,6 +554,45 @@ new file mode 100644
 +	return buf;
 +}
 +
++/*
++ * DMA memory for the chip: physically contiguous and below 4 GiB. The QCA6490 is a
++ * 32-bit DMA master (ath11k: dma mask 32): image 0140 gave PBL a buffer at 0x1_4fa5c000
++ * and PBL recorded 0x4fa5c000 / 0x1 / 0x80000 in BHI ERRDBG1-3, never finishing.
++ */
++static vm_offset_t
++wl_dma_alloc(vm_size_t size, uint64_t *pa)
++{
++	vm_offset_t va = 0;
++	ppnum_t max_pnum = (ppnum_t)(atop_64(0x100000000ULL) - 1);
++	if (kmem_alloc_contig(kernel_map, &va, round_page(size), PAGE_MASK, max_pnum, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		printf("ASUS WLAN: no DMA memory below 4 GiB for %#lx bytes\n", (unsigned long)size);
++		return 0;
++	}
++	*pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)va));
++	if (*pa + size > 0x100000000ULL) {
++		printf("ASUS WLAN: DMA memory at %#llx is above 4 GiB\n", *pa);
++	}
++	return va;
++}
++
++/* SMMU global and bypass-bank fault registers (after a failed DMA) */
++static void
++wl_smmu_faults(void)
++{
++	vm_offset_t s = ml_io_map(SMMU_PA, SMMU_MAP);
++	if (s == 0) {
++		return;
++	}
++	uint32_t idr1 = rd(s, 0x24);
++	uint32_t page = (idr1 & (1u << 31)) ? 0x10000 : 0x1000;
++	uint32_t cb_base = page << (((idr1 >> 28) & 7) + 1);
++	vm_offset_t cb = s + cb_base + ((idr1 & 0xff) - 1) * page;
++	printf("ASUS WLAN: SMMU sGFSR %#x sGFSYNR0 %#x sGFSYNR1 %#x sGFAR %#x%08x; bypass bank SCTLR %#x FSR %#x "
++	    "FAR %#x%08x FSYNR0 %#x\n", rd(s, 0x48), rd(s, 0x50), rd(s, 0x54), rd(s, 0x44), rd(s, 0x40),
++	    rd(cb, 0x00), rd(cb, 0x58), rd(cb, 0x64), rd(cb, 0x60), rd(cb, 0x68));
++}
++
 +#define BHI_IMGADDR_LOW         0x08
 +#define BHI_IMGADDR_HIGH        0x0c
 +#define BHI_IMGSIZE             0x10
@@ -576,16 +615,13 @@ new file mode 100644
 +		return;
 +	}
 +	uint32_t n = (uint32_t)MIN(fw_len, (size_t)MHI_SBL_SIZE);
-+	vm_offset_t img = 0;
-+	if (kmem_alloc_contig(kernel_map, &img, MHI_SBL_SIZE, PAGE_MASK, 0, 0,
-+	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
-+		printf("ASUS WLAN: no DMA memory for SBL\n");
++	uint64_t pa = 0;
++	vm_offset_t img = wl_dma_alloc(MHI_SBL_SIZE, &pa);
++	if (img == 0) {
 +		kfree_data(fw, fw_len);
 +		return;
 +	}
 +	memcpy((void *)img, fw, n);
-+	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)img);
-+	uint64_t pa = ptoa_64(pn);
 +	flush_dcache64((addr64_t)pa, MHI_SBL_SIZE, TRUE);
 +	kfree_data(fw, fw_len);
 +
@@ -616,6 +652,7 @@ new file mode 100644
 +	    "ERRCODE %#x ERRDBG %#x %#x %#x\n", ms, (st >> 30) == 2 ? "image accepted" : (st >> 30) == 3 ? "IMAGE ERROR" : "no answer",
 +	    ee, rd(m, 0x48), rd(m, 0x48) & 1, (rd(m, 0x48) >> 2) & 1, rd(m, bhi + BHI_ERRCODE),
 +	    rd(m, bhi + 0x34), rd(m, bhi + 0x38), rd(m, bhi + 0x3c));
++	wl_smmu_faults();
 +}
 +
 +static void
