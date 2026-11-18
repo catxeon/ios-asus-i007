@@ -1400,19 +1400,33 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
  
  class SweetPlatformExpert : public IODTPlatformExpert {
  	OSDeclareDefaultStructors(SweetPlatformExpert);
-@@ -70,13 +71,35 @@
+@@ -70,13 +71,55 @@
  	}
  }
  
 +/*
-+ * ASUS: boot-arg asusiphone=1 gives the iOS userland the identity of the iPhone X whose
-+ * device tree nodes (/product, /buttons, display) it already gets: hw.product iPhone10,3
-+ * and hw.target D22AP (MobileGestalt ProductType / HWModelStr), hw.machine iPhone10,3 and
-+ * hw.model D22AP (bsd/kern/kern_mib.c). Without it MobileGestalt calls the unknown product
-+ * an iPod (GSDeviceName 'iPod': WallpaperKit looked for Collections~ipod.plist, Settings
-+ * says "iPod touch").
++ * ASUS: boot-arg asusiphone=N gives the iOS userland parts of the identity of the iPhone X
++ * whose device tree nodes (/product, /buttons, display) it already gets. Bits of N:
++ *   1  hw.product iPhone10,3 (MobileGestalt ProductType, DeviceClass 'iPhone': WallpaperKit's
++ *      Collections~iphone.plist, the Face ID style lock screen) and, in bsd/kern/kern_mib.c,
++ *      hw.machine iPhone10,3 for iOS processes;
++ *   2  hw.target D22AP (MobileGestalt HWModelStr). libTelephonyUtilDynamic picks the baseband
++ *      from it (TelephonyUtilParseHardwareModel: D22 -> Mav7) and CommCenter then waits for
++ *      AppleBaseband and aborts (69 crashes in image 0133). Without the bit HWModelStr stays
++ *      "picasso", which has no digits to parse: "unrecognized machine/model", no baseband;
++ *   4  hw.model D22AP. CMCapture and CoreMedia take the camera configuration from it (suffix
++ *      AP stripped: D22, the iPhone X cameras) and mediaserverd builds a capture graph whose
++ *      CoreImage context needs EAGL (105 crashes in 0133). Without the bit hw.model stays the
++ *      product name below.
++ * asusiphone=1 is the identity without those two; 7 is what image 0133 had. Without the
++ * boot-arg MobileGestalt calls the unknown product an iPod (GSDeviceName 'iPod': WallpaperKit
++ * looked for Collections~ipod.plist, Settings says "iPod touch"). MobileGestalt caches its
++ * answers by build only: move its cache aside whenever N changes.
 + */
++#define ASUS_PRODUCT_NAME "ASUS Smartphone for Snapdragon Insiders"
++
 +extern "C" int asus_iphone_identity(void);
++extern "C" const char *asus_product_name(void);
 +
 +extern "C" int
 +asus_iphone_identity(void)
@@ -1421,9 +1435,15 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +
 +	if (identity < 0) {
 +		int value = 0;
-+		identity = PE_parse_boot_argn("asusiphone", &value, sizeof(value)) && value != 0;
++		identity = PE_parse_boot_argn("asusiphone", &value, sizeof(value)) ? value : 0;
 +	}
 +	return identity;
++}
++
++extern "C" const char *
++asus_product_name(void)
++{
++	return ASUS_PRODUCT_NAME;
 +}
 +
  bool
@@ -1433,55 +1453,57 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
  		return false;
  	}
 -	strlcpy(name, "picasso", (size_t)maxLength);
-+	strlcpy(name, asus_iphone_identity() ? "D22AP" : "picasso", (size_t)maxLength);
++	strlcpy(name, (asus_iphone_identity() & 2) ? "D22AP" : "picasso", (size_t)maxLength);
  	return true;
  }
  
-@@ -86,7 +109,8 @@
+@@ -86,7 +129,7 @@
  	if (name == NULL || maxLength <= 0) {
  		return false;
  	}
 -	strlcpy(name, "ASUS Smartphone for Snapdragon Insiders", (size_t)maxLength);
-+	strlcpy(name, asus_iphone_identity() ? "iPhone10,3" : "ASUS Smartphone for Snapdragon Insiders",
-+	    (size_t)maxLength);
++	strlcpy(name, (asus_iphone_identity() & 1) ? "iPhone10,3" : ASUS_PRODUCT_NAME, (size_t)maxLength);
  	return true;
  }
  #endif /* SWEET */
 diff --git a/bsd/kern/kern_mib.c b/bsd/kern/kern_mib.c
 --- a/bsd/kern/kern_mib.c
 +++ b/bsd/kern/kern_mib.c
-@@ -275,6 +275,10 @@
+@@ -275,6 +275,11 @@
  	return cpu_info;
  }
  
 +#if defined(ASUS_I007)
 +int asus_iphone_identity(void);    /* iokit/Kernel/arm/SweetPlatformExpert.cpp */
++const char *asus_product_name(void);
 +#endif
 +
  /*
   * Supporting some variables requires us to do "real" work.  We
   * gather some of that here.
-@@ -536,6 +540,13 @@
+@@ -536,6 +541,13 @@
  			 * instead.
  			 */
  
 +#if defined(ASUS_I007)
-+			/* ASUS: the iPhone X identity (boot-arg asusiphone=1,
++			/* ASUS: the iPhone X identity (boot-arg asusiphone, bit 1;
 +			 * iokit/Kernel/arm/SweetPlatformExpert.cpp). */
-+			if (asus_iphone_identity()) {
++			if (asus_iphone_identity() & 1) {
 +				strlcpy(dummy, "iPhone10,3", sizeof(dummy));
 +			} else
 +#endif
  			strlcpy(dummy, "iPad8,6", sizeof(dummy));
  		}
  		else {
-@@ -545,6 +556,12 @@
+@@ -545,6 +557,14 @@
  		return SYSCTL_OUT(req, dummy, strlen(dummy) + 1);
  	case HW_MODEL:
  		bzero(dummy, sizeof(dummy));
 +#if defined(ASUS_I007)
-+		if (asus_iphone_identity()) {
-+			strlcpy(dummy, "D22AP", sizeof(dummy));
++		/* ASUS: D22AP only with bit 4 of asusiphone (it turns on the iPhone X cameras in
++		 * CMCapture); with bit 1 alone the product name stays ours, not iPhone10,3. */
++		if (asus_iphone_identity() & 5) {
++			strlcpy(dummy, (asus_iphone_identity() & 4) ? "D22AP" : asus_product_name(), sizeof(dummy));
 +			return SYSCTL_OUT(req, dummy, strlen(dummy) + 1);
 +		}
 +#endif
