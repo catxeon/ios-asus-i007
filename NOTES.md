@@ -1358,6 +1358,35 @@ minutes from power-on to the lock screen.**
       0x1c00/0x7f with S2CR BYPASS (or, if the firmware drops BYPASS as Linux checks, a bypass
       context bank: CBAR S1-trans/S2-bypass, SCTLR 0); amss.bin read from the root (vnode);
       its first 512 KiB through BHI; expect EXECENV 1 (SBL) and MHISTATUS READY.
+    - **Image 0140 (CI 44400207952, commit 326dfa0, B1a):** S2CR BYPASS not kept (reads back
+      0x20000 = FAULT), so context bank 74 (was CBAR 0, SCTLR 0xc006710) became the bypass
+      bank (CBAR S1-trans/S2-bypass, SCTLR 0), SMR8 = 0x807f1c00 -> S2CR 0x4a; amss.bin read
+      from the root (5170656). PBL took the BHI request but never finished in 10 s: STATUS
+      0, EXECENV 0, **ERRDBG1-3 = 0x4fa5c000 / 0x1 / 0x80000 = our address 0x1_4fa5c000 and
+      size**: the chip is a 32-bit DMA master (ath11k dma mask 32).
+    - **Image 0141 (CI 44403194372, b101fd6):** "no DMA memory below 4 GiB": XNU's RAM starts at
+      0x140000000 (mkadt-asus.py PHYS_BASE), kmem_alloc_contig has nothing lower. Also the PC
+      tool bound to the APIPA address before Windows accepted it (WinError 10049; fixed:
+      Preferred addresses only, bind retried).
+    - Android reserved-memory (fixed, low bank): hyp 0x80000000 6 MiB ... modem 0x8b800000
+      256 MiB, asus_debug 0x9b800000 4 MiB; **hole 0x9bc00000-0xd0000000 (836 MiB)**; qhee /
+      trustedvm / qrtr-shmem / neuron 0xd0000000-0xd8000000; removed_region 0xd8800000 168
+      MiB; hole 0xe3000000-0xe5000000; splash 0xe5000000 35 MiB, dfps 0xe7400000; hole
+      0xe7500000-0x100000000. Dynamic (CMA) regions incl. cnss_wlan_region 20 MiB.
+    - **Image 0142 (CI 44410265817, dce92e8): kernel panic, then a Windows BSOD.** The DMA pool
+      (0xa0000000, 32 MiB) mapped in one ml_io_map_wcomb: "kmem_alloc(..., 33554432,
+      0x100021): failed with 3 @vm_kern.c:178" (KERN_NO_SPACE; io mappings use NOFAIL ->
+      panic) ~20 s into the boot, halt type 10, PSCI reset. The USB device had just been
+      configured (address 47, configured 1, no "alt 1" yet). **The PC then crashed: bugcheck
+      0x50 PAGE_FAULT_IN_NONPAGED_AREA (P2 0xffffffffffffffd0 = NULL-0x30, read, P4
+      fffff8076f8ca891), C:\Windows\Minidump\111926-25562-01.dmp + MEMORY.DMP (admin only, not
+      analysed).** Observed: crash within ~1 min after `fastboot boot` (run started 01:38:25,
+      boot sent ~01:38:53, Windows down before 01:40). Guess (not verified): Windows'
+      UsbNcm/NetAdapter does not survive the device vanishing in the middle of its start;
+      in 0137-0141 the device went away only at the end (300 s), without trouble. Fix
+      (62b47d6): every DMA buffer mapped on its own (<= 1 MiB), Wi-Fi starts 60 s after UFS
+      init (asuswlandelay), well after the NCM adapter is up. **Rule: anything risky must run
+      after the PC has the adapter up; a phone panic during NCM setup may take the PC down.**
     - Next: stage B (MHI). Open questions before it: BAR0 assignment (MEM window 0x60300000)
       and the iATU outbound MEM region; **the SMMU**: PCIe0 SIDs 0x1c00+ (iommu-map) on the
       apps SMMU, which ABL never set up for PCIe (USB/UFS DMA worked with physical
