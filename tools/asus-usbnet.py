@@ -28,7 +28,8 @@ def adapters():
     """[(name, description, status, [ipv4...])] of adapters that look like the phone's."""
     ps = ('Get-NetAdapter -IncludeHidden | Where-Object { $_.InterfaceDescription -match "NCM|ASUS iOS" } | '
           'ForEach-Object { $ips = @(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 '
-          '-ErrorAction SilentlyContinue | ForEach-Object { $_.IPAddress }); '
+          '-ErrorAction SilentlyContinue | Where-Object { [string]$_.AddressState -eq "Preferred" } | '
+          'ForEach-Object { $_.IPAddress }); '
           '[pscustomobject]@{n=$_.Name; d=$_.InterfaceDescription; s=[string]$_.Status; ip=$ips} } | '
           'ConvertTo-Json -Compress')
     r = subprocess.run(['powershell.exe', '-NoProfile', '-Command', ps], capture_output=True, text=True, timeout=60)
@@ -81,7 +82,17 @@ def main():
     print(r.stdout.strip(), flush=True)
 
     so = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    so.bind((local, 0))
+    # Windows can list the address a moment before it accepts a bind to it (image 0141:
+    # WinError 10049 right after the address appeared): retry for up to a minute.
+    for attempt in range(60):
+        try:
+            so.bind((local, 0))
+            break
+        except OSError as e:
+            if attempt == 59:
+                print('%5.0fs bind to %s failed: %s' % (time.time() - t0, local, e), flush=True)
+                return 1
+            time.sleep(1)
     so.settimeout(1.0)
     first = b'all' if a.all else b'tail'
     so.sendto(first, (PHONE, PORT))

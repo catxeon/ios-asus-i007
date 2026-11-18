@@ -37,7 +37,7 @@ diff --git a/bsd/dev/asus_wlan.c b/bsd/dev/asus_wlan.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/asus_wlan.c
-@@ -0,0 +1,911 @@
+@@ -0,0 +1,929 @@
 +/*
 + * ASUS I007: Wi-Fi, stage A - power the QCA6490 and bring up its PCIe link.
 + *
@@ -555,24 +555,42 @@ new file mode 100644
 +}
 +
 +/*
-+ * DMA memory for the chip: physically contiguous and below 4 GiB. The QCA6490 is a
-+ * 32-bit DMA master (ath11k: dma mask 32): image 0140 gave PBL a buffer at 0x1_4fa5c000
-+ * and PBL recorded 0x4fa5c000 / 0x1 / 0x80000 in BHI ERRDBG1-3, never finishing.
++ * DMA memory for the chip: below 4 GiB. The QCA6490 is a 32-bit DMA master (ath11k:
++ * dma mask 32): image 0140 gave PBL a buffer at 0x1_4fa5c000 and PBL recorded
++ * 0x4fa5c000 / 0x1 / 0x80000 in BHI ERRDBG1-3, never finishing. XNU's own RAM starts
++ * at 0x140000000 (tools/mkadt-asus.py PHYS_BASE), so kmem_alloc_contig has nothing
++ * below 4 GiB (image 0141: "no DMA memory below 4 GiB"). The pool is 32 MiB of the low
++ * DDR bank that no fixed reserved-memory region of the Android DT covers (the hole
++ * 0x9bc00000-0xd0000000; Android's cnss put the M3 image at 0xa1d00000, in it) and
++ * that nothing uses after the shim copied the kernel up: mapped write-combined
++ * (normal non-cacheable), so the CPU and the chip see the same bytes without cache
++ * maintenance. A bump allocator: the chip keeps all of it until the next boot.
 + */
++#define WL_POOL_PA      0xa0000000ULL
++#define WL_POOL_SIZE    0x02000000ULL
++extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
++static vm_offset_t wl_pool_va;
++static uint64_t wl_pool_used;
++
 +static vm_offset_t
 +wl_dma_alloc(vm_size_t size, uint64_t *pa)
 +{
-+	vm_offset_t va = 0;
-+	ppnum_t max_pnum = (ppnum_t)(atop_64(0x100000000ULL) - 1);
-+	if (kmem_alloc_contig(kernel_map, &va, round_page(size), PAGE_MASK, max_pnum, 0,
-+	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
-+		printf("ASUS WLAN: no DMA memory below 4 GiB for %#lx bytes\n", (unsigned long)size);
++	vm_size_t sz = (size + 0xfff) & ~(vm_size_t)0xfff;
++	if (wl_pool_va == 0) {
++		wl_pool_va = ml_io_map_wcomb((vm_offset_t)WL_POOL_PA, (vm_size_t)WL_POOL_SIZE);
++		if (wl_pool_va == 0) {
++			printf("ASUS WLAN: DMA pool map failed\n");
++			return 0;
++		}
++	}
++	if (wl_pool_used + sz > WL_POOL_SIZE) {
++		printf("ASUS WLAN: DMA pool full (%#llx used, %#lx asked)\n", wl_pool_used, (unsigned long)size);
 +		return 0;
 +	}
-+	*pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)va));
-+	if (*pa + size > 0x100000000ULL) {
-+		printf("ASUS WLAN: DMA memory at %#llx is above 4 GiB\n", *pa);
-+	}
++	vm_offset_t va = wl_pool_va + (vm_offset_t)wl_pool_used;
++	*pa = WL_POOL_PA + wl_pool_used;
++	wl_pool_used += sz;
++	bzero((void *)va, sz);
 +	return va;
 +}
 +
@@ -622,7 +640,7 @@ new file mode 100644
 +		return;
 +	}
 +	memcpy((void *)img, fw, n);
-+	flush_dcache64((addr64_t)pa, MHI_SBL_SIZE, TRUE);
++	__asm__ volatile ("dsb sy" ::: "memory");
 +	kfree_data(fw, fw_len);
 +
 +	printf("ASUS WLAN: BHI before: EXECENV %#x STATUS %#x MHISTATUS %#x; SBL %u bytes at %#llx\n",
