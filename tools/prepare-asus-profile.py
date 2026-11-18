@@ -79,6 +79,10 @@ if args.ufs:
     # Core dumps off unless sysctl kern.coredump=1: on the phone a failing boot task spent
     # 23 s trying to dump ~1 GB onto the nearly full HFS root (image 0012).
     selected.append(repo / 'xnu/patches/0039-sweet-coredump-default-off.patch')
+    # USB device mode with a CDC-NCM network ue0 and the live log (bsd/dev/asus_usb.c, off
+    # unless boot-arg asususb=1/2); it reads the console ring of the UFS driver, and "usb"
+    # sorts after "ufs" and before "userland".
+    selected.append(repo / 'xnu/asus/9999-asus-i007-usb.patch')
 if args.userland:
     selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
     # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
@@ -142,5 +146,5 @@ script = script.replace(old, '''                if [[ "$(basename "$PATCH")" =~ 
     'storage_driver': args.ufs, 'patches': manifest,
 }, indent=2) + '\n', newline='\n')
 print(f'Staged {len(selected)} ASUS files; ' + ('UFS (iosroot writes only), ' if args.ufs else 'no UFS, ')
-      + 'no modem, GPU or USB drivers'
+      + ('USB NCM (asususb=2), ' if args.ufs else '') + 'no modem'
       + ('' if args.input else ', no input'))
