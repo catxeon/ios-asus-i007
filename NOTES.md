@@ -1116,7 +1116,33 @@ minutes from power-on to the lock screen.**
     783567 bytes (sha256 ee20db52...), binary plist, in place (hfs-replace-inplace.py --phone
     --expect-old-sha256), catalog node 18414, 194 blocks. The write was refused by the
     session's safety check; it needs the user's explicit OK.
-  - Next: boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
+  - **0133** (kernel 44202809873 sha256 8db0ba46..., boot-arg **asusiphone=1**, MG cache
+    moved off; image 711bd0b6...; 03:10:13 sent, back after 936 s, root clean, log boot
+    39629B4D): **the iPhone identity is visible**: lock screen with the stock blue wallpaper,
+    "Swipe up to open", flashlight + camera buttons, home indicator (Face ID style) in shots
+    000/008; home screen (018) on the blue wallpaper, Weather + Calendar widgets, icons as
+    before. No PosterBoard/assetsd/Aegir crashes; the speech AUs were not launched at all this
+    time (container-path fix unverified). **New crash loops from the iPhone class:**
+    - CommCenter 69x (36 sig6, 33 sig11): "TelephonyBasebandController: Failed to find
+      AppleBaseband service" ... "Timeout for waiting for the driver!" "Unable to communicate
+      with AppleBaseband driver" -> abort. launchd has two jobs: com.apple.CommCenter.plist
+      (_LimitLoadToDeviceTree baseband) and com.apple.CommCenter-noncellular.plist
+      (_LimitLoadFromDeviceTree baseband, ours: no /baseband node). Guess: as iPhone10,3
+      MobileGestalt says the device has a baseband, so CommCenter waits for AppleBaseband
+      even in the noncellular job. Do not simply EXCLUDE it (the iPod identity needs it).
+    - mediaserverd 105x sig11: "Unable to get macro state for the GLContext: 0" then
+      CoreImage +0x19c58c <- +[CIContext internalContextWithEAGLContext:options:] <-
+      CMCapture +[BWCoreImageFilterRenderer context:err:] <- prepareForRenderingWithParameters
+      (the camera capture graph; the iPhone has cameras). EAGL works only where libasus-gl
+      is injected (topaz_inject=...,backboardd). Ideas: inject into mediaserverd too, or find
+      which MG camera answer starts the capture graph.
+    - also: mediaserverd's BTAudioPlugin retries bluetoothd (excluded) constantly.
+  - asusiphone stays OFF by default; 0133 was a test. With it off, the MG cache rebuilt in
+    0133 holds iPhone answers (keyed by build + UUID): move it aside again before an iPod boot
+    if answers look mixed.
+  - ../asus-rootfix-jobs-full-v4 rebuilt from the root after 0133 (same launchd.plist
+    d450ed4e... -> ee20db52..., 194 blocks); still NOT written.
+  - Next (was): boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
     speech AUs not crashing; watch for new trouble from the iPhone class (CommCenter/telephony,
     Face ID services).
   - Later (not done): give the ASUS kernel the iPhone identity (hw.product iPhone10,3,
