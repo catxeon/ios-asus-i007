@@ -1173,8 +1173,47 @@ minutes from power-on to the lock screen.**
     (007/008, 017/018) as in 0130-0132: home screen, Weather + Calendar widgets, black
     wallpaper (iPod state). The clock shows 1 h behind the PC (Europe/Vilnius vs the PC's
     zone), as in 0134.
-  - State now: iPod identity, the root's launchd.plist ee20db52... (507 jobs, no lskdd), MG
-    cache rebuilt by 0135 with iPod answers (not pulled/checked).
+  - State after 0135: iPod identity, the root's launchd.plist ee20db52... (507 jobs, no lskdd),
+    MG cache rebuilt by 0135 with iPod answers (pulled later: ProductType 'ASUS Smartphone for
+    Snapdragon Insiders', HWModelStr 'picasso', DeviceClass 'iPod', file 19:20).
+  - **iPhone identity without the loops (user 2026-11-18 "Да, делай")**, found in 0133's logs
+    and the 20H392 shared cache:
+    - CommCenter (CommCenter binary 0x1002e75b8): the radio module is chosen by the
+      personality's radio field (Registry::getRadioPersonality, +0x204: 0 -> "unrecognized
+      machine/model" -> NoBBRadioModule, 2 -> QMI/C2K). It comes from libTelephonyUtilDynamic
+      (TelephonyRadiosGetRadio, init +0x6368, MG read in +0x8d9c): MGCopyAnswer IsVirtualDevice
+      (true -> unknown product), then **HWModelStr** -> TelephonyUtilParseHardwareModel (needs
+      digits; letter + number, suffix stripped: D22AP -> D22 -> Mav7, "Selected model:
+      TrekC2K"). "picasso" has no digits -> unknown -> no baseband. ProductType is not used for
+      this. (Observed: 0134 had the kernel's iPod answers but the cached HWModelStr D22AP and
+      still chose Mav7.)
+    - mediaserverd: CMCapture (+0x78c30) and CoreMedia (+0x7d14c) read sysctl **hw.model**,
+      strip "AP"/"DEV" and look up the model's camera configuration. With D22AP the capture
+      graph is prepared at start; CIContext finds no Metal ("No Metal renderer available") and
+      falls to EAGL, pc 0. 0134 (hw.model = our product name, MG iPhone) did not crash.
+    - Commit **6378c5e**: asusiphone is a bit mask. 1 = hw.product iPhone10,3 (ProductType,
+      DeviceClass iPhone) + hw.machine iPhone10,3 for iOS processes; 2 = hw.target D22AP
+      (HWModelStr: baseband); 4 = hw.model D22AP (cameras). With bit 1 alone hw.target stays
+      picasso and hw.model the ASUS product name (asus_product_name()). 7 = image 0133.
+      Kernel CI 44353800814 failed without starting ("The job was not acquired by Runner" on
+      macos-15-intel); **44356831559** on macos-15 built it (sha256 933556a0...).
+    - ../asus-rootfix-mgcache-v3 (sparse pull read21.img after 0135): the iPod cache moved to
+      /private/var/asus-off/mg-0135 (copy WSL ~/zc/0135/MobileGestalt-ipod-0135.plist); 11
+      blocks, usual fsck note; written 2026-11-18 ~20:05 (verified, backup.bin in the dir).
+  - **0136** (kernel 44356831559, **asusiphone=1**, image 2ec3c47f...; 20:26:31 sent, Android
+    back after 941 s, root clean, log boot EDEAE0E9): **no crash at all** (not even configd).
+    CommCenter 2 spawns, log "unrecognized machine/model" -> NoBBRadioModule; mediaserverd 1
+    spawn; lskdd 0; widget extensions once each. Shots 007/008 and 017/018 (after the scripted
+    power presses): lock screen with the stock blue wallpaper, "100% Charged", flashlight and
+    camera buttons, home indicator; home screen on the blue wallpaper with Weather + Calendar
+    widgets. So the iPhone look comes from ProductType/DeviceClass alone.
+    - The MG cache was NOT written in 0136: MobileGestaltHelper "MGCache was not valid.
+      Writing new cache." then "Found busy service ... busyState: 1" -> "IOKit is still busy,
+      don't build cache"; answers are computed live. Expect it to be written on a later boot
+      (with iPhone10,3 / picasso / iPhone).
+    - **asusiphone=1 is now the standard boot-arg** for iOS images (add it to ASUS_EXTRA_ARGS
+      next to asusshot). Going back to the iPod identity (or to 3/5/7) needs the MG cache moved
+      aside first.
     - Rule: whenever asusiphone is switched on or off, move the MobileGestalt cache aside
       before the boot (it is keyed by build + UUID only, not by hw.product).
   - Next (was): boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
