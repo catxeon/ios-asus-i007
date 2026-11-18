@@ -1306,6 +1306,30 @@ minutes from power-on to the lock screen.**
          Needed: reverse-engineer the requests IO80211.framework / wifid (both in the 20H392
          cache and root) send for scan, scan results, associate, state and events, and answer
          them from stages D-F. A large stage of its own, but every piece is inspectable.
+    - **STAGE A DONE (user "Да, начинай"; image 0138, 2026-11-18 23:46): the QCA6490 answers on
+      PCIe.** Commit **fd3400a**: xnu/asus/9999-asus-i007-wlan.patch = bsd/dev/asus_wlan.c
+      (with --ufs; "wlan" sorts after "userland"; started from sweet_ufs_init next to
+      asus_usb_start; boot-arg asuswlan=1, asuswlandelay=20 s), generated from the scratchpad
+      source like the usb patch. Kernel CI **44392166974** (sha256 3a9fd4a4...), image
+      29106264..., ASUS_REBOOT=300, asususb=2 asuswlan=1 asusiphone=1. Observed (live log):
+      - RPMh (DRV2 TCS 0): cmd-db smpe2 0x40500, smpb11 0x40000, smpc1 0x40200, smpb12
+        0x40100, ldoe7 0x41800, ldob5 0x40d00, ldob6 0x41900; all 17 votes status 0x10101;
+      - WLAN_EN 0 -> 1, **SW_CTRL 0 -> 1** (the chip powered up), WAKE 1;
+      - pcie_0_gdsc 0x22f001 -> 0xf822f000 on; rchng RCG CFG 0x605; votes 0x52000 0xed9d7f,
+        0x52008 0x83c63ef; all checked branches on; clkref 1;
+      - PARF SYS_CTRL 0x361c, PHY_CTRL 0x900, DEVICE_TYPE 4; QMP PHY ready (PCS status 0x86),
+        pipe CBCR 0, mux 0;
+      - root port DBI 17cb:010c, class 0xff000000 (not 0x0604: fine for our own access);
+      - LTSSM 0 -> 0x11 (L0) after 15 ms; ELBI_SYS_STTS 0x11401; LNKSTA 0xb013 = **Gen3 x1**,
+        PCIe cap at 0x70;
+      - **01:00.0 = 17cb:1103 (QCA6490), class 0x02800001, header 0, BAR0 0x4 (64-bit mem)**.
+      - iOS unchanged: no crash, root clean, Android back after 336 s.
+    - Next: stage B (MHI). Open questions before it: BAR0 assignment (MEM window 0x60300000)
+      and the iATU outbound MEM region; **the SMMU**: PCIe0 SIDs 0x1c00+ (iommu-map) on the
+      apps SMMU, which ABL never set up for PCIe (USB/UFS DMA worked with physical
+      addresses, probably because ABL left their streams bypassed): read SMR/S2CR and sCR0
+      first; firmware files (amss.bin 5 MB, m3.bin, bdwlan.eXX, regdb.bin) must reach the
+      kernel (asus_fw_load in sweet_ufs.c, from the root).
     - Mobile data afterwards is a different and larger job: the modem (MPSS) is started through
       TrustZone (PAS) from the modem partition firmware, talks QMI over GLINK/SMEM, data via
       IPA (own firmware) + rmnet; iOS CommCenter cannot use it, so all of it would be our own.
