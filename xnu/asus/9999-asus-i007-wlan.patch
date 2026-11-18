@@ -37,7 +37,7 @@ diff --git a/bsd/dev/asus_wlan.c b/bsd/dev/asus_wlan.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/asus_wlan.c
-@@ -0,0 +1,579 @@
+@@ -0,0 +1,694 @@
 +/*
 + * ASUS I007: Wi-Fi, stage A - power the QCA6490 and bring up its PCIe link.
 + *
@@ -65,7 +65,8 @@ new file mode 100644
 + *
 + * Every register block is touched only after the clocks it needs report on; the
 + * endpoint's config space only with the link up (a down link aborts the access).
-+ * Boot-arg asuswlan: 0 (default) nothing, 1 this stage. asuswlandelay=N seconds
++ * Boot-arg asuswlan: 0 (default) nothing, 1 this stage, 2 also stage B0 (SMMU,
++ * BAR0 and the MHI registers, see wl_stage_b0). asuswlandelay=N seconds
 + * before it starts (default 20, after the touch power). Everything is logged
 + * "ASUS WLAN:" (with asususb=2 it arrives live over USB).
 + */
@@ -386,6 +387,115 @@ new file mode 100644
 +	{ 0x02dc, 0x05, 0 }, { 0x0200, 0x00, 0 }, { 0x0244, 0x03, 0 },
 +};
 +
++static int wl_mode;
++
++/*
++ * Stage B0 (asuswlan=2): what the next stage depends on, read only but for the
++ * endpoint's BAR0 and an iATU MEM window to it.
++ *  - The apps SMMU (qcom,qsmmu-v500 at 0x15000000, DT qcom,skip-init: the
++ *    bootloaders' setup is kept): sCR0 (CLIENTPD = bypass all, USFCFG = fault on
++ *    unmatched streams), the stream match registers and their S2CRs, the ones
++ *    that cover PCIe0's SIDs (iommu-map: 0x1c00 root port, 0x1c01 the endpoint)
++ *    marked. The chip's DMA (MHI rings, firmware images) goes through it.
++ *  - BAR0: size, an address in the MEM window (DT ranges 0x60300000, 61 MiB),
++ *    iATU outbound region 1 (MEM, untranslated), memory space + bus master.
++ *  - MHI (Linux drivers/bus/mhi, as ath11k maps it at BAR0 + 0): MHIREGLEN, MHIVER,
++ *    MHICFG, the doorbell / BHI / BHIe offsets, MHICTRL, MHISTATUS; BHI version,
++ *    execution environment (0 PBL, 1 SBL, 2 AMSS), status, error, serial, HW id.
++ */
++#define SMMU_PA         0x15000000ULL
++#define MEM_WINDOW      0x60300000ULL
++#define MEM_WINDOW_END  0x64000000ULL
++
++static void
++wl_smmu_report(void)
++{
++	vm_offset_t s = ml_io_map(SMMU_PA, 0x1000);
++	if (s == 0) {
++		printf("ASUS WLAN: SMMU map failed\n");
++		return;
++	}
++	uint32_t cr0 = rd(s, 0x00), idr0 = rd(s, 0x20), idr1 = rd(s, 0x24), idr2 = rd(s, 0x28);
++	unsigned nsmr = idr0 & 0xff, valid = 0, shown = 0;
++	printf("ASUS WLAN: SMMU sCR0 %#x (CLIENTPD %u USFCFG %u EXIDENABLE %u) sIDR0 %#x (%u SMRs, "
++	    "EXIDS %u) sIDR1 %#x sIDR2 %#x\n", cr0, cr0 & 1, (cr0 >> 10) & 1, (cr0 >> 3) & 1, idr0, nsmr,
++	    (idr0 >> 8) & 1, idr1, idr2);
++	for (unsigned i = 0; i < nsmr && i < 256; i++) {
++		uint32_t smr = rd(s, 0x800 + 4 * i), s2cr = rd(s, 0xc00 + 4 * i);
++		bool v = (cr0 & (1u << 3)) ? (s2cr & (1u << 10)) != 0 : (smr & (1u << 31)) != 0;
++		if (!v) {
++			continue;
++		}
++		valid++;
++		uint32_t sid = smr & 0xffff, mask = (smr >> 16) & 0x7fff;
++		if (!(cr0 & (1u << 3))) {
++			sid &= 0x7fff;
++		}
++		bool pcie = ((0x1c00 ^ sid) & ~mask & 0xffff) == 0 || ((0x1c01 ^ sid) & ~mask & 0xffff) == 0;
++		if (pcie || shown < 40) {
++			shown++;
++			printf("ASUS WLAN: SMR%u id %#x mask %#x S2CR %#x (type %u cb %u)%s\n", i, sid, mask, s2cr,
++			    (s2cr >> 16) & 3, s2cr & 0xff, pcie ? " <- PCIe0" : "");
++		}
++	}
++	printf("ASUS WLAN: SMMU: %u valid stream matches (%u shown)\n", valid, shown);
++}
++
++static void
++wl_stage_b0(vm_offset_t atu, vm_offset_t conf)
++{
++	wl_smmu_report();
++
++	uint32_t lo0 = rd(conf, 0x10);
++	wr(conf, 0x10, 0xffffffff);
++	wr(conf, 0x14, 0xffffffff);
++	uint32_t lo = rd(conf, 0x10), hi = rd(conf, 0x14);
++	uint64_t size = ~((((uint64_t)hi << 32) | (lo & ~0xfu))) + 1;
++	printf("ASUS WLAN: BAR0 flags %#x, size %#llx (probe %#x %#x)\n", lo0 & 0xf, size, lo, hi);
++	if (size == 0 || size > MEM_WINDOW_END - MEM_WINDOW) {
++		wr(conf, 0x10, lo0);
++		wr(conf, 0x14, 0);
++		return;
++	}
++	uint64_t bar = (MEM_WINDOW + size - 1) & ~(size - 1);
++	if (bar + size > MEM_WINDOW_END) {
++		printf("ASUS WLAN: BAR0 does not fit the MEM window\n");
++		return;
++	}
++	wr(conf, 0x10, (uint32_t)bar);
++	wr(conf, 0x14, (uint32_t)(bar >> 32));
++	/* iATU outbound region 1 (unrolled, 0x200 apart): MEM, untranslated */
++	wr(atu, 0x200 + 0x08, (uint32_t)bar);
++	wr(atu, 0x200 + 0x0c, (uint32_t)(bar >> 32));
++	wr(atu, 0x200 + 0x10, (uint32_t)(bar + size - 1));
++	wr(atu, 0x200 + 0x14, (uint32_t)bar);
++	wr(atu, 0x200 + 0x18, (uint32_t)(bar >> 32));
++	wr(atu, 0x200 + 0x00, 0x0);                     /* MEM */
++	wr(atu, 0x200 + 0x04, 1u << 31);
++	for (int i = 0; i < 100 && !(rd(atu, 0x200 + 0x04) & (1u << 31)); i++) {
++		delay(10);
++	}
++	wr(conf, 0x04, rd(conf, 0x04) | 0x0006);        /* memory space, bus master */
++	printf("ASUS WLAN: BAR0 at %#llx, command %#x, iATU1 ctrl2 %#x\n", bar, rd(conf, 0x04),
++	    rd(atu, 0x200 + 0x04));
++
++	vm_offset_t m = ml_io_map((vm_offset_t)bar, (vm_size_t)MIN(size, 0x80000ULL));
++	if (m == 0) {
++		printf("ASUS WLAN: BAR0 map failed\n");
++		return;
++	}
++	uint32_t bhi = rd(m, 0x28), bhie = rd(m, 0x2c);
++	printf("ASUS WLAN: MHI REGLEN %#x VER %#x CFG %#x CHDBOFF %#x ERDBOFF %#x BHIOFF %#x BHIEOFF %#x "
++	    "CTRL %#x STATUS %#x\n", rd(m, 0x00), rd(m, 0x08), rd(m, 0x10), rd(m, 0x18), rd(m, 0x20), bhi, bhie,
++	    rd(m, 0x38), rd(m, 0x48));
++	if (bhi != 0 && bhi < 0x80000 - 0x80) {
++		printf("ASUS WLAN: BHI version %u.%u EXECENV %#x STATUS %#x ERRCODE %#x ERRDBG %#x %#x %#x "
++		    "SERIAL %#x HWID %#x\n", rd(m, bhi + 0x04), rd(m, bhi + 0x00), rd(m, bhi + 0x28),
++		    rd(m, bhi + 0x2c), rd(m, bhi + 0x30), rd(m, bhi + 0x34), rd(m, bhi + 0x38), rd(m, bhi + 0x3c),
++		    rd(m, bhi + 0x40), rd(m, bhi + 0x4c));
++	}
++}
++
 +/* PCI capability offset in the root port's DBI config header, 0 if absent */
 +static uint32_t
 +dbi_find_cap(vm_offset_t dbi, uint8_t id)
@@ -559,6 +669,10 @@ new file mode 100644
 +	printf("ASUS WLAN: endpoint 01:00.0 id %04x:%04x class %#x header %#x BAR0 %#x BAR1 %#x%s\n",
 +	    id & 0xffff, id >> 16, rd(conf, 0x08), rd(conf, 0x0c), rd(conf, 0x10), rd(conf, 0x14),
 +	    id == 0x110317cb ? " = QCA6490" : "");
++	if (id != 0x110317cb || wl_mode < 2) {
++		return;
++	}
++	wl_stage_b0(atu, conf);
 +}
 +
 +static void
@@ -612,6 +726,7 @@ new file mode 100644
 +	if (mode <= 0) {
 +		return;
 +	}
++	wl_mode = mode;
 +	if (kernel_thread_start(wl_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
 +	}
