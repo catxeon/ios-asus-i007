@@ -1248,7 +1248,50 @@ minutes from power-on to the lock screen.**
       rights, no PC configuration. 1 ms polling thread, as sweet.
     - Not done: internet for iOS (needs e.g. Windows ICS -> 192.168.137.x, a default route and
       DNS for iOS: configd does not know ue0, a BSD-only ifnet); interrupts instead of polling;
-      SuperSpeed.
+      SuperSpeed. User 2026-11-18: no internet through the PC ("не хочу"); wants Wi-Fi, then
+      mobile data.
+  - **Wi-Fi: facts (Android, read only, 2026-11-18) and the plan.**
+    - Chip: **QCA6490** (PCI 17cb:1103, class 0x0280) behind the PCIe0 root port 17cb:010c
+      (0000:00:00.0 / 01:00.0). Android: cnss2 + wlan.ko (qca_cld3, 10 MB), cnss-daemon.
+      Upstream Linux drives the same chip with ath11k (pci, "WCN6855 hw2.0"/QCA6490) + MHI +
+      QRTR: the open reference for every step below.
+    - DT qcom,cnss-qca6490@b0000000: wlan-en-gpio TLMM 64, bt-en 65, sw-ctrl 153, ASUS antenna
+      gpio 148; rails (RPMh): vdd-wlan-aon pmr735a_s2 "smpe2" 0.950-0.952 V, dig pm8350_s11
+      "smpb11" 0.950-0.952 V, io (phandle 0xda, not resolved) 1.8 V, rfa1 pm8350c_s1 "smpc1"
+      1.88 V, rfa2 pm8350_s12 "smpb12" 1.35 V, antenna switch pmr735a_l7 "ldoe7" 2.8 V;
+      mhi,max-channels 30, mhi,buffer-len 8 MiB; reg smmu_iova_ipa 0xb0000000 (+0x10000000),
+      tcs_cmd 0x0b2e5510.
+    - DT qcom,pcie@1c00000 (qcom,pci-msm, pcie0, domain 0, dma-coherent): parf 0x01c00000
+      (0x3000), phy 0x01c06000 (0x2000), dm_core 0x60000000 (0xf1d), elbi 0x60000f20, iatu
+      0x60001000, conf 0x60100000 (1 MiB); ranges IO 0x60200000, MEM 0x60300000 (0x3d00000);
+      perst-gpio 94, wake-gpio 96; GDSC gcc_pcie_0_gdsc (GCC +0x6b004); 15 clocks (pipe, ref,
+      aux 19.2 MHz, cfg_ahb, mstr_axi, slv_axi, ldo, slv_q2a, tbu, refgen, ddrss_sf_tbu,
+      aggre_noc 0/1, pipe mux/ext); rails vreg-0p9 pm8350_l5 "ldob5" 0.88 V, vreg-1p8
+      pm8350_l6 "ldob6" 1.2 V, cx level; qcom,phy-sequence and pcie-phy-ver 0x526d in the DT;
+      iommu-map SID base 0x1c00. ABL does not use PCIe: the link must be brought up from cold.
+    - Firmware on the phone: /vendor/firmware_mnt/image/amss.bin (5182944), amss20.bin,
+      m3.bin, regdb.bin, bdwlan.e01..e1d (board data per board id); /vendor/firmware/qca6490
+      (?) amss.bin 5170656, bdwlan.e47, m3.bin, regdb.bin; persist wlan_mac.bin. Not in git.
+    - The kernel already has the pieces for power: AsusPhoneInput::rpmhSend (active TCS of the
+      apps RSC, cmd-db lookups, used for the touch rails), TLMM pin control, GCC branch votes.
+    - Plan (each stage ends in an observable log line; lab images with asususb=2 live log):
+      A. power + PCIe link: RPMh votes for the WLAN and PCIe PHY rails, WLAN_EN high, GDSC +
+         clocks, PHY sequence from the DT, PARF/DBI setup, PERST, LTSSM -> link up, config
+         space of 01:00.0 reads 17cb:1103.
+      B. MHI: BAR0, MHI reset/ready, BHIe download of amss.bin, M0; IPCR channels -> QRTR ->
+         QMI WLFW (host cap, BDF download of the right bdwlan.eXX, M3 info, regdb, wlan mode)
+         -> "firmware ready".
+      C. ath11k host side: copy engines, HTC, WMI init / service ready, SRNG rings; MAC address.
+      D. scan (WMI): SSIDs in the log.
+      E. station connect: vdev/peer, auth/assoc, in-kernel WPA2-PSK 4-way handshake (PBKDF2,
+         PRF, key install), SSID/password from a boot-arg or a root file.
+      F. data path (TCL/REO rings), in-kernel DHCP client, default route, DNS.
+      G. iOS sees the network: a small root helper writes SCDynamicStore State:/Network keys
+         (service, IPv4, router, DNS) so nw_path is satisfied. iOS's own Wi-Fi UI (wifid /
+         Apple80211 / IO80211Family, closed) will NOT work; apps would.
+    - Mobile data afterwards is a different and larger job: the modem (MPSS) is started through
+      TrustZone (PAS) from the modem partition firmware, talks QMI over GLINK/SMEM, data via
+      IPA (own firmware) + rmnet; iOS CommCenter cannot use it, so all of it would be our own.
     - Rule: whenever asusiphone is switched on or off, move the MobileGestalt cache aside
       before the boot (it is keyed by build + UUID only, not by hw.product).
   - Next (was): boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
