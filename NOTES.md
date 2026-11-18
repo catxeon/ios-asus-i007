@@ -1152,17 +1152,29 @@ minutes from power-on to the lock screen.**
       AppleBaseband" in the unified log, same crash pc as 0133). mediaserverd 1 spawn (no loop).
       Cause (observed): the MobileGestalt cache rebuilt in 0133 was still used: CacheExtra
       h9jDsbgj7xIVeIQ8S3/X3Q (ProductType) 'iPhone10,3', /YYygAofPDbhrwToVsXdeA 'D22AP',
-      +3Uf0Pm5F8Xy7Onyvko0vA (DeviceClass) 'iPhone', file dated 03:10 (0133). Shots: App Library
-      with Phone/Messages/FaceTime/Wallet, the script opened Phone (Favorites). So with the
+      +3Uf0Pm5F8Xy7Onyvko0vA (DeviceClass) 'iPhone', file dated 03:10 (0133). Shots: App Library,
+      then the Phone app (Favorites) from shot 002 on (the iPod home screen of 0135 has Phone,
+      FaceTime and Wallet too, so the shots are no proof; the cache values are). So with the
       cache the userland stays an iPhone even when the kernel says otherwise; mediaserverd's
       camera loop follows the kernel answers (guess: hw.model/hw.machine), CommCenter's
       baseband wait follows MobileGestalt.
     - ../asus-rootfix-mgcache-v2 (sparse pull read20.img after 0134, hash read20.hash): the
       cache moved to /private/var/asus-off/mg-0133 (copy WSL
       ~/zc/0134/MobileGestalt-iphone-0133.plist); 11 blocks, fsck only the usual minor header
-      repair; read-only check passed (all 11 match old.hash). **NOT written:** the session's
-      safety check refused the write; it needs the user's explicit OK. Without it, every boot
-      keeps the iPhone answers and the CommCenter loop.
+      repair; read-only check passed (all 11 match old.hash). First refused by the session's
+      safety check; **written 2026-11-18 ~19:18** after the user's explicit "Да, записывай"
+      (after write all 11 match new.hash; backup.bin in the dir).
+  - **0135** (kernel 44202809873, no asusiphone, no lskdd job, MG cache moved off again; image
+    17092d89...; 19:20:08 sent, Android back after 935 s, root clean): **clean boot**:
+    CommCenter 2 spawns (as 0130-0132), lskdd 0, mediaserverd 1, crashes only configd sig9 1x
+    (as always). xpcproxy 219 (298 in 0134). Widget extensions spawned once each as before;
+    com.apple.siri.embeddedspeech 2 spawns (speech AUs themselves not launched: container-path
+    fix still unverified). Shots: black (display off) except after the scripted power presses
+    (007/008, 017/018) as in 0130-0132: home screen, Weather + Calendar widgets, black
+    wallpaper (iPod state). The clock shows 1 h behind the PC (Europe/Vilnius vs the PC's
+    zone), as in 0134.
+  - State now: iPod identity, the root's launchd.plist ee20db52... (507 jobs, no lskdd), MG
+    cache rebuilt by 0135 with iPod answers (not pulled/checked).
     - Rule: whenever asusiphone is switched on or off, move the MobileGestalt cache aside
       before the boot (it is keyed by build + UUID only, not by hw.product).
   - Next (was): boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
