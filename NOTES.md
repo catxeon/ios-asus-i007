@@ -1285,10 +1285,27 @@ minutes from power-on to the lock screen.**
       D. scan (WMI): SSIDs in the log.
       E. station connect: vdev/peer, auth/assoc, in-kernel WPA2-PSK 4-way handshake (PBKDF2,
          PRF, key install), SSID/password from a boot-arg or a root file.
-      F. data path (TCL/REO rings), in-kernel DHCP client, default route, DNS.
-      G. iOS sees the network: a small root helper writes SCDynamicStore State:/Network keys
-         (service, IPv4, router, DNS) so nw_path is satisfied. iOS's own Wi-Fi UI (wifid /
-         Apple80211 / IO80211Family, closed) will NOT work; apps would.
+      F. data path (TCL/REO rings).
+      G. **the stock Wi-Fi screen (user 2026-11-18: "нужен штатный экран")**: our kernel plays
+         Apple's IO80211Family, as AirportItlwm does on macOS for Intel cards:
+         - wifid's job has `_LimitLoadToDeviceTree: [wlan, marconi-wifi]` (stock launchd.plist;
+           it never ran here: no spawn in 0137): the ADT needs a `wlan` node (mkadt-asus.py;
+           MobileGestalt also looks at /chosen mac-address-wifi0 and sdio/wlan/marconi-wifi);
+         - IO80211.framework (iOS 16's Apple80211 API, shared cache) matches the IOKit class
+           **IO80211Controller** (else DriverKit "dk" matching), looks for the driver
+           AppleBCMWLANCore / IO80211ReporterProxy (IOReportLegend), binds to an interface
+           with IOInterfaceName / IO80211InterfaceRole, and talks either through an IOKit user
+           client ("IOUC type N") or the BSD ioctl path ("Falling back to IOCTL path",
+           Apple80211BindToInterfaceWithIOCTL: SIOCGA80211/SIOCSA80211 on en0) plus event
+           monitoring (Apple80211EventMonitoringInit / ...IOUC);
+         - SystemConfiguration (configd, open source) calls an interface IEEE80211 when its
+           controller IOObjectConformsTo "IO80211Controller": then configd/IPConfiguration do
+           DHCP, routes and DNS themselves (no in-kernel DHCP needed);
+         - WPA2-PSK: on Apple platforms the driver/firmware does the 4-way handshake with the
+           key wifid passes in the associate request: so it stays in our kernel (stage E).
+         Needed: reverse-engineer the requests IO80211.framework / wifid (both in the 20H392
+         cache and root) send for scan, scan results, associate, state and events, and answer
+         them from stages D-F. A large stage of its own, but every piece is inspectable.
     - Mobile data afterwards is a different and larger job: the modem (MPSS) is started through
       TrustZone (PAS) from the modem partition firmware, talks QMI over GLINK/SMEM, data via
       IPA (own firmware) + rmnet; iOS CommCenter cannot use it, so all of it would be our own.
