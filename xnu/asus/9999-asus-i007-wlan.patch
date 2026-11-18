@@ -37,7 +37,7 @@ diff --git a/bsd/dev/asus_wlan.c b/bsd/dev/asus_wlan.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/asus_wlan.c
-@@ -0,0 +1,929 @@
+@@ -0,0 +1,932 @@
 +/*
 + * ASUS I007: Wi-Fi, stage A - power the QCA6490 and bring up its PCIe link.
 + *
@@ -68,7 +68,7 @@ new file mode 100644
 + * Boot-arg asuswlan: 0 (default) nothing, 1 this stage, 2 also stage B0 (SMMU,
 + * BAR0 and the MHI registers, see wl_stage_b0), 3 also B1a (SMMU stream for PCIe0,
 + * SBL through BHI from /asus/fw/wlan/amss.bin, see wl_stage_b1a). asuswlandelay=N seconds
-+ * before it starts (default 20, after the touch power). Everything is logged
++ * before it starts (default 60: after the touch power and after the PC has set up the USB NCM adapter, so a crash here does not reset the USB device in the middle of that). Everything is logged
 + * "ASUS WLAN:" (with asususb=2 it arrives live over USB).
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET) && defined(ASUS_I007)
@@ -565,29 +565,32 @@ new file mode 100644
 + * that nothing uses after the shim copied the kernel up: mapped write-combined
 + * (normal non-cacheable), so the CPU and the chip see the same bytes without cache
 + * maintenance. A bump allocator: the chip keeps all of it until the next boot.
++ * Each buffer is mapped on its own and kept small (at most 1 MiB): mapping the whole
++ * 32 MiB at once panicked the kernel in image 0142 ("kmem_alloc(..., 33554432,
++ * 0x100021): failed with 3", io mappings cannot fail softly), and that early reset
++ * while Windows was still setting up the NCM adapter was followed by a Windows
++ * bugcheck 0x50 (see NOTES).
 + */
 +#define WL_POOL_PA      0xa0000000ULL
 +#define WL_POOL_SIZE    0x02000000ULL
++#define WL_MAP_MAX      0x00100000ULL
 +extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
-+static vm_offset_t wl_pool_va;
 +static uint64_t wl_pool_used;
 +
 +static vm_offset_t
 +wl_dma_alloc(vm_size_t size, uint64_t *pa)
 +{
 +	vm_size_t sz = (size + 0xfff) & ~(vm_size_t)0xfff;
-+	if (wl_pool_va == 0) {
-+		wl_pool_va = ml_io_map_wcomb((vm_offset_t)WL_POOL_PA, (vm_size_t)WL_POOL_SIZE);
-+		if (wl_pool_va == 0) {
-+			printf("ASUS WLAN: DMA pool map failed\n");
-+			return 0;
-+		}
-+	}
-+	if (wl_pool_used + sz > WL_POOL_SIZE) {
-+		printf("ASUS WLAN: DMA pool full (%#llx used, %#lx asked)\n", wl_pool_used, (unsigned long)size);
++	if (sz > WL_MAP_MAX || wl_pool_used + sz > WL_POOL_SIZE) {
++		printf("ASUS WLAN: DMA buffer of %#lx bytes refused (%#llx of the pool used)\n",
++		    (unsigned long)size, wl_pool_used);
 +		return 0;
 +	}
-+	vm_offset_t va = wl_pool_va + (vm_offset_t)wl_pool_used;
++	vm_offset_t va = ml_io_map_wcomb((vm_offset_t)(WL_POOL_PA + wl_pool_used), sz);
++	if (va == 0) {
++		printf("ASUS WLAN: DMA buffer map failed\n");
++		return 0;
++	}
 +	*pa = WL_POOL_PA + wl_pool_used;
 +	wl_pool_used += sz;
 +	bzero((void *)va, sz);
@@ -913,7 +916,7 @@ new file mode 100644
 +static void
 +wl_thread(void *arg __unused, wait_result_t wr_ __unused)
 +{
-+	int delay_s = 20;
++	int delay_s = 60;
 +
 +	PE_parse_boot_argn("asuswlandelay", &delay_s, sizeof(delay_s));
 +	if (delay_s > 0) {
