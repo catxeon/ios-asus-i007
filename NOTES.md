@@ -1141,7 +1141,30 @@ minutes from power-on to the lock screen.**
     0133 holds iPhone answers (keyed by build + UUID): move it aside again before an iPod boot
     if answers look mixed.
   - ../asus-rootfix-jobs-full-v4 rebuilt from the root after 0133 (same launchd.plist
-    d450ed4e... -> ee20db52..., 194 blocks); still NOT written.
+    d450ed4e... -> ee20db52..., 194 blocks). **Written 2026-11-18 07:4x** after the user's
+    explicit "Да, записывай" (read-only check: all 194 blocks matched old.hash; after write all
+    matched new.hash; backup.bin in the dir).
+  - **0134** (kernel 44202809873, NO asusiphone, launchd.plist without lskdd; image
+    91384b42..., built with arg asusrtc from Git Bash: tools/asus-rtc-offset.sh needs adb.exe,
+    WSL has no `adb`; 07:47:08 sent, Android back after 941 s, root clean, log boot CA663779):
+    - **lskdd 0 spawns** (was 502-550 per boot). xpcproxy 298, spawns otherwise as before.
+    - **CommCenter still 71 spawns** (37 sig6 + 32 sig11; 37x "Unable to communicate with
+      AppleBaseband" in the unified log, same crash pc as 0133). mediaserverd 1 spawn (no loop).
+      Cause (observed): the MobileGestalt cache rebuilt in 0133 was still used: CacheExtra
+      h9jDsbgj7xIVeIQ8S3/X3Q (ProductType) 'iPhone10,3', /YYygAofPDbhrwToVsXdeA 'D22AP',
+      +3Uf0Pm5F8Xy7Onyvko0vA (DeviceClass) 'iPhone', file dated 03:10 (0133). Shots: App Library
+      with Phone/Messages/FaceTime/Wallet, the script opened Phone (Favorites). So with the
+      cache the userland stays an iPhone even when the kernel says otherwise; mediaserverd's
+      camera loop follows the kernel answers (guess: hw.model/hw.machine), CommCenter's
+      baseband wait follows MobileGestalt.
+    - ../asus-rootfix-mgcache-v2 (sparse pull read20.img after 0134, hash read20.hash): the
+      cache moved to /private/var/asus-off/mg-0133 (copy WSL
+      ~/zc/0134/MobileGestalt-iphone-0133.plist); 11 blocks, fsck only the usual minor header
+      repair; read-only check passed (all 11 match old.hash). **NOT written:** the session's
+      safety check refused the write; it needs the user's explicit OK. Without it, every boot
+      keeps the iPhone answers and the CommCenter loop.
+    - Rule: whenever asusiphone is switched on or off, move the MobileGestalt cache aside
+      before the boot (it is keyed by build + UUID only, not by hw.product).
   - Next (was): boot that kernel with asusiphone=1; expect WallpaperKit "device name 'iPhone'", the
     speech AUs not crashing; watch for new trouble from the iPhone class (CommCenter/telephony,
     Face ID services).
