@@ -1,0 +1,619 @@
+Subject: ASUS I007 Wi-Fi stage A: QCA6490 power and the PCIe0 link
+
+Boot-arg asuswlan=1 (default 0: nothing): RPMh rails, WLAN_EN, GCC, PARF, QMP PHY, link,
+the endpoint config space. See bsd/dev/asus_wlan.c.
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -106,6 +106,7 @@
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/asus_usb.c			standard
++bsd/dev/asus_wlan.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -61,6 +61,7 @@
+ static void sweet_log_start(void);
+ static void asus_reset_start(void);
+ extern void asus_usb_start(void);    /* bsd/dev/asus_usb.c */
++extern void asus_wlan_start(void);   /* bsd/dev/asus_wlan.c */
+ 
+ #define REG_CAP         0x00
+ #define REG_VER         0x08
+@@ -692,6 +693,7 @@
+ 	sweet_log_start();
+ 	asus_reset_start();
+ 	asus_usb_start();
++	asus_wlan_start();
+ 	return 0;
+ }
+ 
+diff --git a/bsd/dev/asus_wlan.c b/bsd/dev/asus_wlan.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/asus_wlan.c
+@@ -0,0 +1,579 @@
++/*
++ * ASUS I007: Wi-Fi, stage A - power the QCA6490 and bring up its PCIe link.
++ *
++ * The phone's Wi-Fi is a Qualcomm QCA6490 (PCI 17cb:1103) behind the PCIe0 root
++ * port of the SM8350. ABL never touches PCIe, so everything starts cold:
++ *
++ *   1. RPMh votes (apps RSC, HLOS DRV 2, active TCS 0; the touch power of
++ *      iokit/Kernel/arm/AsusPhoneInput.cpp uses TCS 1) for the rails of the
++ *      Android DT: qcom,cnss-qca6490 vdd-wlan-aon pmr735a_s2 "smpe2" 0.95 V, dig
++ *      pm8350_s11 "smpb11" 0.95 V, rfa1 pm8350c_s1 "smpc1" 1.88 V, rfa2 pm8350_s12
++ *      "smpb12" 1.35 V, antenna switch pmr735a_l7 "ldoe7" 2.8 V (vdd-wlan-io, 1.8 V,
++ *      is not an RPMh node: the always-on system 1.8 V); qcom,pcie@1c00000
++ *      vreg-0p9 pm8350_l5 "ldob5" 0.88 V, vreg-1p8 pm8350_l6 "ldob6" 1.2 V;
++ *   2. TLMM: WLAN_EN GPIO 64 high (cnss_wlan_en_active: 16 mA, pull-up), the
++ *      ASUS antenna switch GPIO 148 high, PERST GPIO 94 low (asserted), CLKREQ
++ *      GPIO 95 to pcie0_clkreqn, WAKE GPIO 96 input; SW_CTRL GPIO 153 is read;
++ *   3. GCC (offsets: Linux gcc-sm8350.c): pcie_0_gdsc, the PCIe0 branch votes,
++ *      the 100 MHz PHY rate-change clock, clkref, block resets;
++ *   4. PARF as Linux pcie-qcom.c qcom_pcie_init_2_7_0 (cfg_1_9_0 = sm8350), the
++ *      QMP PHY with the DT's qcom,phy-sequence (75 writes ending in SW_RESET 0 /
++ *      START_CTRL 3), the pipe clock from the PHY, PHY ready (PCS status 0x214
++ *      bit 6 clear);
++ *   5. PERST released 100 ms after power, root port bus numbers, LTSSM_EN, link
++ *      up (DLL active), then one iATU CFG0 window and the endpoint's config space.
++ *
++ * Every register block is touched only after the clocks it needs report on; the
++ * endpoint's config space only with the link up (a down link aborts the access).
++ * Boot-arg asuswlan: 0 (default) nothing, 1 this stage. asuswlandelay=N seconds
++ * before it starts (default 20, after the touch power). Everything is logged
++ * "ASUS WLAN:" (with asususb=2 it arrives live over USB).
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET) && defined(ASUS_I007)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++#include <libkern/libkern.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void asus_wlan_start(void);
++
++static int wl_chan;
++
++static void
++wl_sleep_ms(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&wl_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static inline uint32_t
++rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile ("dmb oshld" ::: "memory");
++	return v;
++}
++
++static inline void
++wr(vm_offset_t base, uint32_t off, uint32_t v)
++{
++	*(volatile uint32_t *)(base + off) = v;
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++static inline void
++setbits(vm_offset_t base, uint32_t off, uint32_t set, uint32_t clear)
++{
++	wr(base, off, (rd(base, off) & ~clear) | set);
++}
++
++/* ---- RPMh (cmd-db + active TCS 0 of the apps RSC DRV 2; as AsusPhoneInput::rpmhSend) ---- */
++
++#define CMD_DB_PA       0x80860000ULL
++#define CMD_DB_SIZE     0x20000
++#define RSC_DRV2_PA     0x18220000ULL
++#define RSC_DRV2_SIZE   0x10000
++#define TCS_BASE        0xd00
++#define TCS_STRIDE      0x2a0
++#define TCS_ID          0u
++#define TCS_REG(r)      (TCS_BASE + TCS_STRIDE * TCS_ID + (r))
++#define TCS_CMD(r, j)   (TCS_REG(r) + 20 * (j))
++#define VRM_VOLTAGE     0x0
++#define VRM_ENABLE      0x4
++#define VRM_MODE        0x8
++#define PMIC5_LDO_HPM   7
++
++static uint32_t
++cmd_db_addr(vm_offset_t db, const char *name)
++{
++	const uint8_t *p = (const uint8_t *)db;
++	char id[9] = { 0 };
++	strlcpy(id, name, sizeof(id));
++	for (unsigned h = 0; h < 8; h++) {
++		const uint8_t *rh = p + 8 + 16 * h;
++		unsigned hoff = rh[2] | (rh[3] << 8), cnt = rh[6] | (rh[7] << 8);
++		for (unsigned j = 0; j < cnt; j++) {
++			const uint8_t *e = p + 144 + hoff + 24 * j;
++			if (e + 24 > p + CMD_DB_SIZE) {
++				break;
++			}
++			if (memcmp(e, id, 8) == 0) {
++				return e[16] | (e[17] << 8) | (e[18] << 16) | ((uint32_t)e[19] << 24);
++			}
++		}
++	}
++	return 0;
++}
++
++static bool
++rpmh_send(vm_offset_t drv, const uint32_t *addr, const uint32_t *data, unsigned n)
++{
++	if (!rd(drv, TCS_REG(0x18))) {          /* RSC_DRV_STATUS: 0 = busy */
++		printf("ASUS WLAN: RPMh TCS %u busy (control %#x enable %#x)\n", TCS_ID,
++		    rd(drv, TCS_REG(0x14)), rd(drv, TCS_REG(0x1c)));
++		return false;
++	}
++	wr(drv, TCS_BASE + 0x08, 1u << TCS_ID);  /* IRQ_CLEAR */
++	wr(drv, TCS_REG(0x1c), 0);              /* CMD_ENABLE */
++	uint32_t mask = 0;
++	for (unsigned j = 0; j < n; j++) {
++		wr(drv, TCS_CMD(0x30, j), 8u | (1u << 8) | (1u << 16));  /* 4 bytes, write, response */
++		wr(drv, TCS_CMD(0x34, j), addr[j]);
++		wr(drv, TCS_CMD(0x38, j), data[j]);
++		mask |= 1u << j;
++	}
++	wr(drv, TCS_REG(0x10), mask);           /* CMD_WAIT_FOR_CMPL */
++	wr(drv, TCS_REG(0x1c), mask);           /* CMD_ENABLE */
++	wr(drv, TCS_BASE + 0x00, rd(drv, TCS_BASE + 0x00) | (1u << TCS_ID));
++	uint32_t ctl = rd(drv, TCS_REG(0x14));  /* CONTROL: AMC mode, then trigger */
++	ctl &= ~(1u << 24);
++	wr(drv, TCS_REG(0x14), ctl);
++	ctl &= ~(1u << 16);
++	wr(drv, TCS_REG(0x14), ctl);
++	ctl |= 1u << 16;
++	wr(drv, TCS_REG(0x14), ctl);
++	ctl |= 1u << 24;
++	wr(drv, TCS_REG(0x14), ctl);
++	bool done = false;
++	for (unsigned i = 0; i < 2000 && !done; i++) {
++		done = rd(drv, TCS_BASE + 0x04) & (1u << TCS_ID);   /* IRQ_STATUS */
++		if (!done) {
++			delay(10);
++		}
++	}
++	for (unsigned j = 0; j < n; j++) {
++		printf("ASUS WLAN: RPMh cmd %u addr %#x data %u status %#x\n", j, addr[j], data[j],
++		    rd(drv, TCS_CMD(0x3c, j)));
++	}
++	wr(drv, TCS_BASE + 0x08, 1u << TCS_ID);
++	wr(drv, TCS_REG(0x1c), 0);
++	wr(drv, TCS_REG(0x10), 0);
++	wr(drv, TCS_REG(0x14), rd(drv, TCS_REG(0x14)) & ~((1u << 24) | (1u << 16)));
++	return done;
++}
++
++static const struct {
++	const char *res;
++	uint32_t    mv;
++	bool        ldo;            /* LDOs also get high-power mode */
++} wl_rails[] = {
++	{ "smpe2", 950, false },        /* vdd-wlan-aon, pmr735a S2 */
++	{ "smpb11", 950, false },       /* vdd-wlan-dig, pm8350 S11 */
++	{ "smpc1", 1880, false },       /* vdd-wlan-rfa1, pm8350c S1 */
++	{ "smpb12", 1350, false },      /* vdd-wlan-rfa2, pm8350 S12 */
++	{ "ldoe7", 2800, true },        /* wlan-ant-switch, pmr735a L7 */
++	{ "ldob5", 880, true },         /* PCIe0 PHY 0.9 V, pm8350 L5 */
++	{ "ldob6", 1200, true },        /* PCIe0 PHY 1.2 V, pm8350 L6 */
++};
++
++static bool
++wl_power_rails(void)
++{
++	vm_offset_t db = ml_io_map(CMD_DB_PA, CMD_DB_SIZE);
++	vm_offset_t drv = ml_io_map(RSC_DRV2_PA, RSC_DRV2_SIZE);
++	uint32_t addr[16], data[16];
++	unsigned n = 0;
++	bool ok = true;
++
++	if (db == 0 || drv == 0) {
++		printf("ASUS WLAN: cmd-db / RSC map failed\n");
++		return false;
++	}
++	for (unsigned i = 0; i < sizeof(wl_rails) / sizeof(wl_rails[0]); i++) {
++		uint32_t a = cmd_db_addr(db, wl_rails[i].res);
++		printf("ASUS WLAN: rail %-6s at %#x: %u mV\n", wl_rails[i].res, a, wl_rails[i].mv);
++		if (a == 0) {
++			ok = false;
++			continue;
++		}
++		/* voltage, (mode), enable; at most 16 commands per TCS: send in two batches */
++		if (n + 3 > 16) {
++			ok &= rpmh_send(drv, addr, data, n);
++			n = 0;
++		}
++		addr[n] = a + VRM_VOLTAGE; data[n++] = wl_rails[i].mv;
++		if (wl_rails[i].ldo) {
++			addr[n] = a + VRM_MODE; data[n++] = PMIC5_LDO_HPM;
++		}
++		addr[n] = a + VRM_ENABLE; data[n++] = 1;
++	}
++	if (n) {
++		ok &= rpmh_send(drv, addr, data, n);
++	}
++	return ok;
++}
++
++/* ---- TLMM ---- */
++
++#define TLMM_PA         0x0f100000ULL
++#define TLMM_SIZE       0x000cc000      /* 204 GPIOs */
++#define GPIO_CFG(n)     (0x1000u * (n))
++#define GPIO_IO(n)      (0x1000u * (n) + 4)
++#define CFG_PULL_DOWN   1u
++#define CFG_PULL_UP     3u
++#define CFG_FUNC(f)     ((uint32_t)(f) << 2)
++#define CFG_DRV(ma)     ((uint32_t)((ma) / 2 - 1) << 6)
++#define CFG_OE          (1u << 9)
++
++static vm_offset_t tlmm;
++
++static void
++gpio_out(unsigned n, int value, unsigned ma, uint32_t pull)
++{
++	wr(tlmm, GPIO_IO(n), value ? 2u : 0u);
++	wr(tlmm, GPIO_CFG(n), CFG_FUNC(0) | CFG_DRV(ma) | pull | CFG_OE);
++}
++
++static int
++gpio_in(unsigned n)
++{
++	return rd(tlmm, GPIO_IO(n)) & 1;
++}
++
++#define GPIO_WLAN_EN    64
++#define GPIO_BT_EN      65
++#define GPIO_PERST      94
++#define GPIO_CLKREQ     95
++#define GPIO_WAKE       96
++#define GPIO_ANT_SW     148
++#define GPIO_SW_CTRL    153
++
++/* ---- GCC ---- */
++
++#define GCC_PA                  0x00100000ULL
++#define GCC_SIZE                0x000a0000
++#define GCC_PCIE_0_BCR          0x6b000
++#define GCC_PCIE_0_GDSCR        0x6b004
++#define GCC_PCIE_0_PHY_BCR      0x6c01c
++#define GCC_PCIE_0_SLV_Q2A_CBCR 0x6b010
++#define GCC_PCIE_0_SLV_CBCR     0x6b014
++#define GCC_PCIE_0_MSTR_CBCR    0x6b01c
++#define GCC_PCIE_0_CFG_AHB_CBCR 0x6b024
++#define GCC_PCIE_0_AUX_CBCR     0x6b028
++#define GCC_PCIE_0_PIPE_CBCR    0x6b030
++#define GCC_PCIE0_RCHNG_CBCR    0x6b038
++#define GCC_PCIE0_RCHNG_RCGR    0x6b03c
++#define GCC_PCIE_0_PIPE_MUXR    0x6b054         /* 0 = the PHY's pipe clock, 2 = XO */
++#define GCC_PCIE_0_AUX_RCGR     0x6b058
++#define GCC_PCIE_0_CLKREF_EN    0x8c004
++#define GCC_VOTE_0              0x52000         /* aggre noc pcie 1 (11) / 0 (12), tbu (18), sf tbu (19), rchng (22) */
++#define GCC_VOTE_1              0x52008         /* slv (0), mstr (1), cfg ahb (2), aux (3), pipe (4), q2a (5) */
++#define CBCR_OFF                (1u << 31)
++#define GDSC_PWR_ON             (1u << 31)
++
++static vm_offset_t gcc;
++
++static bool
++gcc_branch_on(const char *name, uint32_t cbcr)
++{
++	uint32_t v = 0;
++	for (int i = 0; i < 200; i++) {
++		v = rd(gcc, cbcr);
++		if (!(v & CBCR_OFF)) {
++			return true;
++		}
++		delay(10);
++	}
++	printf("ASUS WLAN: clock %s still off (CBCR %#x)\n", name, v);
++	return false;
++}
++
++/* ---- PCIe0 ---- */
++
++#define PARF_PA         0x01c00000ULL
++#define PARF_SIZE       0x3000
++#define PHY_PA          0x01c06000ULL
++#define PHY_SIZE        0x2000
++#define DBI_PA          0x60000000ULL
++#define DBI_SIZE        0x1000          /* dm_core 0xf1d + elbi at 0xf20 */
++#define ELBI_OFF        0xf20
++#define ATU_PA          0x60001000ULL
++#define ATU_SIZE        0x1000
++#define CONF_PA         0x60100000ULL
++#define CONF_SIZE       0x1000
++
++#define PARF_SYS_CTRL           0x000
++#define   MAC_PHY_POWERDOWN_IN_P2_D_MUX_EN (1u << 29)
++#define PARF_PM_CTRL            0x020
++#define   REQ_NOT_ENTR_L1       (1u << 5)
++#define PARF_PHY_CTRL           0x040
++#define   PHY_TEST_PWR_DOWN     (1u << 0)
++#define PARF_MHI_CLOCK_RESET_CTRL 0x174
++#define   MHI_BYPASS            (1u << 4)
++#define PARF_AXI_MSTR_WR_ADDR_HALT_V2 0x1a8
++#define PARF_LTSSM              0x1b0
++#define   LTSSM_EN              (1u << 8)
++#define PARF_DBI_BASE_ADDR_V2   0x350
++#define PARF_SLV_ADDR_SPACE_SIZE_V2 0x358
++#define PARF_DEVICE_TYPE        0x1000
++#define   DEVICE_TYPE_RC        0x4
++#define ELBI_SYS_STTS           0x08
++#define   XMLH_LINK_UP          (1u << 10)
++#define PHY_PCS_STATUS          0x214
++#define   PHYSTATUS             (1u << 6)
++
++/* DT qcom,phy-sequence of qcom,pcie@1c00000 (offset, value, delay us) */
++static const struct {
++	uint16_t off;
++	uint8_t  val;
++	uint8_t  delay_us;
++} wl_phy_seq[] = {
++	{ 0x0240, 0x03, 0 }, { 0x0094, 0x08, 0 }, { 0x0154, 0x34, 0 }, { 0x016c, 0x08, 0 },
++	{ 0x0058, 0x0f, 0 }, { 0x00a4, 0x42, 0 }, { 0x0110, 0x24, 0 }, { 0x011c, 0x03, 0 },
++	{ 0x0118, 0xb4, 0 }, { 0x010c, 0x02, 0 }, { 0x01bc, 0x11, 0 }, { 0x00bc, 0x82, 0 },
++	{ 0x00d4, 0x03, 0 }, { 0x00d0, 0x55, 0 }, { 0x00cc, 0x55, 0 }, { 0x00b0, 0x1a, 0 },
++	{ 0x00ac, 0x0a, 0 }, { 0x00c4, 0x68, 0 }, { 0x00e0, 0x02, 0 }, { 0x00dc, 0xaa, 0 },
++	{ 0x00d8, 0xab, 0 }, { 0x00b8, 0x34, 0 }, { 0x00b4, 0x14, 0 }, { 0x0158, 0x01, 0 },
++	{ 0x0074, 0x06, 0 }, { 0x007c, 0x16, 0 }, { 0x0084, 0x36, 0 }, { 0x0078, 0x06, 0 },
++	{ 0x0080, 0x16, 0 }, { 0x0088, 0x36, 0 }, { 0x01b0, 0x1e, 0 }, { 0x01ac, 0xca, 0 },
++	{ 0x01b8, 0x18, 0 }, { 0x01b4, 0xa2, 0 }, { 0x0050, 0x07, 0 }, { 0x0010, 0x01, 0 },
++	{ 0x001c, 0x31, 0 }, { 0x0020, 0x01, 0 }, { 0x0024, 0xde, 0 }, { 0x0028, 0x07, 0 },
++	{ 0x0030, 0x4c, 0 }, { 0x0034, 0x06, 0 }, { 0x0ee4, 0x20, 0 }, { 0x0e84, 0x75, 0 },
++	{ 0x0e90, 0x3f, 0 }, { 0x115c, 0x7f, 0 }, { 0x1160, 0xff, 0 }, { 0x1164, 0xbf, 0 },
++	{ 0x1168, 0x3f, 0 }, { 0x116c, 0xd8, 0 }, { 0x1170, 0xdc, 0 }, { 0x1174, 0xdc, 0 },
++	{ 0x1178, 0x5c, 0 }, { 0x117c, 0x34, 0 }, { 0x1180, 0xa6, 0 }, { 0x1190, 0x34, 0 },
++	{ 0x10d8, 0x07, 0 }, { 0x0e3c, 0x1d, 0 }, { 0x0e40, 0x0c, 0 }, { 0x10dc, 0x00, 0 },
++	{ 0x104c, 0x08, 0 }, { 0x1050, 0x08, 0 }, { 0x1044, 0xf0, 0 }, { 0x11a4, 0x38, 0 },
++	{ 0x10cc, 0xf0, 0 }, { 0x0694, 0x00, 0 }, { 0x0654, 0x00, 0 }, { 0x06a8, 0x0f, 0 },
++	{ 0x0048, 0x90, 0 }, { 0x0620, 0xc1, 0 }, { 0x0388, 0x77, 0 }, { 0x0398, 0x0b, 0 },
++	{ 0x02dc, 0x05, 0 }, { 0x0200, 0x00, 0 }, { 0x0244, 0x03, 0 },
++};
++
++/* PCI capability offset in the root port's DBI config header, 0 if absent */
++static uint32_t
++dbi_find_cap(vm_offset_t dbi, uint8_t id)
++{
++	uint32_t pos = rd(dbi, 0x34) & 0xfc;
++	for (int i = 0; i < 48 && pos >= 0x40; i++) {
++		uint32_t v = rd(dbi, pos);
++		if ((v & 0xff) == id) {
++			return pos;
++		}
++		pos = (v >> 8) & 0xfc;
++	}
++	return 0;
++}
++
++static void
++wl_pcie_up(void)
++{
++	vm_offset_t parf = ml_io_map(PARF_PA, PARF_SIZE);
++	vm_offset_t phy = ml_io_map(PHY_PA, PHY_SIZE);
++	vm_offset_t dbi = ml_io_map(DBI_PA, DBI_SIZE);
++	vm_offset_t atu = ml_io_map(ATU_PA, ATU_SIZE);
++	vm_offset_t conf = ml_io_map(CONF_PA, CONF_SIZE);
++	uint64_t t0 = mach_absolute_time();
++
++	if (!parf || !phy || !dbi || !atu || !conf) {
++		printf("ASUS WLAN: PCIe0 map failed\n");
++		return;
++	}
++
++	/* GDSC */
++	printf("ASUS WLAN: pcie_0_gdsc GDSCR %#x\n", rd(gcc, GCC_PCIE_0_GDSCR));
++	setbits(gcc, GCC_PCIE_0_GDSCR, 0, 1u);           /* SW_COLLAPSE off */
++	for (int i = 0; i < 100 && !(rd(gcc, GCC_PCIE_0_GDSCR) & GDSC_PWR_ON); i++) {
++		delay(10);
++	}
++	printf("ASUS WLAN: pcie_0_gdsc now %#x (%s)\n", rd(gcc, GCC_PCIE_0_GDSCR),
++	    (rd(gcc, GCC_PCIE_0_GDSCR) & GDSC_PWR_ON) ? "on" : "STILL OFF");
++	if (!(rd(gcc, GCC_PCIE_0_GDSCR) & GDSC_PWR_ON)) {
++		return;
++	}
++
++	/* PHY rate-change clock 100 MHz = GPLL0 even (300 MHz) / 3, aux 19.2 MHz (XO, the reset value) */
++	wr(gcc, GCC_PCIE0_RCHNG_RCGR + 4, (6u << 8) | (2 * 3 - 1));
++	wr(gcc, GCC_PCIE0_RCHNG_RCGR, rd(gcc, GCC_PCIE0_RCHNG_RCGR) | 1u);
++	for (int i = 0; i < 100 && (rd(gcc, GCC_PCIE0_RCHNG_RCGR) & 1u); i++) {
++		delay(10);
++	}
++	printf("ASUS WLAN: rchng RCG CMD %#x CFG %#x, aux RCG CMD %#x CFG %#x\n",
++	    rd(gcc, GCC_PCIE0_RCHNG_RCGR), rd(gcc, GCC_PCIE0_RCHNG_RCGR + 4),
++	    rd(gcc, GCC_PCIE_0_AUX_RCGR), rd(gcc, GCC_PCIE_0_AUX_RCGR + 4));
++
++	/* branch votes (all but the pipe clock), the reference clock to the PHY */
++	setbits(gcc, GCC_VOTE_1, (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 5), 0);
++	setbits(gcc, GCC_VOTE_0, (1u << 11) | (1u << 12) | (1u << 18) | (1u << 19) | (1u << 22), 0);
++	setbits(gcc, GCC_PCIE_0_CLKREF_EN, 1u, 0);
++	bool clocks = gcc_branch_on("slv_axi", GCC_PCIE_0_SLV_CBCR) &
++	    gcc_branch_on("slv_q2a", GCC_PCIE_0_SLV_Q2A_CBCR) &
++	    gcc_branch_on("cfg_ahb", GCC_PCIE_0_CFG_AHB_CBCR) &
++	    gcc_branch_on("aux", GCC_PCIE_0_AUX_CBCR) &
++	    gcc_branch_on("rchng", GCC_PCIE0_RCHNG_CBCR);
++	printf("ASUS WLAN: votes %#x / %#x, mstr CBCR %#x, clkref %#x, clocks %s\n",
++	    rd(gcc, GCC_VOTE_0), rd(gcc, GCC_VOTE_1), rd(gcc, GCC_PCIE_0_MSTR_CBCR),
++	    rd(gcc, GCC_PCIE_0_CLKREF_EN), clocks ? "on" : "NOT all on");
++	if (!clocks) {
++		return;
++	}
++
++	/* block resets: controller and PHY */
++	wr(gcc, GCC_PCIE_0_BCR, 1);
++	wr(gcc, GCC_PCIE_0_PHY_BCR, 1);
++	delay(1000);
++	wr(gcc, GCC_PCIE_0_PHY_BCR, 0);
++	wr(gcc, GCC_PCIE_0_BCR, 0);
++	delay(1000);
++
++	/* PARF (qcom_pcie_init_2_7_0) */
++	wr(parf, PARF_DEVICE_TYPE, DEVICE_TYPE_RC);
++	setbits(parf, PARF_PHY_CTRL, 0, PHY_TEST_PWR_DOWN);
++	wr(parf, PARF_DBI_BASE_ADDR_V2, 0);
++	setbits(parf, PARF_SYS_CTRL, 0, MAC_PHY_POWERDOWN_IN_P2_D_MUX_EN);
++	setbits(parf, PARF_MHI_CLOCK_RESET_CTRL, MHI_BYPASS, 0);
++	setbits(parf, PARF_PM_CTRL, 0, REQ_NOT_ENTR_L1);
++	wr(parf, PARF_SLV_ADDR_SPACE_SIZE_V2, 0x04000000);      /* DT qcom,slv-addr-space-size */
++	setbits(parf, PARF_AXI_MSTR_WR_ADDR_HALT_V2, 1u << 31, 0);
++	printf("ASUS WLAN: PARF SYS_CTRL %#x PM_CTRL %#x PHY_CTRL %#x LTSSM %#x DEVICE_TYPE %#x\n",
++	    rd(parf, PARF_SYS_CTRL), rd(parf, PARF_PM_CTRL), rd(parf, PARF_PHY_CTRL),
++	    rd(parf, PARF_LTSSM), rd(parf, PARF_DEVICE_TYPE));
++
++	/* QMP PHY: the DT sequence (power down control 3 first, SW reset 0 / start 3 last) */
++	for (unsigned i = 0; i < sizeof(wl_phy_seq) / sizeof(wl_phy_seq[0]); i++) {
++		wr(phy, wl_phy_seq[i].off, wl_phy_seq[i].val);
++		if (wl_phy_seq[i].delay_us) {
++			delay(wl_phy_seq[i].delay_us);
++		}
++	}
++	delay(1000);
++	/* the pipe clock: GCC mux to the PHY's output, then the branch */
++	wr(gcc, GCC_PCIE_0_PIPE_MUXR, 0);
++	setbits(gcc, GCC_VOTE_1, 1u << 4, 0);
++	bool ready = false;
++	for (int i = 0; i < 1000 && !ready; i++) {
++		ready = !(rd(phy, PHY_PCS_STATUS) & PHYSTATUS);
++		if (!ready) {
++			delay(100);
++		}
++	}
++	printf("ASUS WLAN: PHY %s (PCS status %#x), pipe CBCR %#x mux %#x\n", ready ? "ready" : "NOT ready",
++	    rd(phy, PHY_PCS_STATUS), rd(gcc, GCC_PCIE_0_PIPE_CBCR), rd(gcc, GCC_PCIE_0_PIPE_MUXR));
++	if (!ready) {
++		return;
++	}
++
++	/* root port: DBI header */
++	printf("ASUS WLAN: root port %#x class %#x, header %#x, BAR0 %#x\n", rd(dbi, 0x00), rd(dbi, 0x08),
++	    rd(dbi, 0x0c), rd(dbi, 0x10));
++	wr(dbi, 0x8bc, rd(dbi, 0x8bc) | 1u);            /* MISC_CONTROL_1: DBI_RO_WR_EN */
++	wr(dbi, 0x10, 0);
++	wr(dbi, 0x14, 0);
++	wr(dbi, 0x18, 0x00010100);                      /* primary 0, secondary 1, subordinate 1 */
++	wr(dbi, 0x04, rd(dbi, 0x04) | 0x0006);          /* memory space, bus master */
++	wr(dbi, 0x8bc, rd(dbi, 0x8bc) & ~1u);
++	uint32_t pcie_cap = dbi_find_cap(dbi, 0x10);
++
++	/* PERST: at least 100 ms after the rails and WLAN_EN (they came up before this) */
++	uint64_t now, ms;
++	absolutetime_to_nanoseconds(mach_absolute_time() - t0, &now);
++	ms = now / NSEC_PER_MSEC;
++	if (ms < 100) {
++		wl_sleep_ms((unsigned)(100 - ms));
++	}
++	gpio_out(GPIO_PERST, 1, 2, CFG_PULL_DOWN);
++	delay(1500);
++
++	/* link training */
++	setbits(parf, PARF_LTSSM, LTSSM_EN, 0);
++	uint32_t last = ~0u, lnk = 0;
++	bool up = false;
++	for (int i = 0; i < 200 && !up; i++) {         /* up to 1 s */
++		uint32_t st = rd(parf, PARF_LTSSM) & 0x3f;
++		if (st != last) {
++			printf("ASUS WLAN: LTSSM state %#x after %d ms\n", st, i * 5);
++			last = st;
++		}
++		lnk = pcie_cap ? rd(dbi, pcie_cap + 0x10) : 0;  /* LNKCTL | LNKSTA << 16 */
++		up = (rd(dbi, ELBI_OFF + ELBI_SYS_STTS) & XMLH_LINK_UP) && (lnk & (1u << 29));
++		if (!up) {
++			wl_sleep_ms(5);
++		}
++	}
++	printf("ASUS WLAN: link %s: LTSSM %#x ELBI_SYS_STTS %#x LNKSTA %#x (gen %u x%u), cap at %#x\n",
++	    up ? "UP" : "DOWN", rd(parf, PARF_LTSSM), rd(dbi, ELBI_OFF + ELBI_SYS_STTS), lnk >> 16,
++	    (lnk >> 16) & 0xf, (lnk >> 20) & 0x3f, pcie_cap);
++	if (!up) {
++		return;
++	}
++
++	/* iATU outbound region 0 (unrolled): CFG0 to bus 1, device 0 */
++	wr(atu, 0x08, (uint32_t)CONF_PA);
++	wr(atu, 0x0c, (uint32_t)(CONF_PA >> 32));
++	wr(atu, 0x10, (uint32_t)CONF_PA + CONF_SIZE - 1);
++	wr(atu, 0x14, 1u << 24);
++	wr(atu, 0x18, 0);
++	wr(atu, 0x00, 0x4);                             /* CFG0 */
++	wr(atu, 0x04, 1u << 31);                        /* enable */
++	for (int i = 0; i < 100 && !(rd(atu, 0x04) & (1u << 31)); i++) {
++		delay(10);
++	}
++	delay(10);
++	uint32_t id = rd(conf, 0x00);
++	printf("ASUS WLAN: endpoint 01:00.0 id %04x:%04x class %#x header %#x BAR0 %#x BAR1 %#x%s\n",
++	    id & 0xffff, id >> 16, rd(conf, 0x08), rd(conf, 0x0c), rd(conf, 0x10), rd(conf, 0x14),
++	    id == 0x110317cb ? " = QCA6490" : "");
++}
++
++static void
++wl_thread(void *arg __unused, wait_result_t wr_ __unused)
++{
++	int delay_s = 20;
++
++	PE_parse_boot_argn("asuswlandelay", &delay_s, sizeof(delay_s));
++	if (delay_s > 0) {
++		wl_sleep_ms((unsigned)delay_s * 1000);
++	}
++	tlmm = ml_io_map(TLMM_PA, TLMM_SIZE);
++	gcc = ml_io_map(GCC_PA, GCC_SIZE);
++	if (tlmm == 0 || gcc == 0) {
++		printf("ASUS WLAN: TLMM/GCC map failed\n");
++		return;
++	}
++	printf("ASUS WLAN: stage A: WLAN_EN %d SW_CTRL %d PERST %d CLKREQ cfg %#x\n", gpio_in(GPIO_WLAN_EN),
++	    gpio_in(GPIO_SW_CTRL), gpio_in(GPIO_PERST), rd(tlmm, GPIO_CFG(GPIO_CLKREQ)));
++	gpio_out(GPIO_PERST, 0, 2, CFG_PULL_DOWN);      /* endpoint held in reset */
++	if (!wl_power_rails()) {
++		printf("ASUS WLAN: rail votes failed, stop\n");
++		return;
++	}
++	wl_sleep_ms(10);
++	gpio_out(GPIO_BT_EN, 0, 2, CFG_PULL_DOWN);
++	gpio_out(GPIO_ANT_SW, 1, 2, CFG_PULL_UP);
++	gpio_out(GPIO_WLAN_EN, 1, 16, CFG_PULL_UP);
++	wr(tlmm, GPIO_CFG(GPIO_CLKREQ), CFG_FUNC(1) | CFG_DRV(2) | CFG_PULL_UP);   /* pcie0_clkreqn */
++	wr(tlmm, GPIO_CFG(GPIO_WAKE), CFG_FUNC(0) | CFG_DRV(2) | CFG_PULL_UP);     /* input */
++	for (int i = 0; i < 20; i++) {
++		wl_sleep_ms(10);
++		if (gpio_in(GPIO_SW_CTRL)) {
++			break;
++		}
++	}
++	printf("ASUS WLAN: WLAN_EN %d, SW_CTRL %d, WAKE %d\n", gpio_in(GPIO_WLAN_EN), gpio_in(GPIO_SW_CTRL),
++	    gpio_in(GPIO_WAKE));
++	wl_pcie_up();
++	printf("ASUS WLAN: stage A done\n");
++}
++
++/* Called once from sweet_ufs_init (bsd/dev/sweet_ufs.c). */
++void
++asus_wlan_start(void)
++{
++	int mode = 0;
++	thread_t thread;
++
++	PE_parse_boot_argn("asuswlan", &mode, sizeof(mode));
++	if (mode <= 0) {
++		return;
++	}
++	if (kernel_thread_start(wl_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET && ASUS_I007 */

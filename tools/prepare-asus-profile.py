@@ -83,6 +83,9 @@ if args.ufs:
     # unless boot-arg asususb=1/2); it reads the console ring of the UFS driver, and "usb"
     # sorts after "ufs" and before "userland".
     selected.append(repo / 'xnu/asus/9999-asus-i007-usb.patch')
+    # Wi-Fi (QCA6490 on PCIe0), bsd/dev/asus_wlan.c: off unless boot-arg asuswlan=N; started
+    # next to the USB device from the UFS driver ("wlan" sorts after "userland").
+    selected.append(repo / 'xnu/asus/9999-asus-i007-wlan.patch')
 if args.userland:
     selected.append(repo / 'xnu/asus/9999-asus-i007-userland.patch')
     # SpringBoard calls pid_hibernate (syscall 435, nosys on the macOS config) when an
