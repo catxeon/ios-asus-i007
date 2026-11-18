@@ -37,7 +37,7 @@ diff --git a/bsd/dev/asus_wlan.c b/bsd/dev/asus_wlan.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/asus_wlan.c
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,874 @@
 +/*
 + * ASUS I007: Wi-Fi, stage A - power the QCA6490 and bring up its PCIe link.
 + *
@@ -66,7 +66,8 @@ new file mode 100644
 + * Every register block is touched only after the clocks it needs report on; the
 + * endpoint's config space only with the link up (a down link aborts the access).
 + * Boot-arg asuswlan: 0 (default) nothing, 1 this stage, 2 also stage B0 (SMMU,
-+ * BAR0 and the MHI registers, see wl_stage_b0). asuswlandelay=N seconds
++ * BAR0 and the MHI registers, see wl_stage_b0), 3 also B1a (SMMU stream for PCIe0,
++ * SBL through BHI from /asus/fw/wlan/amss.bin, see wl_stage_b1a). asuswlandelay=N seconds
 + * before it starts (default 20, after the touch power). Everything is logged
 + * "ASUS WLAN:" (with asususb=2 it arrives live over USB).
 + */
@@ -79,8 +80,16 @@ new file mode 100644
 +#include <machine/machine_routines.h>
 +#include <pexpert/pexpert.h>
 +#include <libkern/libkern.h>
++#include <sys/fcntl.h>
++#include <sys/uio.h>
++#include <sys/vnode.h>
++#include <kern/kalloc.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
 +
 +extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 +void asus_wlan_start(void);
 +
 +static int wl_chan;
@@ -441,6 +450,174 @@ new file mode 100644
 +	printf("ASUS WLAN: SMMU: %u valid stream matches (%u shown)\n", valid, shown);
 +}
 +
++/*
++ * Stage B1a (asuswlan=3): let PCIe0's DMA through the SMMU, then the first step of the
++ * firmware download (Linux drivers/bus/mhi/host/boot.c mhi_fw_load_bhi, ath11k: fbc
++ * download, sbl_size 512 KiB): the first 512 KiB of amss.bin in one physically
++ * contiguous buffer, its address and size into BHI, the doorbell; PBL authenticates and
++ * starts SBL (execution environment 0 -> 1) and MHI reports READY.
++ *
++ * SMMU (observed in image 0139: CLIENTPD 0, USFCFG 1 = unmatched streams fault, 8 valid
++ * stream matches, none for 0x1c00/0x1c01): one more stream match, id 0x1c00 mask 0x7f,
++ * whose S2CR is BYPASS; if the firmware does not keep a BYPASS S2CR (Linux
++ * arm-smmu-qcom.c qcom_smmu_cfg_probe tests the same), the last context bank becomes a
++ * bypass bank (CBAR stage 1 translate / stage 2 bypass, SCTLR 0 = MMU off) and the S2CR
++ * translates to it.
++ */
++#define SMMU_MAP        0xd0000         /* global space 128 x 4 KiB, then the context banks */
++#define S2CR_TYPE(t)    ((uint32_t)(t) << 16)
++#define S2CR_BYPASS     1
++
++static bool
++wl_smmu_open_pcie(void)
++{
++	vm_offset_t s = ml_io_map(SMMU_PA, SMMU_MAP);
++	if (s == 0) {
++		return false;
++	}
++	uint32_t cr0 = rd(s, 0x00), idr0 = rd(s, 0x20), idr1 = rd(s, 0x24);
++	unsigned nsmr = idr0 & 0xff, ncb = idr1 & 0xff, free_smr = ~0u;
++	uint32_t page = (idr1 & (1u << 31)) ? 0x10000 : 0x1000;
++	uint32_t cb_base = page << (((idr1 >> 28) & 7) + 1);
++	if (cr0 & (1u << 3)) {
++		printf("ASUS WLAN: SMMU uses extended stream ids, not handled\n");
++		return false;
++	}
++	for (unsigned i = 0; i < nsmr; i++) {
++		uint32_t smr = rd(s, 0x800 + 4 * i);
++		if (smr & (1u << 31)) {
++			uint32_t sid = smr & 0x7fff, mask = (smr >> 16) & 0x7fff;
++			if (((0x1c00 ^ sid) & ~(mask | 0x7f) & 0x7fff) == 0) {
++				printf("ASUS WLAN: SMR%u (%#x) already covers PCIe0, S2CR %#x\n", i, smr, rd(s, 0xc00 + 4 * i));
++				return true;
++			}
++		} else if (free_smr == ~0u) {
++			free_smr = i;
++		}
++	}
++	if (free_smr == ~0u || cb_base + ncb * page > SMMU_MAP) {
++		printf("ASUS WLAN: no free SMR (%u) or context banks beyond the map (%#x)\n", nsmr, cb_base);
++		return false;
++	}
++	wr(s, 0xc00 + 4 * free_smr, S2CR_TYPE(S2CR_BYPASS));
++	uint32_t s2cr = rd(s, 0xc00 + 4 * free_smr);
++	if (((s2cr >> 16) & 3) != S2CR_BYPASS) {
++		unsigned cb = ncb - 1;
++		vm_offset_t gr1 = s + page;
++		printf("ASUS WLAN: S2CR bypass not kept (%#x): context bank %u (CBAR %#x SCTLR %#x) made a bypass bank\n",
++		    s2cr, cb, rd(gr1, 4 * cb), rd(s + cb_base + cb * page, 0));
++		wr(gr1, 4 * cb, S2CR_TYPE(1));                  /* CBAR: S1 translate, S2 bypass */
++		wr(s + cb_base + cb * page, 0, 0);               /* SCTLR: MMU off */
++		wr(s, 0xc00 + 4 * free_smr, S2CR_TYPE(0) | cb);  /* translate via that bank */
++		s2cr = rd(s, 0xc00 + 4 * free_smr);
++	}
++	wr(s, 0x800 + 4 * free_smr, (1u << 31) | (0x7fu << 16) | 0x1c00);
++	printf("ASUS WLAN: SMMU: SMR%u = %#x, S2CR = %#x (stream 0x1c00-0x1c7f)\n", free_smr,
++	    rd(s, 0x800 + 4 * free_smr), s2cr);
++	return true;
++}
++
++/* A whole file from the root filesystem into a new kalloc buffer. */
++static void *
++wl_read_file(const char *path, size_t *len)
++{
++	vfs_context_t ctx = vfs_context_kernel();
++	vnode_t vp = NULLVP;
++	struct vnode_attr va;
++	void *buf = NULL;
++	int resid = 0, error;
++
++	*len = 0;
++	error = vnode_open(path, FREAD, 0, 0, &vp, ctx);
++	if (error) {
++		printf("ASUS WLAN: %s: open error %d\n", path, error);
++		return NULL;
++	}
++	VATTR_INIT(&va);
++	VATTR_WANTED(&va, va_data_size);
++	error = vnode_getattr(vp, &va, ctx);
++	if (!error && va.va_data_size > 0 && va.va_data_size < (16u << 20)) {
++		buf = kalloc_data((vm_size_t)va.va_data_size, Z_WAITOK);
++		if (buf != NULL) {
++			error = vn_rdwr(UIO_READ, vp, (caddr_t)buf, (int)va.va_data_size, 0, UIO_SYSSPACE, 0,
++			    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++			if (error || resid != 0) {
++				kfree_data(buf, (vm_size_t)va.va_data_size);
++				buf = NULL;
++			} else {
++				*len = (size_t)va.va_data_size;
++			}
++		}
++	}
++	vnode_close(vp, FREAD, ctx);
++	printf("ASUS WLAN: %s: %zu bytes%s\n", path, *len, buf ? "" : " (read failed)");
++	return buf;
++}
++
++#define BHI_IMGADDR_LOW         0x08
++#define BHI_IMGADDR_HIGH        0x0c
++#define BHI_IMGSIZE             0x10
++#define BHI_IMGTXDB             0x18
++#define BHI_INTVEC              0x20
++#define BHI_EXECENV             0x28
++#define BHI_STATUS              0x2c
++#define BHI_ERRCODE             0x30
++#define MHI_SBL_SIZE            (512u << 10)
++
++static void
++wl_stage_b1a(vm_offset_t m, uint32_t bhi)
++{
++	if (!wl_smmu_open_pcie()) {
++		return;
++	}
++	size_t fw_len = 0;
++	uint8_t *fw = wl_read_file("/asus/fw/wlan/amss.bin", &fw_len);
++	if (fw == NULL || fw_len < 4096) {
++		return;
++	}
++	uint32_t n = (uint32_t)MIN(fw_len, (size_t)MHI_SBL_SIZE);
++	vm_offset_t img = 0;
++	if (kmem_alloc_contig(kernel_map, &img, MHI_SBL_SIZE, PAGE_MASK, 0, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		printf("ASUS WLAN: no DMA memory for SBL\n");
++		kfree_data(fw, fw_len);
++		return;
++	}
++	memcpy((void *)img, fw, n);
++	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)img);
++	uint64_t pa = ptoa_64(pn);
++	flush_dcache64((addr64_t)pa, MHI_SBL_SIZE, TRUE);
++	kfree_data(fw, fw_len);
++
++	printf("ASUS WLAN: BHI before: EXECENV %#x STATUS %#x MHISTATUS %#x; SBL %u bytes at %#llx\n",
++	    rd(m, bhi + BHI_EXECENV), rd(m, bhi + BHI_STATUS), rd(m, 0x48), n, pa);
++	wr(m, bhi + BHI_INTVEC, 0);
++	wr(m, bhi + BHI_STATUS, 0);
++	wr(m, bhi + BHI_IMGADDR_HIGH, (uint32_t)(pa >> 32));
++	wr(m, bhi + BHI_IMGADDR_LOW, (uint32_t)pa);
++	wr(m, bhi + BHI_IMGSIZE, n);
++	wr(m, bhi + BHI_IMGTXDB, 0x1d5a3c7u & 0x3fffffff);   /* session id (BHI_TXDB_SEQNUM) */
++	uint32_t st = 0, ee = 0, last_st = ~0u, last_ee = ~0u, ms = 0;
++	for (; ms < 10000; ms += 10) {
++		st = rd(m, bhi + BHI_STATUS);
++		ee = rd(m, bhi + BHI_EXECENV);
++		if (st != last_st || ee != last_ee) {
++			printf("ASUS WLAN: BHI after %u ms: STATUS %#x (%u) EXECENV %#x ERRCODE %#x MHISTATUS %#x\n", ms,
++			    st, st >> 30, ee, rd(m, bhi + BHI_ERRCODE), rd(m, 0x48));
++			last_st = st;
++			last_ee = ee;
++		}
++		if ((st >> 30) == 3 || (ee == 1 && (rd(m, 0x48) & 1))) {
++			break;
++		}
++		wl_sleep_ms(10);
++	}
++	printf("ASUS WLAN: B1a end after %u ms: %s, EXECENV %#x, MHISTATUS %#x (READY %u SYSERR %u), "
++	    "ERRCODE %#x ERRDBG %#x %#x %#x\n", ms, (st >> 30) == 2 ? "image accepted" : (st >> 30) == 3 ? "IMAGE ERROR" : "no answer",
++	    ee, rd(m, 0x48), rd(m, 0x48) & 1, (rd(m, 0x48) >> 2) & 1, rd(m, bhi + BHI_ERRCODE),
++	    rd(m, bhi + 0x34), rd(m, bhi + 0x38), rd(m, bhi + 0x3c));
++}
++
 +static void
 +wl_stage_b0(vm_offset_t atu, vm_offset_t conf)
 +{
@@ -493,6 +670,9 @@ new file mode 100644
 +		    "SERIAL %#x HWID %#x\n", rd(m, bhi + 0x04), rd(m, bhi + 0x00), rd(m, bhi + 0x28),
 +		    rd(m, bhi + 0x2c), rd(m, bhi + 0x30), rd(m, bhi + 0x34), rd(m, bhi + 0x38), rd(m, bhi + 0x3c),
 +		    rd(m, bhi + 0x40), rd(m, bhi + 0x4c));
++		if (wl_mode >= 3 && rd(m, bhi + BHI_EXECENV) == 0) {
++			wl_stage_b1a(m, bhi);
++		}
 +	}
 +}
 +
