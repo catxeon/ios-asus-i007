@@ -1324,6 +1324,40 @@ minutes from power-on to the lock screen.**
         PCIe cap at 0x70;
       - **01:00.0 = 17cb:1103 (QCA6490), class 0x02800001, header 0, BAR0 0x4 (64-bit mem)**.
       - iOS unchanged: no crash, root clean, Android back after 336 s.
+    - **Stage B facts (user "Да, дальше", 2026-11-19).** Android's log (dmesg, cnss): firmware
+      **/vendor/firmware/amss.bin** (5170656, ELF, sha256 bb664e49...), **board_id 0x47 ->
+      bdwlan.e47** (59972), regdb.bin (19348), m3.bin (266684; cnss puts it at PA 0xa1d00000,
+      0x411bc, and sends QMI M3 info), MAC from /vendor/factory/wlan_mac.bin (66 bytes, text);
+      chip_family 0xb, soc_id 0x400c0110, fw WLAN.HSP.1.1-01722-QCAHSPSWPL_V1_V2_SILICONZ;
+      sequence: power on, cold boot calibration (mode CALIBRATION, "calibration done"), mode
+      OFF, power off; power on again, PCIe, MHI POWER_ON, "Try to load firmware
+      /vendor/firmware/amss.bin", MISSION_MODE after 1 s, WLFW server at QRTR node 7 port 1,
+      host cap, target cap, BDF download (regdb type 4, bdwlan type 1), M3 info, DMS MAC.
+      Copies on the PC: work/asus-wlan-fw/ (adb exec-out; `adb shell cat` corrupts binaries
+      with CRLF). Not in git.
+    - **Root: ../asus-rootfix-wlanfw-v1 written 2026-11-19 ~00:00** (stage B approved):
+      /asus/fw/wlan/{amss.bin,m3.bin,bdwlan.e47,regdb.bin} 0644 root, one free run at
+      block 10649 (hfs-add-contiguous.py, each file contiguous and read back equal), 975
+      blocks, usual fsck note, verified after write.
+    - ath11k (Linux mhi.c) for this family (qca6390 config = WCN6855/QCA6490): channels 20/21
+      "IPCR" (64 elements, event ring 1, ee mask 0x4 = AMSS), event rings 0 (32, control) and
+      1 (256, data, priority 1), max_channels 128, buf_len 8192, sbl_size 512 KiB, seg_len
+      512 KiB, fbc_download, regs = BAR0.
+    - **Image 0139 (kernel CI 44396320787, commit 5d19389, asuswlan=2 = B0):**
+      - SMMU sCR0 0x240406: CLIENTPD 0, **USFCFG 1 (unmatched streams fault)**, EXIDENABLE
+        0; sIDR0 0x4c017e59 = 89 SMRs; sIDR1 0x6000004b (4 KiB pages, 128 global pages, 75
+        context banks); valid SMRs only 8: 0xe0->cb0, 0x4e0->cb1, 0x4a0->cb2, 0xc0->cb3,
+        0x820/0x402->cb4, 0 (USB) and 0x20 -> cb5, 0x584/0x11->cb6; **none for 0x1c00/0x1c01**
+        (so the chip's DMA would fault).
+      - BAR0 64-bit, **2 MiB**, assigned 0x60400000, iATU region 1 MEM, command 0x100006.
+      - MHI: REGLEN 0x100, VER 0xdeadbeef (sic), CFG 0x800080, CHDBOFF 0x300, ERDBOFF 0x700,
+        BHIOFF 0x100, BHIEOFF 0x224, CTRL 0, STATUS 0; **BHI 1.2, EXECENV 0 (PBL)**, STATUS 0,
+        SERIAL 0xf03e3de3, HWID 0x12f0e1: PBL waits for an image.
+      - iOS unchanged, Android back after 335 s.
+    - Next (written, CI 44400207952, commit 326dfa0, asuswlan=3 = B1a): a stream match
+      0x1c00/0x7f with S2CR BYPASS (or, if the firmware drops BYPASS as Linux checks, a bypass
+      context bank: CBAR S1-trans/S2-bypass, SCTLR 0); amss.bin read from the root (vnode);
+      its first 512 KiB through BHI; expect EXECENV 1 (SBL) and MHISTATUS READY.
     - Next: stage B (MHI). Open questions before it: BAR0 assignment (MEM window 0x60300000)
       and the iATU outbound MEM region; **the SMMU**: PCIe0 SIDs 0x1c00+ (iommu-map) on the
       apps SMMU, which ABL never set up for PCIe (USB/UFS DMA worked with physical
